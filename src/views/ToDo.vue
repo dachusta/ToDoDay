@@ -89,6 +89,7 @@ function subscribeUserToPush() {
           "BMahIJH-CVUnzzZJQNS9cep6xvulTWkaooUU9I1opx2zhnQA2aYnpn0NRZUJkvifMvX4vyjDRRH10Cp92PfwAAE"
         ),
       };
+      console.log(registration);
       return registration.pushManager.subscribe(subscribeOptions);
     })
     .then(function (pushSubscription) {
