@@ -1,16 +1,16 @@
 <script setup>
-import ToDoDay from './ToDoDay.vue';
+import ToDoDay from './ToDoDay.vue'
 
 defineProps({
   days: {
     type: Object,
     required: true,
   },
-});
+})
 </script>
 
 <template>
-  <div>
+  <div class="days">
     <ToDoDay
       v-for="day in days"
       :key="day.order"
@@ -22,5 +22,7 @@ defineProps({
 </template>
 
 <style lang="scss" scoped>
-
+.days {
+  padding: 40px 20px;
+}
 </style>

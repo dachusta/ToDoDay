@@ -4,7 +4,7 @@ defineProps({
     type: Object,
     required: true,
   },
-});
+})
 
 const emit = defineEmits(['deleteTask'])
 // Добавлять и удалять время

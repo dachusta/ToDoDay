@@ -1,27 +1,27 @@
 <script setup>
-import ToDoTask from './ToDoTask.vue';
+import ToDoTask from './ToDoTask.vue'
 
 defineProps({
   day: {
     type: Object,
     required: true,
   },
-});
+})
 
 // const emit = defineEmits(['setTask'])
 function setTask(day) {
   // emit('setTask', day)
 
   day.value.push({
-    time: "",
-    value: "",
-  });
+    time: '',
+    value: '',
+  })
 }
 </script>
 
 <template>
   <div class="day">
-    <header>Day: {{ day.order }}</header>
+    <header>Сегодня / Пн | Day: {{ day.order }}</header>
     <main>
       <div>
         <ToDoTask
@@ -42,9 +42,8 @@ function setTask(day) {
 <style lang="scss" scoped>
 .day {
   padding: 5px;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.5);
 }
 .button__set-task {
-
 }
 </style>
