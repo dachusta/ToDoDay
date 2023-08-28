@@ -1,106 +1,149 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
-import ToDoDays from '../components/ToDo/ToDoDays.vue'
-import axios from 'axios'
+import { ref } from 'vue'
+// import ToDoDays from '../components/ToDo/ToDoDays.vue'
+// import axios from 'axios'
+import VDay from '../components/ToDo/VDay.vue'
+import VNextDay from '../components/ToDo/VNextDay.vue'
+import VNewDay from '../components/ToDo/VNewDay.vue'
+import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
 
-const days = ref([
-  // day
-  {
-    order: 1,
-    value: [
-      // task
-      {
-        time: '06:00',
-        value: 'Делать',
-      },
-    ],
-  },
-])
-
-// Заносить данные в локалстор и получать от туда
-watch(
-  () => days.value,
-  (newValue) => {
-    console.log(newValue)
-    axios
-      .post('http://80.90.186.146:3001/setDays', newValue)
-      .then(function (response) {
-        console.log(response)
-      })
-      .catch(function (error) {
-        console.log(error)
-      })
-    localStorage.setItem('days', JSON.stringify(newValue))
-  },
-  { deep: true }
-)
-onMounted(() => {
-  console.log(`the component is now mounted.`)
-  if (localStorage.getItem('days')) {
-    days.value = JSON.parse(localStorage.getItem('days'))
-  }
-})
-// Заносить данные в локалстор и получать от туда
-
-// Добавлять и удалять время
-function setTask(day) {
-  day.value.push({
-    time: '',
-    value: '',
-  })
-}
-function deleteTask(findTask) {
-  days.value[0].value = days.value[0].value.filter(
-    (task) => task.time !== findTask.time
-  )
-}
-
-// Bot tg
-fetch(
-  'https://api.telegram.org/bot5898941434:AAH9YwrSrbadYPMcm6JVdSECV_v3lVOBL8I/getMe'
-)
-  .then((response) => {
-    return response.json()
-  })
-  .then((data) => {
-    console.log(data)
-  })
-
-// let sendMessage = {
-//   chat_id: '@ToDoDayNotification',
-//   text: 'test)',
-// }
-// let response = null
-// setInterval(async () => {
-//   response = await fetch(
-//     'https://api.telegram.org/bot5898941434:AAH9YwrSrbadYPMcm6JVdSECV_v3lVOBL8I/sendMessage',
-//     {
-//       method: 'POST',
-//       headers: {
-//         'Content-Type': 'application/json;charset=utf-8',
+const days = []
+// const days = [
+//   {
+//     id: 1,
+//     tasks: [
+//       {
+//         time: '06:00',
+//         value: 'Дело 1',
+//         priority: 1,
 //       },
-//       body: JSON.stringify(sendMessage),
-//     }
-//   )
-// }, 10000)
-
-// let result = await response.json()
-// console.log(result.message)
+//       {
+//         time: '07:00',
+//         value: 'Дело 1',
+//         priority: 2,
+//       },
+//     ],
+//   },
+//   {
+//     id: 2,
+//     tasks: [
+//       {
+//         time: '06:00',
+//         value: 'Дело 3',
+//         priority: 1,
+//       },
+//       {
+//         time: '07:00',
+//         value: 'Дело 4',
+//         priority: 2,
+//       },
+//     ],
+//   },
+// ]
+const editor = ref(false)
+function toggleEditor() {
+  editor.value = !editor.value
+}
 </script>
 <template>
-  <!-- <br /> -->
-  <!-- {{ days }} -->
-  <!-- <br /> -->
+  <div class="page">
+    <header class="header">
+      <div class="container">
+        <nav class="nav">
+          <span>Задачи</span>
+          <span>Статистика</span>
+        </nav>
+      </div>
+    </header>
+    <main class="days">
+      <div class="button-editor" @click="toggleEditor"> {{ editor ? 'Сохранить' : 'Редактировать' }} </div>
 
-  <ToDoDays :days="days" @setTask="setTask" @deleteTask="deleteTask" />
+      <VDay v-for="day in days" :key="day.id" :day="day" />
+      <!-- Режим просмотра -->
+      <VNextDay v-if="!editor" :day="null" />
+      <!-- <VDay :day="day[0]" /> -->
+      <!-- Режим редактора -->
+      <VNewDay v-else />
+    </main>
+    <VSidebarEditor v-if="editor" class="sidebar" />
+  </div>
 </template>
 
-<style>
-/* @media (min-width: 1024px) {
-  .about {
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-  }
-} */
+<style scoped>
+.page {
+  display: grid;
+  grid-template-areas:
+    'header header'
+    'days sidebar';
+  grid-template-columns: 1fr max-content;
+  grid-template-rows: 60px auto;
+  height: 100vh;
+  color: #fff;
+  background: linear-gradient(#6b7587, #1b1e24);
+  font-family: Arial, Helvetica, sans-serif;
+  /* padding: 0 30px; */
+}
+
+.header {
+  grid-area: header;
+  /* height: 60px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0; */
+  display: flex;
+  background: rgba(27, 30, 36, 0.5);
+}
+
+.container {
+  max-width: 1440px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.nav {
+  display: flex;
+  /* gap: 30px; */
+  height: 100%;
+}
+
+.nav span {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0px 30px;
+}
+
+.main {
+  /* grid-area: 'main'; */
+  /* display: grid; */
+  /* grid-template-columns: 1fr 500px; */
+  /* height: calc(100% - 60px); */
+  /* padding-top: 60px; */
+}
+
+.days {
+  grid-area: days;
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
+  column-gap: 30px;
+  row-gap: 50px;
+  padding: 70px 50px 50px 50px;
+}
+
+.button-editor {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 15px 30px;
+  border-radius: 5px;
+  background: rgba(27, 30, 36, 0.7);
+}
+
+.sidebar {
+  grid-area: sidebar;
+}
 </style>
