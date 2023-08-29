@@ -1,31 +1,75 @@
 <template>
   <aside class="sidebar-editor">
     <div class="tabs">
-      <span class="tab tab-tasks" @click="setTab('tasks')">Дела</span>
-      <span class="tab tab-days" @click="setTab('days')">Дни</span>
+      <span
+        class="tab tab-tasks"
+        @click="setTab('tasks')"
+      >Дела</span>
+      <span
+        class="tab tab-days"
+        @click="setTab('days')"
+      >Дни</span>
     </div>
 
-    <div v-if="curentTab === 'tasks'" class="tasks">
+    <div
+      v-if="curentTab === 'tasks'"
+      class="tasks"
+    >
       <header class="header">
         <div class="task-creator">
-          <input type="number" class="priority" v-model="newTask.priority" />
-          <input type="text" class="value" v-model="newTask.value" />
-          <input type="color" class="color" v-model="newTask.color" />
-          <button @click="createTask">Создать</button>
+          <input
+            v-model="newTask.priority"
+            type="number"
+            class="priority"
+          >
+          <input
+            v-model="newTask.value"
+            type="text"
+            class="value"
+          >
+          <input
+            v-model="newTask.color"
+            type="color"
+            class="color"
+          >
+          <button @click="createTask">
+            Создать
+          </button>
         </div>
       </header>
 
       <main class="main">
-        <div v-for="task in tasks" :key="task.value" class="task">
-          <input type="number" class="priority" :value="task.priority" />
-          <input type="text" class="value" :value="task.value" />
-          <input type="color" class="color" :value="task.color" />
-          <button @click="removeTask(task.value)">Удалить</button>
+        <div
+          v-for="task in tasks"
+          :key="task.value"
+          class="task"
+        >
+          <input
+            type="number"
+            class="priority"
+            :value="task.priority"
+          >
+          <input
+            type="text"
+            class="value"
+            :value="task.value"
+          >
+          <input
+            type="color"
+            class="color"
+            :value="task.color"
+          >
+          <button @click="removeTask(task.value)">
+            Удалить
+          </button>
         </div>
       </main>
     </div>
 
-    <div v-if="curentTab === 'days'" class="days">
+    <div
+      v-if="curentTab === 'days'"
+      class="days"
+    >
       <span>Слева выберите созданный вами день, чтобы сохранить его в этом
         списке</span>
     </div>
@@ -37,25 +81,25 @@ import { ref } from 'vue'
 
 const curentTab = ref('tasks')
 
-function setTab(tabName) {
+function setTab (tabName) {
   curentTab.value = tabName
 }
 
 const newTask = ref({
   priority: 0,
   value: '',
-  color: '',
+  color: ''
 })
 const tasks = ref([])
 
-function createTask() {
+function createTask () {
   tasks.value.unshift({
     priority: newTask.value.priority,
     value: newTask.value.value,
-    color: newTask.value.color,
+    color: newTask.value.color
   })
 }
-function removeTask(taskName) {
+function removeTask (taskName) {
   tasks.value = tasks.value.filter((task) => taskName !== task.value)
 }
 </script>

@@ -11,7 +11,11 @@
     </div>
 
     <div class="list">
-      <VTask :key="task" v-for="task in day.tasks" :task="task" />
+      <VTask
+        v-for="task in day.tasks"
+        :key="task"
+        :task="task"
+      />
     </div>
   </div>
 </template>
@@ -22,8 +26,8 @@ import VTask from './VTask.vue'
 defineProps({
   day: {
     type: Object,
-    required: true,
-  },
+    required: true
+  }
 })
 
 // const emit = defineEmits(['deleteTask'])

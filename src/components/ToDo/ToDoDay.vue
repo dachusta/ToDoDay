@@ -4,17 +4,17 @@ import ToDoTask from './ToDoTask.vue'
 defineProps({
   day: {
     type: Object,
-    required: true,
-  },
+    required: true
+  }
 })
 
 // const emit = defineEmits(['setTask'])
-function setTask(day) {
+function setTask (day) {
   // emit('setTask', day)
 
   day.value.push({
     time: '',
-    value: '',
+    value: ''
   })
 }
 </script>
@@ -34,7 +34,12 @@ function setTask(day) {
       </div>
     </main>
     <footer>
-      <button class="button__set-task" @click="setTask(day)">+</button>
+      <button
+        class="button__set-task"
+        @click="setTask(day)"
+      >
+        +
+      </button>
     </footer>
   </div>
 </template>

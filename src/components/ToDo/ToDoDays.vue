@@ -4,8 +4,8 @@ import ToDoDay from './ToDoDay.vue'
 defineProps({
   days: {
     type: Object,
-    required: true,
-  },
+    required: true
+  }
 })
 </script>
 

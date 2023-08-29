@@ -4,7 +4,9 @@
       <span>Сегодня / ПН</span>
       <!-- <span>Day: 1</span> -->
     </div>
-    <div class="create">+</div>
+    <div class="create">
+      +
+    </div>
   </div>
 </template>
 

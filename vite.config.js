@@ -17,7 +17,7 @@ export default defineConfig(({ command, mode, ssrBuild }) => {
         includeAssets: [
           'favicon.ico',
           'apple-touch-icon.png',
-          'masked-icon.svg',
+          'masked-icon.svg'
         ],
         manifest: {
           name: 'My Awesome App',
@@ -28,22 +28,22 @@ export default defineConfig(({ command, mode, ssrBuild }) => {
             {
               src: 'pwa-192x192.png',
               sizes: '192x192',
-              type: 'image/png',
+              type: 'image/png'
             },
             {
               src: 'pwa-512x512.png',
               sizes: '512x512',
-              type: 'image/png',
-            },
-          ],
-        },
-      }),
+              type: 'image/png'
+            }
+          ]
+        }
+      })
     ],
     resolve: {
       alias: {
-        '@': fileURLToPath(new URL('./src', import.meta.url)),
-      },
-    },
+        '@': fileURLToPath(new URL('./src', import.meta.url))
+      }
+    }
   }
   if (command === 'serve') {
     config.base = '/'

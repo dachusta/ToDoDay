@@ -1,9 +1,21 @@
 <template>
   <div class="task">
-    <input type="time" id="appt" name="appt" v-model="task.time" />
+    <input
+      id="appt"
+      v-model="task.time"
+      type="time"
+      name="appt"
+    >
     <span>~</span>
-    <input class="text" type="text" v-model="task.value" />
-    <input type="checkbox" v-model="task.checkbox" />
+    <input
+      v-model="task.value"
+      class="text"
+      type="text"
+    >
+    <input
+      v-model="task.checkbox"
+      type="checkbox"
+    >
   </div>
 </template>
 
@@ -13,8 +25,8 @@ import { ref } from 'vue'
 defineProps({
   task: {
     type: Object,
-    required: true,
-  },
+    required: true
+  }
 })
 
 const time = ref('')

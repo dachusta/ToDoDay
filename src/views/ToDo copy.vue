@@ -11,10 +11,10 @@ const days = ref([
       // task
       {
         time: '06:00',
-        value: 'Делать',
-      },
-    ],
-  },
+        value: 'Делать'
+      }
+    ]
+  }
 ])
 
 // Заносить данные в локалстор и получать от туда
@@ -35,7 +35,7 @@ watch(
   { deep: true }
 )
 onMounted(() => {
-  console.log(`the component is now mounted.`)
+  console.log('the component is now mounted.')
   if (localStorage.getItem('days')) {
     days.value = JSON.parse(localStorage.getItem('days'))
   }
@@ -43,13 +43,13 @@ onMounted(() => {
 // Заносить данные в локалстор и получать от туда
 
 // Добавлять и удалять время
-function setTask(day) {
+function setTask (day) {
   day.value.push({
     time: '',
-    value: '',
+    value: ''
   })
 }
-function deleteTask(findTask) {
+function deleteTask (findTask) {
   days.value[0].value = days.value[0].value.filter(
     (task) => task.time !== findTask.time
   )
@@ -92,7 +92,11 @@ fetch(
   <!-- {{ days }} -->
   <!-- <br /> -->
 
-  <ToDoDays :days="days" @setTask="setTask" @deleteTask="deleteTask" />
+  <ToDoDays
+    :days="days"
+    @setTask="setTask"
+    @deleteTask="deleteTask"
+  />
 </template>
 
 <style>

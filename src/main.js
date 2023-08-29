@@ -8,9 +8,9 @@ import App from './App.vue'
 import './assets/main.css'
 
 registerSW({
-  onRegistered(r) {
+  onRegistered (r) {
     console.log('onRegistered', r)
-  },
+  }
 })()
 
 const app = createApp(App)

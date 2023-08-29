@@ -10,7 +10,9 @@ lerna-debug.log*
 node_modules
 .DS_Store
 dist
+README.md
 dist-ssr
+dev-dist
 coverage
 *.local
 
@@ -26,3 +28,4 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+

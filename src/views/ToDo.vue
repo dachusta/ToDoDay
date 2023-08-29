@@ -41,7 +41,7 @@ const days = []
 //   },
 // ]
 const editor = ref(false)
-function toggleEditor() {
+function toggleEditor () {
   editor.value = !editor.value
 }
 </script>
@@ -56,16 +56,31 @@ function toggleEditor() {
       </div>
     </header>
     <main class="days">
-      <div class="button-editor" @click="toggleEditor"> {{ editor ? 'Сохранить' : 'Редактировать' }} </div>
+      <div
+        class="button-editor"
+        @click="toggleEditor"
+      >
+        {{ editor ? 'Сохранить' : 'Редактировать' }}
+      </div>
 
-      <VDay v-for="day in days" :key="day.id" :day="day" />
+      <VDay
+        v-for="day in days"
+        :key="day.id"
+        :day="day"
+      />
       <!-- Режим просмотра -->
-      <VNextDay v-if="!editor" :day="null" />
+      <VNextDay
+        v-if="!editor"
+        :day="null"
+      />
       <!-- <VDay :day="day[0]" /> -->
       <!-- Режим редактора -->
       <VNewDay v-else />
     </main>
-    <VSidebarEditor v-if="editor" class="sidebar" />
+    <VSidebarEditor
+      v-if="editor"
+      class="sidebar"
+    />
   </div>
 </template>
 

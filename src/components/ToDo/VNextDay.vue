@@ -5,10 +5,20 @@
       <!-- <span>Day: 1</span> -->
     </div>
 
-    <div v-if="day" class="list">
-      <VTask v-for="task in day.tasks" :key="task" :task="task" />
+    <div
+      v-if="day"
+      class="list"
+    >
+      <VTask
+        v-for="task in day.tasks"
+        :key="task"
+        :task="task"
+      />
     </div>
-    <div v-else class="rlse">
+    <div
+      v-else
+      class="rlse"
+    >
       Чтобы создать день перейдите в режим редактора
     </div>
   </div>
@@ -20,8 +30,8 @@ import VTask from './VTask.vue'
 defineProps({
   day: {
     type: Object,
-    required: true,
-  },
+    required: true
+  }
 })
 </script>
 
