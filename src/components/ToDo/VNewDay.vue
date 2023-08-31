@@ -4,7 +4,10 @@
       <span>Сегодня / ПН</span>
       <!-- <span>Day: 1</span> -->
     </div>
-    <div class="create">
+    <div
+      class="create"
+      @click="$emit('createDay')"
+    >
       +
     </div>
   </div>

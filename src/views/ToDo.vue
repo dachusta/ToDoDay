@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 // import ToDoDays from '../components/ToDo/ToDoDays.vue'
 // import axios from 'axios'
 import VDay from '../components/ToDo/VDay.vue'
@@ -7,7 +7,51 @@ import VNextDay from '../components/ToDo/VNextDay.vue'
 import VNewDay from '../components/ToDo/VNewDay.vue'
 import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
 
-const days = []
+const days = ref([])
+watch(
+  () => days.value,
+  () => {
+    localStorage.setItem('days', JSON.stringify(days.value))
+  },
+  { deep: true }
+)
+onMounted(() => {
+  const daysLS = localStorage.getItem('days')
+  if (daysLS) {
+    days.value = JSON.parse(daysLS)
+  }
+})
+
+function createDay () {
+  days.value.push({
+    id: Date.now(),
+    tasks: []
+  })
+}
+function removeDay (id) {
+  days.value = days.value.filter((day) => day.id !== id)
+}
+
+const selectedDay = ref('')
+
+function selectDay (id) {
+  selectedDay.value = id
+}
+
+function addTaskToDay (task) {
+  days.value.forEach(day => {
+    if (day.id === selectedDay.value) {
+      day.tasks.push(task)
+    }
+  })
+}
+function removeTask (task) {
+  // console.log(task)
+  days.value.forEach(day => {
+    console.log(day.tasks)
+    day.tasks = day.tasks.filter(taskObj => task !== taskObj.value)
+  })
+}
 // const days = [
 //   {
 //     id: 1,
@@ -40,9 +84,9 @@ const days = []
 //     ],
 //   },
 // ]
-const editor = ref(false)
+const isEditor = ref(false)
 function toggleEditor () {
-  editor.value = !editor.value
+  isEditor.value = !isEditor.value
 }
 </script>
 <template>
@@ -60,26 +104,37 @@ function toggleEditor () {
         class="button-editor"
         @click="toggleEditor"
       >
-        {{ editor ? 'Сохранить' : 'Редактировать' }}
+        {{ isEditor ? 'Сохранить' : 'Редактировать' }}
       </div>
 
       <VDay
         v-for="day in days"
         :key="day.id"
         :day="day"
+        :selected-day="selectedDay"
+        :is-editor="isEditor"
+        @remove-day="removeDay"
+        @select-day="selectDay"
+        @remove-task="removeTask"
       />
+
+      <!-- Режим редактора -->
+      <VNewDay
+        v-if="isEditor"
+        @create-day="createDay"
+      />
+
       <!-- Режим просмотра -->
       <VNextDay
-        v-if="!editor"
+        v-else
         :day="null"
       />
       <!-- <VDay :day="day[0]" /> -->
-      <!-- Режим редактора -->
-      <VNewDay v-else />
     </main>
     <VSidebarEditor
-      v-if="editor"
+      v-if="isEditor"
       class="sidebar"
+      @to-day="addTaskToDay"
     />
   </div>
 </template>
@@ -129,14 +184,6 @@ function toggleEditor () {
   padding: 0px 30px;
 }
 
-.main {
-  /* grid-area: 'main'; */
-  /* display: grid; */
-  /* grid-template-columns: 1fr 500px; */
-  /* height: calc(100% - 60px); */
-  /* padding-top: 60px; */
-}
-
 .days {
   grid-area: days;
   position: relative;
@@ -147,6 +194,7 @@ function toggleEditor () {
   column-gap: 30px;
   row-gap: 50px;
   padding: 70px 50px 50px 50px;
+  overflow: auto;
 }
 
 .button-editor {

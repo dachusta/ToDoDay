@@ -12,7 +12,14 @@
       class="text"
       type="text"
     >
+    <button
+      v-if="isEditor"
+      @click="$emit('removeTask', task.value)"
+    >
+      x
+    </button>
     <input
+      v-else
       v-model="task.checkbox"
       type="checkbox"
     >
@@ -25,6 +32,10 @@ import { ref } from 'vue'
 defineProps({
   task: {
     type: Object,
+    required: true
+  },
+  isEditor: {
+    type: Boolean,
     required: true
   }
 })

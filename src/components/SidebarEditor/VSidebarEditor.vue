@@ -44,20 +44,29 @@
           :key="task.value"
           class="task"
         >
+          <button
+            class="to-day"
+            @click="$emit('toDay', task)"
+          >
+            {{ '<-' }}
+          </button>
           <input
             type="number"
             class="priority"
             :value="task.priority"
+            readonly
           >
           <input
             type="text"
             class="value"
             :value="task.value"
+            readonly
           >
           <input
             type="color"
             class="color"
             :value="task.color"
+            readonly
           >
           <button @click="removeTask(task.value)">
             Удалить
