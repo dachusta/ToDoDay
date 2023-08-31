@@ -86,7 +86,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
 const curentTab = ref('tasks')
 
@@ -100,6 +100,19 @@ const newTask = ref({
   color: ''
 })
 const tasks = ref([])
+watch(
+  () => tasks.value,
+  () => {
+    localStorage.setItem('tasks', JSON.stringify(tasks.value))
+  },
+  { deep: true }
+)
+onMounted(() => {
+  const tasksLS = localStorage.getItem('tasks')
+  if (tasksLS) {
+    tasks.value = JSON.parse(tasksLS)
+  }
+})
 
 function createTask () {
   tasks.value.unshift({
