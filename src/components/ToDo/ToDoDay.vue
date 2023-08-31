@@ -1,4 +1,5 @@
 <script setup>
+import VButton from '../VButton.vue';
 import ToDoTask from './ToDoTask.vue'
 
 defineProps({
@@ -34,12 +35,12 @@ function setTask (day) {
       </div>
     </main>
     <footer>
-      <button
+      <VButton
         class="button__set-task"
         @click="setTask(day)"
       >
         +
-      </button>
+      </VButton>
     </footer>
   </div>
 </template>

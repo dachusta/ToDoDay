@@ -32,9 +32,9 @@
             type="color"
             class="color"
           >
-          <button @click="createTask">
+          <VButton @click="createTask">
             Создать
-          </button>
+          </VButton>
         </div>
       </header>
 
@@ -44,12 +44,12 @@
           :key="task.value"
           class="task"
         >
-          <button
+          <VButton
             class="to-day"
             @click="$emit('toDay', task)"
           >
-            {{ '<-' }}
-          </button>
+            🠔
+          </VButton>
           <input
             type="number"
             class="priority"
@@ -68,9 +68,9 @@
             :value="task.color"
             readonly
           >
-          <button @click="removeTask(task.value)">
+          <VButton @click="removeTask(task.value)">
             Удалить
-          </button>
+          </VButton>
         </div>
       </main>
     </div>
@@ -87,6 +87,7 @@
 
 <script setup>
 import { ref, watch, onMounted } from 'vue'
+import VButton from '../VButton.vue';
 
 const curentTab = ref('tasks')
 

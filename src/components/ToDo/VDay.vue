@@ -16,12 +16,12 @@
       </div>
 
       <div class="buttons">
-        <button
+        <VButton
           v-if="isEditor"
           @click="$emit('removeDay', day.id)"
         >
-          x
-        </button>
+          ✘
+        </VButton>
       </div>
     </div>
 
@@ -38,6 +38,7 @@
 </template>
 
 <script setup>
+import VButton from '../VButton.vue'
 import VTask from './VTask.vue'
 
 defineProps({

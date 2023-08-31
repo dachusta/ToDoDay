@@ -7,17 +7,15 @@
       name="appt"
     >
     <span>~</span>
-    <input
+    <VInputText
       v-model="task.value"
-      class="text"
-      type="text"
-    >
-    <button
+    />
+    <VButton
       v-if="isEditor"
       @click="$emit('removeTask', task.value)"
     >
-      x
-    </button>
+      ✘
+    </VButton>
     <input
       v-else
       v-model="task.checkbox"
@@ -28,6 +26,8 @@
 
 <script setup>
 import { ref } from 'vue'
+import VButton from '../VButton.vue'
+import VInputText from '../VInputText.vue'
 
 defineProps({
   task: {
