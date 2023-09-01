@@ -1,10 +1,20 @@
+<script setup>
+defineProps({
+  task: {
+    type: Object,
+    default: () => {}
+  }
+})
+</script>
+
 <template>
   <div class="task">
-    <input
-      v-model="task.time"
-      class="time"
-      type="time"
+    <button
+      class="button to-day"
+      @click="$emit('toDay', task)"
     >
+      🠔
+    </button>
     <input
       type="number"
       class="priority"
@@ -17,41 +27,20 @@
       :value="task.value"
       readonly
     >
+    <input
+      type="color"
+      class="color"
+      :value="task.color"
+      readonly
+    >
     <button
-      v-if="isEditor"
       class="button"
       @click="$emit('removeTask', task.value)"
     >
       ✘
     </button>
-    <input
-      v-else
-      v-model="task.checkbox"
-      type="checkbox"
-    >
   </div>
 </template>
-
-<script setup>
-import { ref } from 'vue'
-// import VButton from '../VButton.vue'
-// import VInputText from '../VInputText.vue'
-
-defineProps({
-  task: {
-    type: Object,
-    required: true
-  },
-  isEditor: {
-    type: Boolean,
-    required: true
-  }
-})
-
-const time = ref('')
-const value = ref('')
-const checkbox = ref(false)
-</script>
 
 <style scoped>
 .task {
@@ -62,14 +51,6 @@ const checkbox = ref(false)
   border-radius: 5px;
   color: #FFFFFF;
 
-  .time {
-    /* width: 50px; */
-    background: transparent;
-    color: inherit;
-    padding: 4px 8px;
-    border: none;
-    border-right: 1px solid #FFFFFF;
-  }
   .priority {
     width: 50px;
     background: transparent;
@@ -86,13 +67,35 @@ const checkbox = ref(false)
     border: none;
   }
 
+  .color {
+    height: auto;
+    background: linear-gradient(135deg,
+      hsl(0, 100%, 50%),
+      hsl(30, 100%, 50%),
+      hsl(60, 100%, 50%),
+      /* hsl(90, 100%, 50%), */
+      hsl(120, 100%, 50%),
+      /* hsl(150, 100%, 50%), */
+      hsl(180, 100%, 50%),
+      /* hsl(210, 100%, 50%), */
+      hsl(240, 100%, 50%),
+      hsl(270, 100%, 50%),
+      hsl(300, 100%, 50%)
+      /* hsl(330, 100%, 50%), */
+      /* hsl(360, 100%, 50%) */
+  );
+  }
+
   .button {
     background: transparent;
     color: inherit;
     border: none;
     padding: 0px 10px;
     cursor: pointer;
-    border-left: 1px solid #FFFFFF;
+  }
+
+  .to-day {
+    border-right: 1px solid #FFFFFF;
   }
 }
 </style>

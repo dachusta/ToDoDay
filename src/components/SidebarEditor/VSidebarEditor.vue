@@ -16,62 +16,17 @@
       class="tasks"
     >
       <header class="header">
-        <div class="task-creator">
-          <input
-            v-model="newTask.priority"
-            type="number"
-            class="priority"
-          >
-          <input
-            v-model="newTask.value"
-            type="text"
-            class="value"
-          >
-          <input
-            v-model="newTask.color"
-            type="color"
-            class="color"
-          >
-          <VButton @click="createTask">
-            Создать
-          </VButton>
-        </div>
+        <VTaskCreator @create-task="createTask" />
       </header>
 
       <main class="main">
-        <div
+        <VTask
           v-for="task in tasks"
           :key="task.value"
-          class="task"
-        >
-          <VButton
-            class="to-day"
-            @click="$emit('toDay', task)"
-          >
-            🠔
-          </VButton>
-          <input
-            type="number"
-            class="priority"
-            :value="task.priority"
-            readonly
-          >
-          <input
-            type="text"
-            class="value"
-            :value="task.value"
-            readonly
-          >
-          <input
-            type="color"
-            class="color"
-            :value="task.color"
-            readonly
-          >
-          <VButton @click="removeTask(task.value)">
-            Удалить
-          </VButton>
-        </div>
+          :task="task"
+          @to-day="$emit('toDay', $event)"
+          @remove-task="removeTask"
+        />
       </main>
     </div>
 
@@ -87,7 +42,8 @@
 
 <script setup>
 import { ref, watch, onMounted } from 'vue'
-import VButton from '../VButton.vue';
+import VTask from './VTask.vue'
+import VTaskCreator from './VTaskCreator.vue'
 
 const curentTab = ref('tasks')
 
@@ -95,11 +51,6 @@ function setTab (tabName) {
   curentTab.value = tabName
 }
 
-const newTask = ref({
-  priority: 0,
-  value: '',
-  color: ''
-})
 const tasks = ref([])
 watch(
   () => tasks.value,
@@ -115,7 +66,7 @@ onMounted(() => {
   }
 })
 
-function createTask () {
+function createTask (newTask) {
   tasks.value.unshift({
     priority: newTask.value.priority,
     value: newTask.value.value,
@@ -152,23 +103,6 @@ function removeTask (taskName) {
     .main {
       display: grid;
       gap: 10px;
-    }
-
-    .task,
-    .task-creator {
-      display: flex;
-      background: rgba(27, 30, 36, 0.5);
-      padding: 2px 4px;
-      border: 1px solid #ffffff;
-      border-radius: 5px;
-
-      .priority {
-        width: 50px;
-      }
-
-      .value {
-        width: 100%;
-      }
     }
   }
 }

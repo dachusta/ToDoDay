@@ -126,7 +126,7 @@ function toggleEditor () {
 
       <!-- Режим просмотра -->
       <VNextDay
-        v-else
+        v-if="false"
         :day="null"
       />
       <!-- <VDay :day="day[0]" /> -->
