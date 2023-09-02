@@ -27,22 +27,24 @@
 
     <div class="list">
       <VTask
-        v-for="task in day.tasks"
+        v-for="task in sortedTasks"
         :key="task"
         :task="task"
         :is-editor="isEditor"
         @remove-task="$emit('removeTask', $event, day.id)"
         @set-task-time="$emit('setTaskTime', { ...$event, dayID: day.id })"
+        @set-task-checked="$emit('setTaskChecked', { ...$event, dayID: day.id })"
       />
     </div>
   </div>
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import VButton from '../VButton.vue'
 import VTask from './VTask.vue'
 
-defineProps({
+const props = defineProps({
   day: {
     type: Object,
     required: true
@@ -58,6 +60,12 @@ defineProps({
 })
 
 // const emit = defineEmits(['deleteTask'])
+
+const sortedTasks = computed(() => {
+  return props.day.tasks.toSorted((task1, task2) =>
+    (task1?.time ? task1?.time.replace(':', '') : 0) -
+    (task2?.time ? task2?.time.replace(':', '') : 0))
+})
 </script>
 
 <style scoped>

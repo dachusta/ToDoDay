@@ -1,5 +1,8 @@
 <template>
-  <div class="task">
+  <div
+    class="task"
+    :class="{ completed: task.checked }"
+  >
     <input
       class="time"
       type="time"
@@ -27,15 +30,16 @@
     </button>
     <input
       v-else
-      v-model="task.checkbox"
       class="checkbox"
       type="checkbox"
+      :checked="task.checked"
+      @input="$emit('setTaskChecked', { checked: $event.target.checked, task: task.value })"
     >
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+// import { ref } from 'vue'
 // import VButton from '../VButton.vue'
 // import VInputText from '../VInputText.vue'
 
@@ -50,9 +54,9 @@ defineProps({
   }
 })
 
-const time = ref('')
-const value = ref('')
-const checkbox = ref(false)
+// const time = ref('')
+// const value = ref('')
+// const checkbox = ref(false)
 </script>
 
 <style scoped>
@@ -63,6 +67,10 @@ const checkbox = ref(false)
   border: 1px solid #ffffff;
   border-radius: 5px;
   color: #FFFFFF;
+
+  &.completed {
+    opacity: 0.3;
+  }
 
   .time {
     /* width: 50px; */

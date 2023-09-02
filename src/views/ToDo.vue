@@ -7,6 +7,13 @@ import VNextDay from '../components/ToDo/VNextDay.vue'
 import VNewDay from '../components/ToDo/VNewDay.vue'
 import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
 
+// Сортировка по заданному времени *
+// Опасили при чекбоксе *
+// Цвет бэкграунда задачи
+// Дата задачи (сегодня, завтра)
+// Возможность менять дни местами
+// Автоматически менять дни, завтрашняя задача должна становиться сегодняшней
+
 const days = ref([])
 watch(
   () => days.value,
@@ -63,6 +70,18 @@ function setTaskTime (params) {
     }
   })
 }
+function setTaskChecked (params) {
+  days.value.forEach(day => {
+    if (params.dayID === day.id) {
+      day.tasks.forEach(taskObj => {
+        if (taskObj.value === params.task) {
+          taskObj.checked = params.checked
+        }
+      })
+    }
+  })
+}
+
 // const days = [
 //   {
 //     id: 1,
@@ -128,6 +147,7 @@ function toggleEditor () {
         @select-day="selectDay"
         @remove-task="removeTask"
         @set-task-time="setTaskTime"
+        @set-task-checked="setTaskChecked"
       />
 
       <!-- Режим редактора -->
