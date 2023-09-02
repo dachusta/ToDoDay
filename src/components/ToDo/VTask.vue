@@ -1,9 +1,10 @@
 <template>
   <div class="task">
     <input
-      v-model="task.time"
       class="time"
       type="time"
+      :value="task.time"
+      @input="$emit('setTaskTime', { time: $event.target.value, task: task.value })"
     >
     <input
       type="number"
@@ -27,6 +28,7 @@
     <input
       v-else
       v-model="task.checkbox"
+      class="checkbox"
       type="checkbox"
     >
   </div>
@@ -84,6 +86,12 @@ const checkbox = ref(false)
     padding: 6px 10px;
     background: transparent;
     border: none;
+  }
+
+  .checkbox {
+    width: 30px;
+    margin-right: 10px;
+    margin-left: 5px;
   }
 
   .button {

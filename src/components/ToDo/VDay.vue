@@ -31,7 +31,8 @@
         :key="task"
         :task="task"
         :is-editor="isEditor"
-        @remove-task="$emit('removeTask', $event)"
+        @remove-task="$emit('removeTask', $event, day.id)"
+        @set-task-time="$emit('setTaskTime', { ...$event, dayID: day.id })"
       />
     </div>
   </div>
@@ -70,7 +71,7 @@ defineProps({
   background: rgba(27, 30, 36, 0.7);
 
   &.selected {
-    background: #000;
+    background: rgba(0, 0, 0, 0.7);
   }
 
   .info {
@@ -84,6 +85,11 @@ defineProps({
     display: flex;
     justify-content: space-between;
     gap: 20px;
+  }
+
+  .list {
+    display: grid;
+    gap: 10px;
   }
 }
 </style>

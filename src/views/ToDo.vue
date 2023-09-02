@@ -45,11 +45,22 @@ function addTaskToDay (task) {
     }
   })
 }
-function removeTask (task) {
-  // console.log(task)
+function removeTask (task, dayID) {
   days.value.forEach(day => {
-    console.log(day.tasks)
-    day.tasks = day.tasks.filter(taskObj => task !== taskObj.value)
+    if (dayID === day.id) {
+      day.tasks = day.tasks.filter(taskObj => task !== taskObj.value)
+    }
+  })
+}
+function setTaskTime (params) {
+  days.value.forEach(day => {
+    if (params.dayID === day.id) {
+      day.tasks.forEach(taskObj => {
+        if (taskObj.value === params.task) {
+          taskObj.time = params.time
+        }
+      })
+    }
   })
 }
 // const days = [
@@ -116,6 +127,7 @@ function toggleEditor () {
         @remove-day="removeDay"
         @select-day="selectDay"
         @remove-task="removeTask"
+        @set-task-time="setTaskTime"
       />
 
       <!-- Режим редактора -->
