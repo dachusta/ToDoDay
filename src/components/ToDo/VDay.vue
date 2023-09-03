@@ -15,6 +15,21 @@
         <span>0/0</span>
       </div>
 
+      <div class="buttons-move-day">
+        <VButton
+          v-if="isEditor"
+          @click="$emit('toPrevDay', { dayID: day.id, fromIndex: order })"
+        >
+          {{ '<' }}
+        </VButton>
+        <VButton
+          v-if="isEditor"
+          @click="$emit('toNextDay', { dayID: day.id, fromIndex: order })"
+        >
+          {{ '>' }}
+        </VButton>
+      </div>
+
       <div class="buttons">
         <VButton
           v-if="isEditor"

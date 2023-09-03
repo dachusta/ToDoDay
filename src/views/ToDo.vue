@@ -11,8 +11,8 @@ import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
 // Опасили при чекбоксе *
 // Цвет бэкграунда задачи *
 // Дата задачи (сегодня, завтра) *
-// Возможность менять дни местами
-// Автоматически менять дни, завтрашняя задача должна становиться сегодняшней
+// Возможность менять дни местами *
+// (Цикличность) Автоматически менять дни, завтрашний день должна становиться сегодняшней
 
 const days = ref([])
 watch(
@@ -37,6 +37,17 @@ function createDay () {
 }
 function removeDay (id) {
   days.value = days.value.filter((day) => day.id !== id)
+}
+
+function toPrevDay ({ dayID, fromIndex }) {
+  const element = days.value[fromIndex]
+  days.value.splice(fromIndex, 1)
+  days.value.splice(fromIndex - 1, 0, element)
+}
+function toNextDay ({ dayID, fromIndex }) {
+  const element = days.value[fromIndex]
+  days.value.splice(fromIndex, 1)
+  days.value.splice(fromIndex + 1, 0, element)
 }
 
 const selectedDay = ref('')
@@ -149,6 +160,8 @@ function toggleEditor () {
         @remove-task="removeTask"
         @set-task-time="setTaskTime"
         @set-task-checked="setTaskChecked"
+        @to-prev-day="toPrevDay"
+        @to-next-day="toNextDay"
       />
 
       <!-- Режим редактора -->
