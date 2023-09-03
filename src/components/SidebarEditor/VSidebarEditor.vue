@@ -68,9 +68,9 @@ onMounted(() => {
 
 function createTask (newTask) {
   tasks.value.unshift({
-    priority: newTask.value.priority,
-    value: newTask.value.value,
-    color: newTask.value.color
+    priority: newTask.priority,
+    value: newTask.value,
+    color: newTask.color
   })
 }
 function removeTask (taskName) {
