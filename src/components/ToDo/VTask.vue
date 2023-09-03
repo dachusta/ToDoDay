@@ -2,6 +2,7 @@
   <div
     class="task"
     :class="{ completed: task.checked }"
+    :style="{ background: task.color }"
   >
     <input
       class="time"
