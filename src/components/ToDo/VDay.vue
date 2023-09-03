@@ -5,7 +5,7 @@
     @click="$emit('selectDay', day.id)"
   >
     <div class="info">
-      <span>Сегодня / ПН</span>
+      <span>{{ currentDay }}</span>
       <!-- <span>Day: 1</span> -->
     </div>
 
@@ -49,6 +49,10 @@ const props = defineProps({
     type: Object,
     required: true
   },
+  order: {
+    type: Number,
+    required: true
+  },
   selectedDay: {
     type: String,
     required: true
@@ -65,6 +69,16 @@ const sortedTasks = computed(() => {
   return props.day.tasks.toSorted((task1, task2) =>
     (task1?.time ? task1?.time.replace(':', '') : 0) -
     (task2?.time ? task2?.time.replace(':', '') : 0))
+})
+
+const currentDay = computed(() => {
+  const nextDay = props.order * 24 * 60 * 60 * 1000
+
+  const currentDate = new Date(new Date().getTime() + nextDay)
+  const day = currentDate.getDate()
+  const month = currentDate.getMonth() + 1
+  const year = currentDate.getFullYear()
+  return day + '/' + month + '/' + year
 })
 </script>
 

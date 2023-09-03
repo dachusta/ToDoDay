@@ -9,8 +9,8 @@ import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
 
 // Сортировка по заданному времени *
 // Опасили при чекбоксе *
-// Цвет бэкграунда задачи
-// Дата задачи (сегодня, завтра)
+// Цвет бэкграунда задачи *
+// Дата задачи (сегодня, завтра) *
 // Возможность менять дни местами
 // Автоматически менять дни, завтрашняя задача должна становиться сегодняшней
 
@@ -138,9 +138,10 @@ function toggleEditor () {
       </div>
 
       <VDay
-        v-for="day in days"
+        v-for="(day, idx) in days"
         :key="day.id"
         :day="day"
+        :order="idx"
         :selected-day="selectedDay"
         :is-editor="isEditor"
         @remove-day="removeDay"
