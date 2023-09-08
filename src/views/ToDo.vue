@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, onMounted } from 'vue'
 // import ToDoDays from '../components/ToDo/ToDoDays.vue'
-// import axios from 'axios'
+import axios from 'axios'
 import VDay from '../components/ToDo/VDay.vue'
 import VNextDay from '../components/ToDo/VNextDay.vue'
 import VNewDay from '../components/ToDo/VNewDay.vue'
@@ -18,15 +18,16 @@ const days = ref([])
 watch(
   () => days.value,
   () => {
-    localStorage.setItem('days', JSON.stringify(days.value))
+    // localStorage.setItem('days', JSON.stringify(days.value))
   },
   { deep: true }
 )
 onMounted(() => {
-  const daysLS = localStorage.getItem('days')
-  if (daysLS) {
-    days.value = JSON.parse(daysLS)
-  }
+  getDays()
+  // const daysLS = localStorage.getItem('days')
+  // if (daysLS) {
+  //   days.value = JSON.parse(daysLS)
+  // }
 })
 
 function createDay () {
@@ -126,8 +127,41 @@ function setTaskChecked (params) {
 //   },
 // ]
 const isEditor = ref(false)
-function toggleEditor () {
-  isEditor.value = !isEditor.value
+// function toggleEditor () {
+//   isEditor.value = !isEditor.value
+// }
+function saveDays () {
+  isEditor.value = false
+
+  setDays(days.value)
+}
+function editDays () {
+  isEditor.value = true
+}
+
+// http://192.168.1.65:3001/setDays
+// https://tododay-api.ru/setDays
+function setDays (days) {
+  axios
+    .post('https://tododay-api.ru/setDays', days)
+    .then(function (response) {
+      console.log(response)
+    })
+    .catch(function (error) {
+      console.log(error)
+    })
+}
+function getDays () {
+  axios
+    .get('https://tododay-api.ru/getDays')
+    .then(function (response) {
+      console.log(response)
+      console.log(response.data.data)
+      days.value = response.data.data
+    })
+    .catch(function (error) {
+      console.log(error)
+    })
 }
 </script>
 <template>
@@ -142,10 +176,22 @@ function toggleEditor () {
     </header>
     <main class="days">
       <div
-        class="button-editor"
-        @click="toggleEditor"
+        class="buttons-editor"
       >
-        {{ isEditor ? 'Сохранить' : 'Редактировать' }}
+        <button
+          v-if="isEditor"
+          class="button-save"
+          @click="saveDays"
+        >
+          Сохранить
+        </button>
+        <button
+          v-else
+          class="button-edit"
+          @click="editDays"
+        >
+          Редактировать
+        </button>
       </div>
 
       <VDay
@@ -243,12 +289,14 @@ function toggleEditor () {
   overflow: auto;
 }
 
-.button-editor {
+.buttons-editor button {
   position: absolute;
   top: 10px;
   right: 10px;
   padding: 15px 30px;
   border-radius: 5px;
+  color: inherit;
+  border: none;
   background: rgba(27, 30, 36, 0.7);
 }
 
