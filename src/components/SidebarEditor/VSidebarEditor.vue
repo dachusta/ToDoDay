@@ -16,16 +16,16 @@
       class="tasks"
     >
       <header class="header">
-        <VTaskCreator @create-task="createTask" />
+        <VTaskCreator @create-task="tasks.createTask" />
       </header>
 
       <main class="main">
         <VTask
-          v-for="task in tasks"
+          v-for="task in tasks.tasks"
           :key="task.value"
           :task="task"
           @to-day="$emit('toDay', $event)"
-          @remove-task="removeTask"
+          @remove-task="tasks.removeTask"
         />
       </main>
     </div>
@@ -41,41 +41,20 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import VTask from './VTask.vue'
 import VTaskCreator from './VTaskCreator.vue'
+import { useTabs } from '../../composables/tabs'
+import { useTasksStore } from '../../stores/tasks'
 
-const curentTab = ref('tasks')
+const { curentTab, setTab } = useTabs()
+curentTab.value = 'tasks'
 
-function setTab (tabName) {
-  curentTab.value = tabName
-}
+const tasks = useTasksStore()
 
-const tasks = ref([])
-watch(
-  () => tasks.value,
-  () => {
-    localStorage.setItem('tasks', JSON.stringify(tasks.value))
-  },
-  { deep: true }
-)
 onMounted(() => {
-  const tasksLS = localStorage.getItem('tasks')
-  if (tasksLS) {
-    tasks.value = JSON.parse(tasksLS)
-  }
+  tasks.getTasks()
 })
-
-function createTask (newTask) {
-  tasks.value.unshift({
-    priority: newTask.priority,
-    value: newTask.value,
-    color: newTask.color
-  })
-}
-function removeTask (taskName) {
-  tasks.value = tasks.value.filter((task) => taskName !== task.value)
-}
 </script>
 
 <style scoped>

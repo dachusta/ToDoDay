@@ -1,168 +1,19 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { onMounted } from 'vue'
 // import ToDoDays from '../components/ToDo/ToDoDays.vue'
-import axios from 'axios'
 import VDay from '../components/ToDo/VDay.vue'
 import VNextDay from '../components/ToDo/VNextDay.vue'
 import VNewDay from '../components/ToDo/VNewDay.vue'
 import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
+import VButton from '../components/VButton.vue'
+import { useDaysStore } from '../stores/days'
 
-// Сортировка по заданному времени *
-// Опасили при чекбоксе *
-// Цвет бэкграунда задачи *
-// Дата задачи (сегодня, завтра) *
-// Возможность менять дни местами *
-// (Цикличность) Автоматически менять дни, завтрашний день должна становиться сегодняшней
+const days = useDaysStore()
 
-const days = ref([])
-watch(
-  () => days.value,
-  () => {
-    // localStorage.setItem('days', JSON.stringify(days.value))
-  },
-  { deep: true }
-)
 onMounted(() => {
-  getDays()
-  // const daysLS = localStorage.getItem('days')
-  // if (daysLS) {
-  //   days.value = JSON.parse(daysLS)
-  // }
+  days.getDays()
 })
 
-function createDay () {
-  days.value.push({
-    id: Date.now(),
-    tasks: []
-  })
-}
-function removeDay (id) {
-  days.value = days.value.filter((day) => day.id !== id)
-}
-
-function toPrevDay ({ dayID, fromIndex }) {
-  const element = days.value[fromIndex]
-  days.value.splice(fromIndex, 1)
-  days.value.splice(fromIndex - 1, 0, element)
-}
-function toNextDay ({ dayID, fromIndex }) {
-  const element = days.value[fromIndex]
-  days.value.splice(fromIndex, 1)
-  days.value.splice(fromIndex + 1, 0, element)
-}
-
-const selectedDay = ref('')
-
-function selectDay (id) {
-  selectedDay.value = id
-}
-
-function addTaskToDay (task) {
-  days.value.forEach(day => {
-    if (day.id === selectedDay.value) {
-      day.tasks.push(task)
-    }
-  })
-}
-function removeTask (task, dayID) {
-  days.value.forEach(day => {
-    if (dayID === day.id) {
-      day.tasks = day.tasks.filter(taskObj => task !== taskObj.value)
-    }
-  })
-}
-function setTaskTime (params) {
-  days.value.forEach(day => {
-    if (params.dayID === day.id) {
-      day.tasks.forEach(taskObj => {
-        if (taskObj.value === params.task) {
-          taskObj.time = params.time
-        }
-      })
-    }
-  })
-}
-function setTaskChecked (params) {
-  days.value.forEach(day => {
-    if (params.dayID === day.id) {
-      day.tasks.forEach(taskObj => {
-        if (taskObj.value === params.task) {
-          taskObj.checked = params.checked
-        }
-      })
-    }
-  })
-}
-
-// const days = [
-//   {
-//     id: 1,
-//     tasks: [
-//       {
-//         time: '06:00',
-//         value: 'Дело 1',
-//         priority: 1,
-//       },
-//       {
-//         time: '07:00',
-//         value: 'Дело 1',
-//         priority: 2,
-//       },
-//     ],
-//   },
-//   {
-//     id: 2,
-//     tasks: [
-//       {
-//         time: '06:00',
-//         value: 'Дело 3',
-//         priority: 1,
-//       },
-//       {
-//         time: '07:00',
-//         value: 'Дело 4',
-//         priority: 2,
-//       },
-//     ],
-//   },
-// ]
-const isEditor = ref(false)
-// function toggleEditor () {
-//   isEditor.value = !isEditor.value
-// }
-function saveDays () {
-  isEditor.value = false
-
-  setDays(days.value)
-}
-function editDays () {
-  isEditor.value = true
-}
-
-// http://192.168.1.65:3001/setDays
-// https://tododay-api.ru/setDays
-function setDays (days) {
-  axios
-    .post('https://tododay-api.ru/setDays', days)
-    .then(function (response) {
-      console.log(response)
-    })
-    .catch(function (error) {
-      console.log(error)
-    })
-}
-function getDays () {
-  axios
-    .get('https://tododay-api.ru/getDays')
-    .then(function (response) {
-      console.log(response)
-      console.log(response.data.data)
-      days.value = response.data.data
-    })
-    .catch(function (error) {
-      console.log(error)
-    })
-}
 </script>
 <template>
   <div class="page">
@@ -178,42 +29,43 @@ function getDays () {
       <div
         class="buttons-editor"
       >
-        <button
-          v-if="isEditor"
+        <VButton
+          v-if="days.isEditor"
           class="button-save"
-          @click="saveDays"
+          @click="days.saveDays"
         >
           Сохранить
-        </button>
-        <button
+        </VButton>
+        <VButton
           v-else
           class="button-edit"
-          @click="editDays"
+          @click="days.editDays"
         >
           Редактировать
-        </button>
+        </VButton>
       </div>
 
       <VDay
-        v-for="(day, idx) in days"
+        v-for="(day, idx) in days.days"
         :key="day.id"
         :day="day"
         :order="idx"
-        :selected-day="selectedDay"
-        :is-editor="isEditor"
-        @remove-day="removeDay"
-        @select-day="selectDay"
-        @remove-task="removeTask"
-        @set-task-time="setTaskTime"
-        @set-task-checked="setTaskChecked"
-        @to-prev-day="toPrevDay"
-        @to-next-day="toNextDay"
+        :selected-day="days.selectedDay"
+        :is-editor="days.isEditor"
+        @remove-day="days.removeDay"
+        @select-day="days.selectDay"
+        @remove-task="days.removeTask"
+        @set-task-time="days.setTaskTime"
+        @set-task-checked="days.setTaskChecked"
+        @to-prev-day="days.toPrevDay"
+        @to-next-day="days.toNextDay"
       />
 
       <!-- Режим редактора -->
       <VNewDay
-        v-if="isEditor"
-        @create-day="createDay"
+        v-if="days.isEditor"
+        :order="days.days.length"
+        @create-day="days.createDay"
       />
 
       <!-- Режим просмотра -->
@@ -224,9 +76,9 @@ function getDays () {
       <!-- <VDay :day="day[0]" /> -->
     </main>
     <VSidebarEditor
-      v-if="isEditor"
+      v-if="days.isEditor"
       class="sidebar"
-      @to-day="addTaskToDay"
+      @to-day="days.addTaskToDay"
     />
   </div>
 </template>
@@ -289,10 +141,12 @@ function getDays () {
   overflow: auto;
 }
 
-.buttons-editor button {
+.buttons-editor {
   position: absolute;
   top: 10px;
   right: 10px;
+}
+.buttons-editor button {
   padding: 15px 30px;
   border-radius: 5px;
   color: inherit;

@@ -1,7 +1,7 @@
 <template>
   <div class="day">
     <div class="info">
-      <span>Сегодня / ПН</span>
+      <span>{{ currentDay }}</span>
       <!-- <span>Day: 1</span> -->
     </div>
 
@@ -17,7 +17,7 @@
     </div>
     <div
       v-else
-      class="rlse"
+      class="else"
     >
       Чтобы создать день перейдите в режим редактора
     </div>
@@ -26,13 +26,21 @@
 
 <script setup>
 import VTask from './VTask.vue'
+import { useCurrentDay } from '../../composables/currentDay'
 
-defineProps({
+const props = defineProps({
   day: {
     type: Object,
     required: true
+  },
+  order: {
+    type: Number,
+    required: true
   }
 })
+
+const { orderDay, currentDay } = useCurrentDay()
+orderDay.value = props.order
 </script>
 
 <style scoped>

@@ -1,7 +1,7 @@
 <template>
   <div class="day">
     <div class="info">
-      <span>Сегодня / ПН</span>
+      <span>{{ currentDay }}</span>
       <!-- <span>Day: 1</span> -->
     </div>
     <div
@@ -14,7 +14,17 @@
 </template>
 
 <script setup>
+import { useCurrentDay } from '../../composables/currentDay'
 
+const props = defineProps({
+  order: {
+    type: Number,
+    required: true
+  }
+})
+
+const { orderDay, currentDay } = useCurrentDay()
+orderDay.value = props.order
 </script>
 
 <style scoped>

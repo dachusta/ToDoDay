@@ -16,8 +16,5 @@
   cursor: pointer;
   border-radius: 5px;
   padding: 6px 10px;
-  /* width: 30px; */
-  /* height: 30px; */
-  /* line-height: 0.5; */
 }
 </style>

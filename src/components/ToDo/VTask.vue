@@ -40,10 +40,6 @@
 </template>
 
 <script setup>
-// import { ref } from 'vue'
-// import VButton from '../VButton.vue'
-// import VInputText from '../VInputText.vue'
-
 defineProps({
   task: {
     type: Object,
@@ -55,9 +51,6 @@ defineProps({
   }
 })
 
-// const time = ref('')
-// const value = ref('')
-// const checkbox = ref(false)
 </script>
 
 <style scoped>
