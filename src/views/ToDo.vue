@@ -1,18 +1,42 @@
 <script setup>
 import { onMounted } from 'vue'
-// import ToDoDays from '../components/ToDo/ToDoDays.vue'
 import VDay from '../components/ToDo/VDay.vue'
 import VNextDay from '../components/ToDo/VNextDay.vue'
 import VNewDay from '../components/ToDo/VNewDay.vue'
 import VSidebarEditor from '../components/SidebarEditor/VSidebarEditor.vue'
 import VButton from '../components/VButton.vue'
 import { useDaysStore } from '../stores/days'
+import { useTasksStore } from '../stores/tasks'
+import { useEditorStore } from '../stores/editor'
 
 const days = useDaysStore()
+const tasks = useTasksStore()
+const editor = useEditorStore()
 
 onMounted(() => {
   days.getDays()
+  tasks.getTasks()
 })
+
+// Добавить кнопку отмены (сохранять промежуточное состояние в локалСторе/индексДБ и отчищать после нажатия сохранить/отменить)
+// Изменять цвет такса и приоритет на фронте, после нажатия кнопки сохранить отправлять отформатированные задачи и дни на бэк (days/setLis и tasks/setList)
+//
+// выписать все возможные эндпоинты (set, get, ...), которые нужно будет вынести на бэкенд
+// Добавить свойство taskId (так как в одном дне может быть несколько тасков с одинаковым task.value) и переписать методы с учетом taskId
+// days/setTimeTask (dayId, taskId) - устанавливать время только в режиме просмотра (в режиме редактора элемент readonly/disabled)
+// days/setDoneTask (dayId, taskId) - устанавливать в выполнено только в режиме просмотра
+// days/getList (getDays)
+// days/setList (setDays)
+//
+// tasks/getList (getTasks)
+// tasks/setList (setTasks) - отправлять на бэк, после нажатия кнопки сохранить
+//
+//
+//
+// Переименовать все методы в сторах
+// days.days --> days.list или days.value - если не получатся days.value.value :)
+// days.saveDays() --> days.save() но days.createDay() --> days.createDay()
+// и т.д.    в тасках, и поискать еще где-то
 
 </script>
 <template>
@@ -30,16 +54,25 @@ onMounted(() => {
         class="buttons-editor"
       >
         <VButton
-          v-if="days.isEditor"
+          v-if="editor.is"
           class="button-save"
-          @click="days.saveDays"
+          @click="editor.save"
         >
           Сохранить
         </VButton>
+
         <VButton
-          v-else
-          class="button-edit"
-          @click="days.editDays"
+          v-if="editor.is"
+          class="button-cancel"
+          @click="editor.cancel"
+        >
+          Отменить
+        </VButton>
+
+        <VButton
+          v-if="!editor.is"
+          class="button-open"
+          @click="editor.open"
         >
           Редактировать
         </VButton>
@@ -50,20 +83,20 @@ onMounted(() => {
         :key="day.id"
         :day="day"
         :order="idx"
-        :selected-day="days.selectedDay"
-        :is-editor="days.isEditor"
+        :selected-day-id="days.selectedDayId"
+        :is-editor="editor.is"
         @remove-day="days.removeDay"
         @select-day="days.selectDay"
         @remove-task="days.removeTask"
         @set-task-time="days.setTaskTime"
-        @set-task-checked="days.setTaskChecked"
+        @set-task-done="days.setTaskDone"
         @to-prev-day="days.toPrevDay"
         @to-next-day="days.toNextDay"
       />
 
       <!-- Режим редактора -->
       <VNewDay
-        v-if="days.isEditor"
+        v-if="editor.is"
         :order="days.days.length"
         @create-day="days.createDay"
       />
@@ -76,7 +109,7 @@ onMounted(() => {
       <!-- <VDay :day="day[0]" /> -->
     </main>
     <VSidebarEditor
-      v-if="days.isEditor"
+      v-if="editor.is"
       class="sidebar"
       @to-day="days.addTaskToDay"
     />
@@ -145,6 +178,8 @@ onMounted(() => {
   position: absolute;
   top: 10px;
   right: 10px;
+  display: flex;
+  gap: 10px;
 }
 .buttons-editor button {
   padding: 15px 30px;

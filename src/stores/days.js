@@ -7,83 +7,109 @@ export const useDaysStore = defineStore('days', () => {
 
   function createDay () {
     days.value.push({
-      id: Date.now(),
+      _id: Date.now(),
       tasks: []
     })
   }
-  function removeDay (id) {
-    days.value = days.value.filter((day) => day.id !== id)
+  function removeDay (dayId) {
+    days.value = days.value.filter((day) => day._id !== dayId)
   }
 
-  function toPrevDay ({ dayID, fromIndex }) {
+  function toPrevDay ({ dayId, fromIndex }) {
     const element = days.value[fromIndex]
     days.value.splice(fromIndex, 1)
     days.value.splice(fromIndex - 1, 0, element)
   }
-  function toNextDay ({ dayID, fromIndex }) {
+  function toNextDay ({ dayId, fromIndex }) {
     const element = days.value[fromIndex]
     days.value.splice(fromIndex, 1)
     days.value.splice(fromIndex + 1, 0, element)
   }
-  const selectedDay = ref('')
+  const selectedDayId = ref('')
 
-  function selectDay (id) {
-    selectedDay.value = id
+  function selectDay (dayId) {
+    console.log(dayId)
+    selectedDayId.value = dayId
   }
 
   function addTaskToDay (task) {
     days.value.forEach(day => {
-      if (day.id === selectedDay.value) {
-        day.tasks.push(task)
-      }
-    })
-  }
-  function removeTask (task, dayID) {
-    days.value.forEach(day => {
-      if (dayID === day.id) {
-        day.tasks = day.tasks.filter(taskObj => task !== taskObj.value)
-      }
-    })
-  }
-  function setTaskTime (params) {
-    days.value.forEach(day => {
-      if (params.dayID === day.id) {
-        day.tasks.forEach(taskObj => {
-          if (taskObj.value === params.task) {
-            taskObj.time = params.time
-          }
+      if (day._id === selectedDayId.value) {
+        day.tasks.push({
+          _id: Date.now(),
+          ...task
         })
       }
     })
   }
-  function setTaskChecked (params) {
+  function removeTask ({ dayId, taskId }) {
     days.value.forEach(day => {
-      if (params.dayID === day.id) {
-        day.tasks.forEach(taskObj => {
-          if (taskObj.value === params.task) {
-            taskObj.checked = params.checked
-          }
-        })
+      if (dayId === day._id) {
+        day.tasks = day.tasks.filter(task => taskId !== task._id)
       }
     })
   }
+  function setTaskTime ({ dayId, taskId, time }) {
+    const userId = 'test'
 
-  const isEditor = ref(false)
-
-  function saveDays () {
-    isEditor.value = false
-
-    setDays(days.value)
-  }
-  function editDays () {
-    isEditor.value = true
-  }
-  console.log(import.meta.env.VITE_URL)
-  // http://192.168.1.65:3001/setDays
-  // https://tododay-api.ru/setDays
-  function setDays (days) {
+    // отправка/изменение на бэке
     axios
-      .post(`${import.meta.env.VITE_URL}/setDays`, days)
+      .post(`${import.meta.env.VITE_URL}/days/setTaskTime?userId=${userId}`, {
+        dayId,
+        taskId,
+        time
+      })
+      .then(function (response) {
+        console.log(response)
+      })
+      .catch(function (error) {
+        console.log(error)
+      })
+
+    // дублирование: изменение на фронте
+    days.value.forEach(day => {
+      if (day._id === dayId) {
+        day.tasks.forEach(task => {
+          if (task._id === taskId) {
+            task.time = time
+          }
+        })
+      }
+    })
+  }
+  function setTaskDone ({ dayId, taskId, checked }) {
+    const userId = 'test'
+
+    axios
+      .post(`${import.meta.env.VITE_URL}/days/setTaskDone?userId=${userId}`, {
+        dayId,
+        taskId,
+        checked
+      })
+      .then(function (response) {
+        console.log(response)
+      })
+      .catch(function (error) {
+        console.log(error)
+      })
+
+    // дублирование: изменение на фронте
+    days.value.forEach(day => {
+      if (day._id === dayId) {
+        day.tasks.forEach(task => {
+          if (task._id === taskId) {
+            task.checked = checked
+          }
+        })
+      }
+    })
+  }
+
+  function setDays () {
+    const userId = 'test'
+
+    axios
+      .post(`${import.meta.env.VITE_URL}/days/setList?userId=${userId}`, days.value)
       .then(function (response) {
         console.log(response)
       })
@@ -92,12 +118,14 @@ export const useDaysStore = defineStore('days', () => {
       })
   }
   function getDays () {
+    const userId = 'test'
+
     axios
-      .get(`${import.meta.env.VITE_URL}/getDays`)
+      .get(`${import.meta.env.VITE_URL}/days/getList?userId=${userId}`)
       .then(function (response) {
         console.log(response)
-        console.log(response.data.data)
-        days.value = response.data.data
+        console.log(response.data)
+        days.value = response.data
       })
       .catch(function (error) {
         console.log(error)
@@ -110,15 +138,12 @@ export const useDaysStore = defineStore('days', () => {
     removeDay,
     toPrevDay,
     toNextDay,
-    selectedDay,
+    selectedDayId,
     selectDay,
     addTaskToDay,
     removeTask,
     setTaskTime,
-    setTaskChecked,
-    isEditor,
-    saveDays,
-    editDays,
+    setTaskDone,
     setDays,
     getDays
   }

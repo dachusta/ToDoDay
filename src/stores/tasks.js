@@ -5,9 +5,11 @@ import axios from 'axios'
 export const useTasksStore = defineStore('tasks', () => {
   const tasks = ref([])
 
-  function setTasks (tasks) {
+  function setTasks () {
+    const userId = 'test'
+
     axios
-      .post(`${import.meta.env.VITE_URL}/setTasks`, tasks)
+      .post(`${import.meta.env.VITE_URL}/tasks/setList?userId=${userId}`, tasks.value)
       .then(function (response) {
         console.log(response)
       })
@@ -16,12 +18,14 @@ export const useTasksStore = defineStore('tasks', () => {
       })
   }
   function getTasks () {
+    const userId = 'test'
+
     axios
-      .get(`${import.meta.env.VITE_URL}/getTasks`)
+      .get(`${import.meta.env.VITE_URL}/tasks/getList?userId=${userId}`)
       .then(function (response) {
         console.log(response)
-        console.log(response.data.data)
-        tasks.value = response.data.data
+        console.log(response.data)
+        tasks.value = response.data
       })
       .catch(function (error) {
         console.log(error)
@@ -34,7 +38,6 @@ export const useTasksStore = defineStore('tasks', () => {
       value: newTask.value,
       color: newTask.color
     })
-    setTasks(tasks.value)
   }
   function removeTask (taskName) {
     tasks.value = tasks.value.filter((task) => taskName !== task.value)

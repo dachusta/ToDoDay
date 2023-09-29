@@ -1,8 +1,8 @@
 <template>
   <div
     class="day"
-    :class="{ 'selected': selectedDay === day.id }"
-    @click="$emit('selectDay', day.id)"
+    :class="{ 'selected': selectedDayId === day._id }"
+    @click="$emit('selectDay', day._id)"
   >
     <div class="info">
       <span>{{ currentDay }}</span>
@@ -18,13 +18,13 @@
       <div class="buttons-move-day">
         <VButton
           v-if="isEditor"
-          @click="$emit('toPrevDay', { dayID: day.id, fromIndex: order })"
+          @click="$emit('toPrevDay', { dayId: day._id, fromIndex: order })"
         >
           {{ '<' }}
         </VButton>
         <VButton
           v-if="isEditor"
-          @click="$emit('toNextDay', { dayID: day.id, fromIndex: order })"
+          @click="$emit('toNextDay', { dayId: day._id, fromIndex: order })"
         >
           {{ '>' }}
         </VButton>
@@ -33,7 +33,7 @@
       <div class="buttons">
         <VButton
           v-if="isEditor"
-          @click="$emit('removeDay', day.id)"
+          @click="$emit('removeDay', day._id)"
         >
           ✘
         </VButton>
@@ -46,9 +46,9 @@
         :key="task"
         :task="task"
         :is-editor="isEditor"
-        @remove-task="$emit('removeTask', $event, day.id)"
-        @set-task-time="$emit('setTaskTime', { ...$event, dayID: day.id })"
-        @set-task-checked="$emit('setTaskChecked', { ...$event, dayID: day.id })"
+        @remove-task="$emit('removeTask', { dayId: day._id, ...$event })"
+        @set-task-time="$emit('setTaskTime', { dayId: day._id, ...$event })"
+        @set-task-done="$emit('setTaskDone', { dayId: day._id, ...$event })"
       />
     </div>
   </div>
@@ -69,7 +69,7 @@ const props = defineProps({
     type: Number,
     required: true
   },
-  selectedDay: {
+  selectedDayId: {
     type: String,
     required: true
   },
