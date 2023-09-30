@@ -18,25 +18,17 @@ onMounted(() => {
   tasks.getTasks()
 })
 
-// Добавить кнопку отмены (сохранять промежуточное состояние в локалСторе/индексДБ и отчищать после нажатия сохранить/отменить)
-// Изменять цвет такса и приоритет на фронте, после нажатия кнопки сохранить отправлять отформатированные задачи и дни на бэк (days/setLis и tasks/setList)
-//
-// выписать все возможные эндпоинты (set, get, ...), которые нужно будет вынести на бэкенд
-// Добавить свойство taskId (так как в одном дне может быть несколько тасков с одинаковым task.value) и переписать методы с учетом taskId
 // days/setTimeTask (dayId, taskId) - устанавливать время только в режиме просмотра (в режиме редактора элемент readonly/disabled)
 // days/setDoneTask (dayId, taskId) - устанавливать в выполнено только в режиме просмотра
-// days/getList (getDays)
-// days/setList (setDays)
-//
-// tasks/getList (getTasks)
-// tasks/setList (setTasks) - отправлять на бэк, после нажатия кнопки сохранить
-//
-//
 //
 // Переименовать все методы в сторах
 // days.days --> days.list или days.value - если не получатся days.value.value :)
 // days.saveDays() --> days.save() но days.createDay() --> days.createDay()
 // и т.д.    в тасках, и поискать еще где-то
+//
+// Доделать ТГ бота на бэке
+//
+// ToDo.vue перенести в App.vue. В ToDo.vue должно быть только... ???? ... только страница с днями, задачи и редактор. Статистика в другом компоненте
 
 </script>
 <template>
@@ -111,7 +103,6 @@ onMounted(() => {
     <VSidebarEditor
       v-if="editor.is"
       class="sidebar"
-      @to-day="days.addTaskToDay"
     />
   </div>
 </template>

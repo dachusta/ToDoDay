@@ -32,31 +32,45 @@ export const useDaysStore = defineStore('days', () => {
     selectedDayId.value = dayId
   }
 
-  function addTaskToDay (task) {
+  function addTaskInDay (task) {
     days.value.forEach(day => {
       if (day._id === selectedDayId.value) {
         day.tasks.push({
-          _id: Date.now(),
+          _uniqId: Date.now(),
           ...task
         })
       }
     })
   }
-  function removeTask ({ dayId, taskId }) {
+
+  function updateTaskInDay (updatedTask) {
+    console.log(updatedTask)
+    days.value.forEach(day => {
+      day.tasks.forEach(task => {
+        if (task._id === updatedTask._id) {
+          task.color = updatedTask.color
+          task.priority = updatedTask.priority
+          task.value = updatedTask.value
+        }
+      })
+    })
+  }
+
+  function removeTask ({ dayId, taskUniqId }) {
     days.value.forEach(day => {
       if (dayId === day._id) {
-        day.tasks = day.tasks.filter(task => taskId !== task._id)
+        day.tasks = day.tasks.filter(task => taskUniqId !== task._uniqId)
       }
     })
   }
-  function setTaskTime ({ dayId, taskId, time }) {
+  function setTaskTime ({ dayId, taskUniqId, time }) {
     const userId = 'test'
 
     // отправка/изменение на бэке
     axios
       .post(`${import.meta.env.VITE_URL}/days/setTaskTime?userId=${userId}`, {
         dayId,
-        taskId,
+        taskUniqId,
         time
       })
       .then(function (response) {
@@ -70,20 +84,20 @@ export const useDaysStore = defineStore('days', () => {
     days.value.forEach(day => {
       if (day._id === dayId) {
         day.tasks.forEach(task => {
-          if (task._id === taskId) {
+          if (task._uniqId === taskUniqId) {
             task.time = time
           }
         })
       }
     })
   }
-  function setTaskDone ({ dayId, taskId, checked }) {
+  function setTaskDone ({ dayId, taskUniqId, checked }) {
     const userId = 'test'
 
     axios
       .post(`${import.meta.env.VITE_URL}/days/setTaskDone?userId=${userId}`, {
         dayId,
-        taskId,
+        taskUniqId,
         checked
       })
       .then(function (response) {
@@ -97,7 +111,7 @@ export const useDaysStore = defineStore('days', () => {
     days.value.forEach(day => {
       if (day._id === dayId) {
         day.tasks.forEach(task => {
-          if (task._id === taskId) {
+          if (task._uniqId === taskUniqId) {
             task.checked = checked
           }
         })
@@ -140,7 +154,8 @@ export const useDaysStore = defineStore('days', () => {
     toNextDay,
     selectedDayId,
     selectDay,
-    addTaskToDay,
+    addTaskInDay,
+    updateTaskInDay,
     removeTask,
     setTaskTime,
     setTaskDone,

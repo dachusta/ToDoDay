@@ -1,41 +1,71 @@
 <script setup>
-defineProps({
+import { onMounted, ref } from 'vue'
+
+defineEmits(['updateTask', 'removeTask', 'addTaskInDay'])
+
+const props = defineProps({
   task: {
     type: Object,
     default: () => {}
   }
 })
+
+onMounted(() => {
+  priority.value = props.task.priority
+  value.value = props.task.value
+  color.value = props.task.color
+})
+
+const priority = ref('')
+const value = ref('')
+const color = ref('')
+
 </script>
 
 <template>
   <div class="task">
     <button
-      class="button to-day"
-      @click="$emit('toDay', task)"
+      class="button task-in-day"
+      @click="$emit('addTaskInDay', task)"
     >
       🠔
     </button>
     <input
+      v-model="priority"
       type="number"
       class="priority"
-      :value="task.priority"
-      readonly
+      @input="$emit('updateTask', {
+        _id: task._id,
+        priority: $event.target.value,
+        value,
+        color
+      })"
     >
     <input
+      v-model="value"
       type="text"
       class="value"
-      :value="task.value"
-      readonly
+      @input="$emit('updateTask', {
+        _id: task._id,
+        priority,
+        value: $event.target.value,
+        color
+      })"
     >
     <input
+      v-model="color"
       type="color"
       class="color"
-      :value="task.color"
-      readonly
+      @input="$emit('updateTask', {
+        _id: task._id,
+        priority,
+        value,
+        color: $event.target.value
+      })"
     >
     <button
       class="button"
-      @click="$emit('removeTask', task.value)"
+      @click="$emit('removeTask', task._id)"
     >
       ✘
     </button>
@@ -94,7 +124,7 @@ defineProps({
     cursor: pointer;
   }
 
-  .to-day {
+  .task-in-day {
     border-right: 1px solid #FFFFFF;
   }
 }

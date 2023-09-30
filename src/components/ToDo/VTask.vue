@@ -8,7 +8,7 @@
       class="time"
       type="time"
       :value="task.time"
-      @input="$emit('setTaskTime', { taskId: task._id, time: $event.target.value })"
+      @input="$emit('setTaskTime', { taskUniqId: task._uniqId, time: $event.target.value })"
     >
     <input
       type="number"
@@ -25,7 +25,7 @@
     <button
       v-if="isEditor"
       class="button"
-      @click="$emit('removeTask', { taskId: task._id })"
+      @click="$emit('removeTask', { taskUniqId: task._uniqId })"
     >
       ✘
     </button>
@@ -34,7 +34,7 @@
       class="checkbox"
       type="checkbox"
       :checked="task.checked"
-      @input="$emit('setTaskDone', { taskId: task._id, checked: $event.target.checked })"
+      @input="$emit('setTaskDone', { taskUniqId: task._uniqId, checked: $event.target.checked })"
     >
   </div>
 </template>
