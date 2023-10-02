@@ -8,6 +8,7 @@
       class="time"
       type="time"
       :value="task.time"
+      :readonly="isEditor"
       @input="$emit('setTaskTime', { taskUniqId: task._uniqId, time: $event.target.value })"
     >
     <input
