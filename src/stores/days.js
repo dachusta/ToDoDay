@@ -3,28 +3,30 @@ import { defineStore } from 'pinia'
 import axios from 'axios'
 
 export const useDaysStore = defineStore('days', () => {
-  const days = ref([])
+  const list = ref([])
 
   function createDay () {
-    days.value.push({
+    list.value.push({
       _id: Date.now(),
       tasks: []
     })
   }
+
   function removeDay (dayId) {
-    days.value = days.value.filter((day) => day._id !== dayId)
+    list.value = list.value.filter((day) => day._id !== dayId)
   }
 
   function toPrevDay ({ dayId, fromIndex }) {
-    const element = days.value[fromIndex]
-    days.value.splice(fromIndex, 1)
-    days.value.splice(fromIndex - 1, 0, element)
+    const element = list.value[fromIndex]
+    list.value.splice(fromIndex, 1)
+    list.value.splice(fromIndex - 1, 0, element)
   }
   function toNextDay ({ dayId, fromIndex }) {
-    const element = days.value[fromIndex]
-    days.value.splice(fromIndex, 1)
-    days.value.splice(fromIndex + 1, 0, element)
+    const element = list.value[fromIndex]
+    list.value.splice(fromIndex, 1)
+    list.value.splice(fromIndex + 1, 0, element)
   }
+
   const selectedDayId = ref('')
 
   function selectDay (dayId) {
@@ -32,8 +34,8 @@ export const useDaysStore = defineStore('days', () => {
     selectedDayId.value = dayId
   }
 
-  function addTaskInDay (task) {
-    days.value.forEach(day => {
+  function addTask (task) {
+    list.value.forEach(day => {
       if (day._id === selectedDayId.value) {
         day.tasks.push({
           _uniqId: Date.now(),
@@ -43,9 +45,9 @@ export const useDaysStore = defineStore('days', () => {
     })
   }
 
-  function updateTaskInDay (updatedTask) {
+  function updateTask (updatedTask) {
     console.log(updatedTask)
-    days.value.forEach(day => {
+    list.value.forEach(day => {
       day.tasks.forEach(task => {
         if (task._id === updatedTask._id) {
           task.color = updatedTask.color
@@ -57,7 +59,7 @@ export const useDaysStore = defineStore('days', () => {
   }
 
   function removeTask ({ dayId, taskUniqId }) {
-    days.value.forEach(day => {
+    list.value.forEach(day => {
       if (dayId === day._id) {
         day.tasks = day.tasks.filter(task => taskUniqId !== task._uniqId)
       }
@@ -81,7 +83,7 @@ export const useDaysStore = defineStore('days', () => {
       })
 
     // дублирование: изменение на фронте
-    days.value.forEach(day => {
+    list.value.forEach(day => {
       if (day._id === dayId) {
         day.tasks.forEach(task => {
           if (task._uniqId === taskUniqId) {
@@ -108,7 +110,7 @@ export const useDaysStore = defineStore('days', () => {
       })
 
     // дублирование: изменение на фронте
-    days.value.forEach(day => {
+    list.value.forEach(day => {
       if (day._id === dayId) {
         day.tasks.forEach(task => {
           if (task._uniqId === taskUniqId) {
@@ -119,11 +121,11 @@ export const useDaysStore = defineStore('days', () => {
     })
   }
 
-  function setDays () {
+  function setList () {
     const userId = 'test'
 
     axios
-      .post(`${import.meta.env.VITE_URL}/days/setList?userId=${userId}`, days.value)
+      .post(`${import.meta.env.VITE_URL}/days/setList?userId=${userId}`, list.value)
       .then(function (response) {
         console.log(response)
       })
@@ -131,7 +133,7 @@ export const useDaysStore = defineStore('days', () => {
         console.log(error)
       })
   }
-  function getDays () {
+  function getList () {
     const userId = 'test'
 
     axios
@@ -139,7 +141,7 @@ export const useDaysStore = defineStore('days', () => {
       .then(function (response) {
         console.log(response)
         console.log(response.data)
-        days.value = response.data
+        list.value = response.data
       })
       .catch(function (error) {
         console.log(error)
@@ -147,19 +149,19 @@ export const useDaysStore = defineStore('days', () => {
   }
 
   return {
-    days,
+    list,
+    setList,
+    getList,
     createDay,
     removeDay,
     toPrevDay,
     toNextDay,
     selectedDayId,
     selectDay,
-    addTaskInDay,
-    updateTaskInDay,
+    addTask,
+    updateTask,
     removeTask,
     setTaskTime,
-    setTaskDone,
-    setDays,
-    getDays
+    setTaskDone
   }
 })

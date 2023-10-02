@@ -21,10 +21,10 @@
 
       <main class="main">
         <VTask
-          v-for="task in tasks.tasks"
+          v-for="task in tasks.list"
           :key="task._id"
           :task="task"
-          @add-task-in-day="days.addTaskInDay"
+          @add-task-in-day="days.addTask"
           @update-task="tasks.updateTask"
           @remove-task="tasks.removeTask"
         />
@@ -42,7 +42,6 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
 import VTask from './VTask.vue'
 import VTaskCreator from './VTaskCreator.vue'
 import { useTabs } from '../../composables/tabs'
@@ -55,9 +54,6 @@ curentTab.value = 'tasks'
 const days = useDaysStore()
 const tasks = useTasksStore()
 
-onMounted(() => {
-  tasks.getTasks()
-})
 </script>
 
 <style scoped>

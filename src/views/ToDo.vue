@@ -14,21 +14,16 @@ const tasks = useTasksStore()
 const editor = useEditorStore()
 
 onMounted(() => {
-  days.getDays()
-  tasks.getTasks()
+  days.getList()
+  tasks.getList()
 })
 
-// days/setTimeTask (dayId, taskId) - устанавливать время только в режиме просмотра (в режиме редактора элемент readonly/disabled)
-// days/setDoneTask (dayId, taskId) - устанавливать в выполнено только в режиме просмотра
-//
-// Переименовать все методы в сторах
-// days.days --> days.list или days.value - если не получатся days.value.value :)
-// days.saveDays() --> days.save() но days.createDay() --> days.createDay()
-// и т.д.    в тасках, и поискать еще где-то
 //
 // Доделать ТГ бота на бэке
 //
 // ToDo.vue перенести в App.vue. В ToDo.vue должно быть только... ???? ... только страница с днями, задачи и редактор. Статистика в другом компоненте
+//
+// .env.develop добавить в гитхаб
 
 </script>
 <template>
@@ -71,7 +66,7 @@ onMounted(() => {
       </div>
 
       <VDay
-        v-for="(day, idx) in days.days"
+        v-for="(day, idx) in days.list"
         :key="day.id"
         :day="day"
         :order="idx"
@@ -89,7 +84,7 @@ onMounted(() => {
       <!-- Режим редактора -->
       <VNewDay
         v-if="editor.is"
-        :order="days.days.length"
+        :order="days.list.length"
         @create-day="days.createDay"
       />
 

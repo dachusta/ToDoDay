@@ -4,14 +4,14 @@ import axios from 'axios'
 import { useDaysStore } from './days'
 
 export const useTasksStore = defineStore('tasks', () => {
+  const list = ref([])
   const days = useDaysStore()
-  const tasks = ref([])
 
-  function setTasks () {
+  function setList () {
     const userId = 'test'
 
     axios
-      .post(`${import.meta.env.VITE_URL}/tasks/setList?userId=${userId}`, tasks.value)
+      .post(`${import.meta.env.VITE_URL}/tasks/setList?userId=${userId}`, list.value)
       .then(function (response) {
         console.log(response)
       })
@@ -19,7 +19,7 @@ export const useTasksStore = defineStore('tasks', () => {
         console.log(error)
       })
   }
-  function getTasks () {
+  function getList () {
     const userId = 'test'
 
     axios
@@ -27,7 +27,7 @@ export const useTasksStore = defineStore('tasks', () => {
       .then(function (response) {
         console.log(response)
         console.log(response.data)
-        tasks.value = response.data
+        list.value = response.data
       })
       .catch(function (error) {
         console.log(error)
@@ -35,7 +35,7 @@ export const useTasksStore = defineStore('tasks', () => {
   }
 
   function createTask (newTask) {
-    tasks.value.unshift({
+    list.value.unshift({
       _id: Date.now(),
       priority: newTask.priority,
       value: newTask.value,
@@ -43,24 +43,24 @@ export const useTasksStore = defineStore('tasks', () => {
     })
   }
   function updateTask (newTask) {
-    tasks.value.forEach(task => {
+    list.value.forEach(task => {
       if (newTask._id === task._id) {
         task.priority = newTask.priority
         task.value = newTask.value
         task.color = newTask.color
       }
     })
-    days.updateTaskInDay(newTask)
+    days.updateTask(newTask)
   }
 
   function removeTask (taskId) {
-    tasks.value = tasks.value.filter((task) => taskId !== task._id)
+    list.value = list.value.filter((task) => taskId !== task._id)
   }
 
   return {
-    tasks,
-    setTasks,
-    getTasks,
+    list,
+    setList,
+    getList,
     createTask,
     updateTask,
     removeTask

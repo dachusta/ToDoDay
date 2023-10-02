@@ -12,20 +12,20 @@ export const useEditorStore = defineStore('editor', () => {
   function open () {
     is.value = true
 
-    localStorage.setItem('days', JSON.stringify(days.days))
-    localStorage.setItem('tasks', JSON.stringify(tasks.tasks))
+    localStorage.setItem('days', JSON.stringify(days.list))
+    localStorage.setItem('tasks', JSON.stringify(tasks.list))
   }
   function save () {
     is.value = false
 
-    days.setDays()
-    tasks.setTasks()
+    days.setList()
+    tasks.setList()
   }
   function cancel () {
     is.value = false
 
-    days.days = JSON.parse(localStorage.getItem('days'))
-    tasks.tasks = JSON.parse(localStorage.getItem('tasks'))
+    days.list = JSON.parse(localStorage.getItem('days'))
+    tasks.list = JSON.parse(localStorage.getItem('tasks'))
   }
 
   return {
