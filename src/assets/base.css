@@ -1,0 +1,8 @@
+#app {
+  display: grid;
+  grid-template-rows: 60px auto;
+  background: linear-gradient(#6b7587, #1b1e24);
+  color: #fff;
+  font-family: Arial, Helvetica, sans-serif;
+  height: 100vh;
+}

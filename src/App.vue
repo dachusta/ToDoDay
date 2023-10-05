@@ -1,72 +1,46 @@
 <script setup>
-// import { RouterLink, RouterView } from 'vue-router'
-import ToDo from './views/ToDo.vue'
+import { RouterLink, RouterView } from 'vue-router'
 </script>
 
 <template>
-  <ToDo />
+  <header class="header">
+    <nav class="nav">
+      <RouterLink to="/">Задачи</RouterLink>
+      <RouterLink to="/about">Статистика</RouterLink>
+    </nav>
+  </header>
+
+  <RouterView />
 </template>
 
 <style scoped>
-header {
-  line-height: 1.5;
-  max-height: 100vh;
-}
+.header {
+  padding: 0 50px;
+  display: flex;
+  background: rgba(27, 30, 36, 0.5);
 
-.logo {
-  display: block;
-  margin: 0 auto 2rem;
-}
-
-nav {
-  width: 100%;
-  font-size: 12px;
-  text-align: center;
-  margin-top: 2rem;
-}
-
-nav a.router-link-exact-active {
-  color: var(--color-text);
-}
-
-nav a.router-link-exact-active:hover {
-  background-color: transparent;
-}
-
-nav a {
-  display: inline-block;
-  padding: 0 1rem;
-  border-left: 1px solid var(--color-border);
-}
-
-nav a:first-of-type {
-  border: 0;
-}
-
-@media (min-width: 1024px) {
-  header {
+  .nav {
     display: flex;
-    place-items: center;
-    padding-right: calc(var(--section-gap) / 2);
+    height: 100%;
   }
 
-  .logo {
-    margin: 0 2rem 0 0;
-  }
-
-  header .wrapper {
+  .nav a {
     display: flex;
-    place-items: flex-start;
-    flex-wrap: wrap;
-  }
+    align-items: center;
+    height: 100%;
+    padding: 0px 30px;
+    color: inherit;
+    text-decoration: none;
 
-  nav {
-    text-align: left;
-    margin-left: -1rem;
-    font-size: 1rem;
+    &.router-link-exact-active {
+      background: rgba(27, 30, 36, 0.5);
 
-    padding: 1rem 0;
-    margin-top: 1rem;
+    }
+
+    &:hover {
+      background: rgba(27, 30, 36, 0.7);
+    }
   }
 }
+
 </style>

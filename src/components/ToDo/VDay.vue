@@ -79,7 +79,15 @@ const props = defineProps({
   }
 })
 
-// const emit = defineEmits(['deleteTask'])
+defineEmits([
+  'selectDay',
+  'toPrevDay',
+  'toNextDay',
+  'removeDay',
+  'removeTask',
+  'setTaskTime',
+  'setTaskDone'
+])
 
 const sortedTasks = computed(() => {
   return props.day.tasks.toSorted((task1, task2) =>
@@ -100,9 +108,14 @@ orderDay.value = props.order
   padding: 20px;
   border-radius: 10px;
   background: rgba(27, 30, 36, 0.7);
+  /* border: 1px solid transparent; */
 
   &.selected {
-    background: rgba(0, 0, 0, 0.7);
+    /* background: rgba(0, 0, 0, 0.7); */
+    /* border: 1px solid rgba(27, 30, 36, 0.7); */
+    box-shadow:
+      0px 0px 30px 0px rgba(53, 178, 122, 0.50),
+      inset 0px 0px 10px 0px rgba(53, 178, 122, 0.50);
   }
 
   .info {
@@ -116,6 +129,18 @@ orderDay.value = props.order
     display: flex;
     justify-content: space-between;
     gap: 20px;
+    border-bottom: 1px solid rgba(27, 30, 36, 0.7);
+    padding-bottom: 10px;
+
+    .progress {
+      font-size: 24px;
+      height: 30px;
+    }
+
+    .buttons-move-day {
+      display: flex;
+      gap: 10px;
+    }
   }
 
   .list {

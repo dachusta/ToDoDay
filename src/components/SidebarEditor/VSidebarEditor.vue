@@ -3,10 +3,12 @@
     <div class="tabs">
       <span
         class="tab tab-tasks"
+        :class="{ active: curentTab === 'tasks' }"
         @click="setTab('tasks')"
       >Дела</span>
       <span
         class="tab tab-days"
+        :class="{ active: curentTab === 'days' }"
         @click="setTab('days')"
       >Дни</span>
     </div>
@@ -58,6 +60,7 @@ const tasks = useTasksStore()
 
 <style scoped>
 .sidebar-editor {
+  overflow: auto;
   width: 500px;
   background: rgba(27, 30, 36, 0.7);
 
@@ -69,7 +72,16 @@ const tasks = useTasksStore()
       justify-content: center;
       align-items: center;
       width: 100%;
-      height: 35px;
+      padding: 16px 0;
+      cursor: pointer;
+
+      &.active {
+        background: rgba(27, 30, 36, 0.5);
+      }
+
+      &:hover {
+        background: rgba(27, 30, 36, 0.7);
+      }
     }
   }
 

@@ -19,23 +19,36 @@ onMounted(() => {
 })
 
 //
-// Доделать ТГ бота на бэке
+// Доделать ТГ бота на бэке *
+// Планировщик (setIntervel) должен запускаться автоматически с запуском приложения
 //
 // ToDo.vue перенести в App.vue. В ToDo.vue должно быть только... ???? ... только страница с днями, задачи и редактор. Статистика в другом компоненте
 //
 // .env.develop добавить в гитхаб
+//
+// Решить Problems(17)
+// Переписать $emit('selectDay') --> $emit('select-day')
+//
+// Добавить кастомный чекбокс
+// Добавить иконки для приоритета
+// Поискать подходящие таймпикеры
+// Показывать прогресс только сегодня
+// Отмечать задачи ВЫПОЛНЕННЫМИ только сегодня
+// Заносить в статистику Выполненную задачу
+// По окончании дня сбрасывать состояние ВЫПОЛНЕНО
+// Подобрать Шрифт для Прогресса
+// Связать прогресс с выполненными задачами
+// Вынести прогресс в отдельный компонент
+// Добавить для кнопок стилей (ховер...)
+// Добавить для инпутов стилей (при ридонли убирать оутлайн)
+// Добавить валидацию (нельзя создавать пустую задачу (или по умолчанил устанавливать прозрачность если возможно))
+// Разделы Статистика и Дни должны быть некликабельными (И это должно быть видно)
+//
+// Выделить тему (Добавить возможность переключения темы)
 
 </script>
 <template>
   <div class="page">
-    <header class="header">
-      <div class="container">
-        <nav class="nav">
-          <span>Задачи</span>
-          <span>Статистика</span>
-        </nav>
-      </div>
-    </header>
     <main class="days">
       <div
         class="buttons-editor"
@@ -73,7 +86,7 @@ onMounted(() => {
         :selected-day-id="days.selectedDayId"
         :is-editor="editor.is"
         @remove-day="days.removeDay"
-        @select-day="days.selectDay"
+        @select-day="editor.selectDay"
         @remove-task="days.removeTask"
         @set-task-time="days.setTaskTime"
         @set-task-done="days.setTaskDone"
@@ -105,50 +118,12 @@ onMounted(() => {
 <style scoped>
 .page {
   display: grid;
-  grid-template-areas:
-    'header header'
-    'days sidebar';
   grid-template-columns: 1fr max-content;
-  grid-template-rows: 60px auto;
-  height: 100vh;
-  color: #fff;
-  background: linear-gradient(#6b7587, #1b1e24);
-  font-family: Arial, Helvetica, sans-serif;
-  /* padding: 0 30px; */
-}
-
-.header {
-  grid-area: header;
-  /* height: 60px;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0; */
-  display: flex;
-  background: rgba(27, 30, 36, 0.5);
-}
-
-.container {
-  max-width: 1440px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-.nav {
-  display: flex;
-  /* gap: 30px; */
-  height: 100%;
-}
-
-.nav span {
-  display: flex;
-  align-items: center;
-  height: 100%;
-  padding: 0px 30px;
+  overflow: auto;
 }
 
 .days {
-  grid-area: days;
+  /* grid-area: days; */
   position: relative;
   display: flex;
   flex-wrap: wrap;
@@ -176,6 +151,6 @@ onMounted(() => {
 }
 
 .sidebar {
-  grid-area: sidebar;
+  /* grid-area: sidebar; */
 }
 </style>

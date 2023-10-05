@@ -15,23 +15,36 @@ export const useEditorStore = defineStore('editor', () => {
     localStorage.setItem('days', JSON.stringify(days.list))
     localStorage.setItem('tasks', JSON.stringify(tasks.list))
   }
+
   function save () {
     is.value = false
 
     days.setList()
     tasks.setList()
+
+    days.selectDay('')
   }
+
   function cancel () {
     is.value = false
 
     days.list = JSON.parse(localStorage.getItem('days'))
     tasks.list = JSON.parse(localStorage.getItem('tasks'))
+
+    days.selectDay('')
+  }
+
+  function selectDay (dayId) {
+    if (is.value) {
+      days.selectDay(dayId)
+    }
   }
 
   return {
     is,
     open,
     save,
-    cancel
+    cancel,
+    selectDay
   }
 })
