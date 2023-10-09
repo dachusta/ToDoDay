@@ -1,3 +1,19 @@
+<script setup>
+defineEmits(['set-task-time', 'remove-task', 'set-task-done'])
+
+defineProps({
+  task: {
+    type: Object,
+    required: true
+  },
+  isEditor: {
+    type: Boolean,
+    required: true
+  }
+})
+
+</script>
+
 <template>
   <div
     class="task"
@@ -9,7 +25,7 @@
       type="time"
       :value="task.time"
       :readonly="isEditor"
-      @input="$emit('setTaskTime', { taskUniqId: task._uniqId, time: $event.target.value })"
+      @input="$emit('set-task-time', { taskUniqId: task._uniqId, time: $event.target.value })"
     >
     <input
       type="number"
@@ -26,7 +42,7 @@
     <button
       v-if="isEditor"
       class="button"
-      @click="$emit('removeTask', { taskUniqId: task._uniqId })"
+      @click="$emit('remove-task', { taskUniqId: task._uniqId })"
     >
       ✘
     </button>
@@ -35,27 +51,10 @@
       class="checkbox"
       type="checkbox"
       :checked="task.checked"
-      @input="$emit('setTaskDone', { taskUniqId: task._uniqId, checked: $event.target.checked })"
+      @input="$emit('set-task-done', { taskUniqId: task._uniqId, checked: $event.target.checked })"
     >
   </div>
 </template>
-
-<script setup>
-
-defineEmits(['setTaskTime', 'removeTask', 'setTaskDone'])
-
-defineProps({
-  task: {
-    type: Object,
-    required: true
-  },
-  isEditor: {
-    type: Boolean,
-    required: true
-  }
-})
-
-</script>
 
 <style scoped>
 .task {

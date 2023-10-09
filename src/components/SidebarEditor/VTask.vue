@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 
-defineEmits(['updateTask', 'removeTask', 'addTaskInDay'])
+defineEmits(['add-task-in-day', 'update-task', 'remove-task'])
 
 const props = defineProps({
   task: {
@@ -26,7 +26,7 @@ const color = ref('')
   <div class="task">
     <button
       class="button task-in-day"
-      @click="$emit('addTaskInDay', task)"
+      @click="$emit('add-task-in-day', task)"
     >
       🠔
     </button>
@@ -34,7 +34,7 @@ const color = ref('')
       v-model="priority"
       type="number"
       class="priority"
-      @input="$emit('updateTask', {
+      @input="$emit('update-task', {
         _id: task._id,
         priority: $event.target.value,
         value,
@@ -45,7 +45,7 @@ const color = ref('')
       v-model="value"
       type="text"
       class="value"
-      @input="$emit('updateTask', {
+      @input="$emit('update-task', {
         _id: task._id,
         priority,
         value: $event.target.value,
@@ -56,7 +56,7 @@ const color = ref('')
       v-model="color"
       type="color"
       class="color"
-      @input="$emit('updateTask', {
+      @input="$emit('update-task', {
         _id: task._id,
         priority,
         value,
@@ -65,7 +65,7 @@ const color = ref('')
     >
     <button
       class="button"
-      @click="$emit('removeTask', task._id)"
+      @click="$emit('remove-task', task._id)"
     >
       ✘
     </button>

@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+defineEmits(['create-task'])
 
 const newTask = ref({
   priority: 0,
@@ -27,7 +28,10 @@ const newTask = ref({
       type="color"
       class="color"
     >
-    <button class="button" @click="$emit('createTask', newTask)">
+    <button
+      class="button"
+      @click="$emit('create-task', newTask)"
+    >
       ✔
     </button>
   </div>

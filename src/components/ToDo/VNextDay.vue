@@ -1,3 +1,22 @@
+<script setup>
+import VTask from './VTask.vue'
+import { useCurrentDay } from '../../composables/currentDay'
+
+const props = defineProps({
+  day: {
+    type: Object,
+    required: true
+  },
+  order: {
+    type: Number,
+    required: true
+  }
+})
+
+const { orderDay, currentDay } = useCurrentDay()
+orderDay.value = props.order
+</script>
+
 <template>
   <div class="day">
     <div class="info">
@@ -23,25 +42,6 @@
     </div>
   </div>
 </template>
-
-<script setup>
-import VTask from './VTask.vue'
-import { useCurrentDay } from '../../composables/currentDay'
-
-const props = defineProps({
-  day: {
-    type: Object,
-    required: true
-  },
-  order: {
-    type: Number,
-    required: true
-  }
-})
-
-const { orderDay, currentDay } = useCurrentDay()
-orderDay.value = props.order
-</script>
 
 <style scoped>
 .day {

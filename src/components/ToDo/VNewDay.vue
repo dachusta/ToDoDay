@@ -1,22 +1,7 @@
-<template>
-  <div class="day">
-    <div class="info">
-      <span>{{ currentDay }}</span>
-      <!-- <span>Day: 1</span> -->
-    </div>
-    <div
-      class="create"
-      @click="$emit('createDay')"
-    >
-      +
-    </div>
-  </div>
-</template>
-
 <script setup>
 import { useCurrentDay } from '../../composables/currentDay'
 
-defineEmits(['createDay'])
+defineEmits(['create-day'])
 
 const props = defineProps({
   order: {
@@ -28,6 +13,21 @@ const props = defineProps({
 const { orderDay, currentDay } = useCurrentDay()
 orderDay.value = props.order
 </script>
+
+<template>
+  <div class="day">
+    <div class="info">
+      <span>{{ currentDay }}</span>
+      <!-- <span>Day: 1</span> -->
+    </div>
+    <div
+      class="create"
+      @click="$emit('create-day')"
+    >
+      +
+    </div>
+  </div>
+</template>
 
 <style scoped>
 .day {

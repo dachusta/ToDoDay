@@ -1,66 +1,18 @@
-<template>
-  <div
-    class="day"
-    :class="{ 'selected': selectedDayId === day._id }"
-    @click="$emit('selectDay', day._id)"
-  >
-    <div class="info">
-      <span>{{ currentDay }}</span>
-      <!-- <span>Day: 1</span> -->
-    </div>
-
-    <div class="header">
-      <div class="progress">
-        <span>Прогресс</span>
-        <span>0/0</span>
-      </div>
-
-      <div class="buttons-move-day">
-        <VButton
-          v-if="isEditor"
-          class="to-prev-day"
-          @click="$emit('toPrevDay', { dayId: day._id, fromIndex: order })"
-        >
-          {{ '➤' }}
-        </VButton>
-        <VButton
-          v-if="isEditor"
-          class="to-next-day"
-          @click="$emit('toNextDay', { dayId: day._id, fromIndex: order })"
-        >
-          {{ '➤' }}
-        </VButton>
-      </div>
-
-      <div class="buttons">
-        <VButton
-          v-if="isEditor"
-          @click="$emit('removeDay', day._id)"
-        >
-          ✘
-        </VButton>
-      </div>
-    </div>
-
-    <div class="list">
-      <VTask
-        v-for="task in sortedTasks"
-        :key="task"
-        :task="task"
-        :is-editor="isEditor"
-        @remove-task="$emit('removeTask', { dayId: day._id, ...$event })"
-        @set-task-time="$emit('setTaskTime', { dayId: day._id, ...$event })"
-        @set-task-done="$emit('setTaskDone', { dayId: day._id, ...$event })"
-      />
-    </div>
-  </div>
-</template>
-
 <script setup>
 import { computed } from 'vue'
 import VButton from '../VButton.vue'
 import VTask from './VTask.vue'
 import { useCurrentDay } from '../../composables/currentDay'
+
+defineEmits([
+  'select-day',
+  'to-prev-day',
+  'to-next-day',
+  'remove-day',
+  'remove-task',
+  'set-task-time',
+  'set-task-done'
+])
 
 const props = defineProps({
   day: {
@@ -81,16 +33,6 @@ const props = defineProps({
   }
 })
 
-defineEmits([
-  'selectDay',
-  'toPrevDay',
-  'toNextDay',
-  'removeDay',
-  'removeTask',
-  'setTaskTime',
-  'setTaskDone'
-])
-
 const sortedTasks = computed(() => {
   return props.day.tasks.toSorted((task1, task2) =>
     (task1?.time ? task1?.time.replace(':', '') : 0) -
@@ -100,6 +42,64 @@ const sortedTasks = computed(() => {
 const { orderDay, currentDay } = useCurrentDay()
 orderDay.value = props.order
 </script>
+
+<template>
+  <div
+    class="day"
+    :class="{ 'selected': selectedDayId === day._id }"
+    @click="$emit('select-day', day._id)"
+  >
+    <div class="info">
+      <span>{{ currentDay }}</span>
+      <!-- <span>Day: 1</span> -->
+    </div>
+
+    <div class="header">
+      <div class="progress">
+        <span>Прогресс</span>
+        <span>0/0</span>
+      </div>
+
+      <div class="buttons-move-day">
+        <VButton
+          v-if="isEditor"
+          class="to-prev-day"
+          @click="$emit('to-prev-day', { dayId: day._id, fromIndex: order })"
+        >
+          {{ '➤' }}
+        </VButton>
+        <VButton
+          v-if="isEditor"
+          class="to-next-day"
+          @click="$emit('to-next-day', { dayId: day._id, fromIndex: order })"
+        >
+          {{ '➤' }}
+        </VButton>
+      </div>
+
+      <div class="buttons">
+        <VButton
+          v-if="isEditor"
+          @click="$emit('remove-day', day._id)"
+        >
+          ✘
+        </VButton>
+      </div>
+    </div>
+
+    <div class="list">
+      <VTask
+        v-for="task in sortedTasks"
+        :key="task"
+        :task="task"
+        :is-editor="isEditor"
+        @remove-task="$emit('remove-task', { dayId: day._id, ...$event })"
+        @set-task-time="$emit('set-task-time', { dayId: day._id, ...$event })"
+        @set-task-done="$emit('set-task-done', { dayId: day._id, ...$event })"
+      />
+    </div>
+  </div>
+</template>
 
 <style scoped>
 .day {

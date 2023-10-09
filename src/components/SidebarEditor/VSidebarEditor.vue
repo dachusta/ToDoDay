@@ -1,3 +1,18 @@
+<script setup>
+import VTask from './VTask.vue'
+import VTaskCreator from './VTaskCreator.vue'
+import { useTabs } from '../../composables/tabs'
+import { useTasksStore } from '../../stores/tasks'
+import { useDaysStore } from '../../stores/days'
+
+const { curentTab, setTab } = useTabs()
+curentTab.value = 'tasks'
+
+const days = useDaysStore()
+const tasks = useTasksStore()
+
+</script>
+
 <template>
   <aside class="sidebar-editor">
     <div class="tabs">
@@ -42,21 +57,6 @@
     </div>
   </aside>
 </template>
-
-<script setup>
-import VTask from './VTask.vue'
-import VTaskCreator from './VTaskCreator.vue'
-import { useTabs } from '../../composables/tabs'
-import { useTasksStore } from '../../stores/tasks'
-import { useDaysStore } from '../../stores/days'
-
-const { curentTab, setTab } = useTabs()
-curentTab.value = 'tasks'
-
-const days = useDaysStore()
-const tasks = useTasksStore()
-
-</script>
 
 <style scoped>
 .sidebar-editor {
