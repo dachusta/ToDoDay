@@ -42,8 +42,20 @@ const sortedTasks = computed(() => {
     (task2?.time ? task2?.time.replace(':', '') : 0))
 })
 
+const countTask = computed(() => {
+  return props.day.tasks.length
+})
+
+const countTaskDone = computed(() => {
+  return props.day.tasks.filter(task => task.checked === true).length
+})
+
 const { orderDay, currentDay } = useCurrentDay()
 orderDay.value = props.order
+
+const isToDay = computed(() => {
+  return orderDay.value === 0
+})
 </script>
 
 <template>
@@ -58,9 +70,12 @@ orderDay.value = props.order
     </div>
 
     <div class="header">
-      <div class="progress">
+      <div
+        v-if="isToDay"
+        class="progress"
+      >
         <span>Прогресс</span>
-        <span>0/0</span>
+        <span>{{ countTaskDone }}/{{ countTask }}</span>
       </div>
 
       <div class="buttons-move-day">
@@ -96,6 +111,7 @@ orderDay.value = props.order
         :key="task"
         :task="task"
         :is-editor="isEditor"
+        :is-to-day="isToDay"
         @remove-task="$emit('remove-task', { dayId: day._id, ...$event })"
         @set-task-time="$emit('set-task-time', { dayId: day._id, ...$event })"
         @set-task-done="$emit('set-task-done', { dayId: day._id, ...$event })"

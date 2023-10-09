@@ -11,6 +11,10 @@ defineProps({
   isEditor: {
     type: Boolean,
     required: true
+  },
+  isToDay: {
+    type: Boolean,
+    required: true
   }
 })
 
@@ -49,7 +53,7 @@ defineProps({
       <IconTrashBin />
     </button>
     <input
-      v-else
+      v-else-if="isToDay"
       class="checkbox"
       type="checkbox"
       :checked="task.checked"

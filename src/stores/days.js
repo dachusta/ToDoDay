@@ -5,6 +5,34 @@ import axios from 'axios'
 export const useDaysStore = defineStore('days', () => {
   const list = ref([])
 
+  function setList () {
+    const userId = 'test'
+
+    axios
+      .post(`${import.meta.env.VITE_URL}/days/setList?userId=${userId}`, list.value)
+      .then(function (response) {
+        console.log(response)
+      })
+      .catch(function (error) {
+        console.log(error)
+      })
+  }
+
+  function getList () {
+    const userId = 'test'
+
+    axios
+      .get(`${import.meta.env.VITE_URL}/days/getList?userId=${userId}`)
+      .then(function (response) {
+        console.log(response)
+        console.log(response.data)
+        list.value = response.data
+      })
+      .catch(function (error) {
+        console.log(error)
+      })
+  }
+
   function createDay () {
     list.value.push({
       _id: Date.now(),
@@ -21,6 +49,7 @@ export const useDaysStore = defineStore('days', () => {
     list.value.splice(fromIndex, 1)
     list.value.splice(fromIndex - 1, 0, element)
   }
+
   function toNextDay ({ dayId, fromIndex }) {
     const element = list.value[fromIndex]
     list.value.splice(fromIndex, 1)
@@ -65,6 +94,7 @@ export const useDaysStore = defineStore('days', () => {
       }
     })
   }
+
   function setTaskTime ({ dayId, taskUniqId, time }) {
     const userId = 'test'
 
@@ -93,6 +123,7 @@ export const useDaysStore = defineStore('days', () => {
       }
     })
   }
+
   function setTaskDone ({ dayId, taskUniqId, checked }) {
     const userId = 'test'
 
@@ -119,33 +150,6 @@ export const useDaysStore = defineStore('days', () => {
         })
       }
     })
-  }
-
-  function setList () {
-    const userId = 'test'
-
-    axios
-      .post(`${import.meta.env.VITE_URL}/days/setList?userId=${userId}`, list.value)
-      .then(function (response) {
-        console.log(response)
-      })
-      .catch(function (error) {
-        console.log(error)
-      })
-  }
-  function getList () {
-    const userId = 'test'
-
-    axios
-      .get(`${import.meta.env.VITE_URL}/days/getList?userId=${userId}`)
-      .then(function (response) {
-        console.log(response)
-        console.log(response.data)
-        list.value = response.data
-      })
-      .catch(function (error) {
-        console.log(error)
-      })
   }
 
   return {
