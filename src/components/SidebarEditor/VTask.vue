@@ -1,5 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
+import IconArrowLeft from '../icons/IconArrowLeft.vue'
+import IconTrashBin from '../icons/IconTrashBin.vue'
 
 defineEmits(['add-task-in-day', 'update-task', 'remove-task'])
 
@@ -28,7 +30,7 @@ const color = ref('')
       class="button task-in-day"
       @click="$emit('add-task-in-day', task)"
     >
-      🠔
+      <IconArrowLeft />
     </button>
     <input
       v-model="priority"
@@ -67,7 +69,7 @@ const color = ref('')
       class="button"
       @click="$emit('remove-task', task._id)"
     >
-      ✘
+      <IconTrashBin />
     </button>
   </div>
 </template>
@@ -117,8 +119,11 @@ const color = ref('')
   }
 
   .button {
+    display: flex;
+    align-items: center;
     background: transparent;
     color: inherit;
+    stroke: #FFFFFF;
     border: none;
     padding: 0px 10px;
     cursor: pointer;

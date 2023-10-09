@@ -1,4 +1,6 @@
 <script setup>
+import IconTrashBin from '../icons/IconTrashBin.vue'
+
 defineEmits(['set-task-time', 'remove-task', 'set-task-done'])
 
 defineProps({
@@ -44,7 +46,7 @@ defineProps({
       class="button"
       @click="$emit('remove-task', { taskUniqId: task._uniqId })"
     >
-      ✘
+      <IconTrashBin />
     </button>
     <input
       v-else
@@ -100,8 +102,11 @@ defineProps({
   }
 
   .button {
+    display: flex;
+    align-items: center;
     background: transparent;
     color: inherit;
+    stroke: #FFFFFF;
     border: none;
     padding: 0px 10px;
     cursor: pointer;

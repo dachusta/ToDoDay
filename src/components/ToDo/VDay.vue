@@ -3,6 +3,9 @@ import { computed } from 'vue'
 import VButton from '../VButton.vue'
 import VTask from './VTask.vue'
 import { useCurrentDay } from '../../composables/currentDay'
+import IconArrowRight from '../icons/IconArrowRight.vue'
+import IconArrowLeft from '../icons/IconArrowLeft.vue'
+import IconTrashBin from '../icons/IconTrashBin.vue'
 
 defineEmits([
   'select-day',
@@ -66,14 +69,14 @@ orderDay.value = props.order
           class="to-prev-day"
           @click="$emit('to-prev-day', { dayId: day._id, fromIndex: order })"
         >
-          {{ '➤' }}
+          <IconArrowLeft />
         </VButton>
         <VButton
           v-if="isEditor"
           class="to-next-day"
           @click="$emit('to-next-day', { dayId: day._id, fromIndex: order })"
         >
-          {{ '➤' }}
+          <IconArrowRight />
         </VButton>
       </div>
 
@@ -82,7 +85,7 @@ orderDay.value = props.order
           v-if="isEditor"
           @click="$emit('remove-day', day._id)"
         >
-          ✘
+          <IconTrashBin />
         </VButton>
       </div>
     </div>
@@ -135,6 +138,8 @@ orderDay.value = props.order
     padding-bottom: 10px;
 
     .progress {
+      display: flex;
+      gap: 10px;
       font-size: 24px;
       height: 30px;
     }
@@ -143,9 +148,9 @@ orderDay.value = props.order
       display: flex;
       gap: 10px;
 
-      .to-prev-day {
+      /* .to-prev-day {
         transform: scale(-1, 1);
-      }
+      } */
     }
   }
 

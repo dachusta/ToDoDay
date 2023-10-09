@@ -1,5 +1,6 @@
 <script setup>
 import { useCurrentDay } from '../../composables/currentDay'
+import IconAdd from '../icons/IconAdd.vue'
 
 defineEmits(['create-day'])
 
@@ -24,7 +25,7 @@ orderDay.value = props.order
       class="create"
       @click="$emit('create-day')"
     >
-      +
+      <IconAdd />
     </div>
   </div>
 </template>
@@ -58,7 +59,8 @@ orderDay.value = props.order
     border-radius: 5px;
     font-size: 48px;
     opacity: 0.5;
-    background: rgb(27, 30, 36);
+    stroke: #FFFFFF;
+    /* background: rgb(27, 30, 36); */
   }
 }
 </style>

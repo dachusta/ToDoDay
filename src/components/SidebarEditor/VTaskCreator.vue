@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import IconCheckMark from '../icons/IconCheckMark.vue'
 defineEmits(['create-task'])
 
 const newTask = ref({
@@ -32,7 +33,7 @@ const newTask = ref({
       class="button"
       @click="$emit('create-task', newTask)"
     >
-      ✔
+      <IconCheckMark />
     </button>
   </div>
 </template>
@@ -82,8 +83,11 @@ const newTask = ref({
   }
 
   .button {
+    display: flex;
+    align-items: center;
     background: transparent;
     color: inherit;
+    stroke: #FFFFFF;
     border: none;
     padding: 0px 10px;
     cursor: pointer;
