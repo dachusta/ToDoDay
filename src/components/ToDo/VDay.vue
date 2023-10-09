@@ -18,15 +18,17 @@
       <div class="buttons-move-day">
         <VButton
           v-if="isEditor"
+          class="to-prev-day"
           @click="$emit('toPrevDay', { dayId: day._id, fromIndex: order })"
         >
-          {{ '<' }}
+          {{ '➤' }}
         </VButton>
         <VButton
           v-if="isEditor"
+          class="to-next-day"
           @click="$emit('toNextDay', { dayId: day._id, fromIndex: order })"
         >
-          {{ '>' }}
+          {{ '➤' }}
         </VButton>
       </div>
 
@@ -140,6 +142,10 @@ orderDay.value = props.order
     .buttons-move-day {
       display: flex;
       gap: 10px;
+
+      .to-prev-day {
+        transform: scale(-1, 1);
+      }
     }
   }
 

@@ -41,6 +41,9 @@
 </template>
 
 <script setup>
+
+defineEmits(['setTaskTime', 'removeTask', 'setTaskDone'])
+
 defineProps({
   task: {
     type: Object,

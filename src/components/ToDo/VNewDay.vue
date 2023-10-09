@@ -16,6 +16,8 @@
 <script setup>
 import { useCurrentDay } from '../../composables/currentDay'
 
+defineEmits(['createDay'])
+
 const props = defineProps({
   order: {
     type: Number,
