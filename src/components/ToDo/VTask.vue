@@ -82,7 +82,14 @@ defineProps({
     padding: 4px 8px;
     border: none;
     border-right: 1px solid #FFFFFF;
+
+    &::-webkit-calendar-picker-indicator {
+      background-image: url('../../assets/clock.png');
+      width: 16px;
+      height: 16px;
+    }
   }
+
   .priority {
     width: 50px;
     background: transparent;
