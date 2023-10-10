@@ -82,6 +82,7 @@ const isToDay = computed(() => {
         <VButton
           v-if="isEditor"
           class="to-prev-day"
+          icon
           @click="$emit('to-prev-day', { dayId: day._id, fromIndex: order })"
         >
           <IconArrowLeft />
@@ -89,6 +90,7 @@ const isToDay = computed(() => {
         <VButton
           v-if="isEditor"
           class="to-next-day"
+          icon
           @click="$emit('to-next-day', { dayId: day._id, fromIndex: order })"
         >
           <IconArrowRight />
@@ -98,6 +100,7 @@ const isToDay = computed(() => {
       <div class="buttons">
         <VButton
           v-if="isEditor"
+          icon
           @click="$emit('remove-day', day._id)"
         >
           <IconTrashBin />

@@ -42,15 +42,18 @@ onMounted(() => {
 // Добавить иконки для приоритета
 // Обновить все иконки
 //
-// Поискать кастомный прогресс-бар и вынести в отдельный компонент
+// Все icon имеют width и height = 20px x 20px <<<=====
 //
-// Добавить для кнопок стилей (ховер...)
+// Добавить состояния для кнопок (size= s,m,l | view= primary, secondary | disabled | loading | iconLeft={IconChat} ) ~~~
+//
 // Добавить для инпутов стилей (при ридонли убирать оутлайн)
+// Изменить скролл
 //
 // По окончании дня сбрасывать состояние ВЫПОЛНЕНО (на бэке)
 //
 // Добавить кастомный чекбокс
 // Поискать подходящие таймпикеры
+// Поискать кастомный прогресс-бар и вынести в отдельный компонент
 //
 // Заносить в статистику Выполненную задачу (userId/statistics)
 // Продумать формат данных ( statistics: {???} )
@@ -71,6 +74,7 @@ onMounted(() => {
         <VButton
           v-if="editor.is"
           class="button-save"
+          size="l"
           @click="editor.save"
         >
           Сохранить
@@ -79,6 +83,7 @@ onMounted(() => {
         <VButton
           v-if="editor.is"
           class="button-cancel"
+          size="l"
           @click="editor.cancel"
         >
           Отменить
@@ -87,13 +92,14 @@ onMounted(() => {
         <VButton
           v-if="!editor.is"
           class="button-open"
+          size="l"
           @click="editor.open"
         >
           Редактировать
         </VButton>
         <!-- <VButton
-          v-if="!editor.is"
-          class="button-open"
+          class="button"
+          loading
           @click="test"
         >
           Тест
@@ -164,12 +170,5 @@ onMounted(() => {
   right: 10px;
   display: flex;
   gap: 10px;
-}
-.buttons-editor button {
-  padding: 15px 30px;
-  border-radius: 5px;
-  color: inherit;
-  border: none;
-  background: rgba(27, 30, 36, 0.7);
 }
 </style>
