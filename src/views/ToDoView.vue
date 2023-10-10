@@ -47,7 +47,8 @@ onMounted(() => {
 // Добавить состояния для кнопок (size= s,m,l | view= primary, secondary | disabled | loading | iconLeft={IconChat} ) ~~~
 //
 // Добавить для инпутов стилей (при ридонли убирать оутлайн)
-// Изменить скролл
+//
+// Подумать что нужно для деплоя (Подготовиться)
 //
 // По окончании дня сбрасывать состояние ВЫПОЛНЕНО (на бэке)
 //
@@ -152,7 +153,6 @@ onMounted(() => {
 }
 
 .days {
-  /* grid-area: days; */
   position: relative;
   display: flex;
   flex-wrap: wrap;
@@ -162,6 +162,17 @@ onMounted(() => {
   row-gap: 50px;
   padding: 70px 50px 50px 50px;
   overflow: auto;
+
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(107, 117, 135, 0.5);
+  }
+  &::-webkit-scrollbar-track {
+    background: rgba(27, 30, 36, 0.5);
+  }
 }
 
 .buttons-editor {

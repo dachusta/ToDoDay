@@ -64,6 +64,17 @@ const tasks = useTasksStore()
   width: 500px;
   background: rgba(27, 30, 36, 0.7);
 
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(107, 117, 135, 0.5);
+  }
+  &::-webkit-scrollbar-track {
+    background: rgba(27, 30, 36, 0.5);
+  }
+
   .tabs {
     display: flex;
 

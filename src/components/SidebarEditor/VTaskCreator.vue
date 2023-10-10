@@ -4,7 +4,7 @@ import IconCheckMark from '../icons/IconCheckMark.vue'
 defineEmits(['create-task'])
 
 const newTask = ref({
-  priority: 0,
+  priority: 1,
   value: '',
   color: ''
 })
@@ -16,7 +16,7 @@ const newTask = ref({
       v-model="newTask.priority"
       type="number"
       class="priority"
-      min="0"
+      min="1"
       max="3"
     >
     <input
