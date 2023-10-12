@@ -9,7 +9,7 @@ export const useDaysStore = defineStore('days', () => {
     const userId = 'test'
 
     axios
-      .post(`${import.meta.env.VITE_URL}/days/setList?userId=${userId}`, list.value)
+      .post(`${import.meta.env.VITE_URL_API}/days/setList?userId=${userId}`, list.value)
       .then(function (response) {
         console.log(response)
       })
@@ -22,7 +22,7 @@ export const useDaysStore = defineStore('days', () => {
     const userId = 'test'
 
     axios
-      .get(`${import.meta.env.VITE_URL}/days/getList?userId=${userId}`)
+      .get(`${import.meta.env.VITE_URL_API}/days/getList?userId=${userId}`)
       .then(function (response) {
         console.log(response)
         console.log(response.data)
@@ -100,7 +100,7 @@ export const useDaysStore = defineStore('days', () => {
 
     // отправка/изменение на бэке
     axios
-      .post(`${import.meta.env.VITE_URL}/days/setTaskTime?userId=${userId}`, {
+      .post(`${import.meta.env.VITE_URL_API}/days/setTaskTime?userId=${userId}`, {
         dayId,
         taskUniqId,
         time
@@ -128,7 +128,7 @@ export const useDaysStore = defineStore('days', () => {
     const userId = 'test'
 
     axios
-      .post(`${import.meta.env.VITE_URL}/days/setTaskDone?userId=${userId}`, {
+      .post(`${import.meta.env.VITE_URL_API}/days/setTaskDone?userId=${userId}`, {
         dayId,
         taskUniqId,
         checked

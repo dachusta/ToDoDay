@@ -11,7 +11,7 @@ export const useTasksStore = defineStore('tasks', () => {
     const userId = 'test'
 
     axios
-      .post(`${import.meta.env.VITE_URL}/tasks/setList?userId=${userId}`, list.value)
+      .post(`${import.meta.env.VITE_URL_API}/tasks/setList?userId=${userId}`, list.value)
       .then(function (response) {
         console.log(response)
       })
@@ -23,7 +23,7 @@ export const useTasksStore = defineStore('tasks', () => {
     const userId = 'test'
 
     axios
-      .get(`${import.meta.env.VITE_URL}/tasks/getList?userId=${userId}`)
+      .get(`${import.meta.env.VITE_URL_API}/tasks/getList?userId=${userId}`)
       .then(function (response) {
         console.log(response)
         console.log(response.data)
