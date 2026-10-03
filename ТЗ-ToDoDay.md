@@ -1,7 +1,9 @@
 # Техническое задание: ToDoDay
-Версия: 1.0 (MVP)
+Версия: 1.1 (MVP)
 Стек: Quasar Framework v2 + Vue 3 + TypeScript
-Статус: черновик для согласования
+Статус: черновик для согласования (ревизия после второго прохода аудита)
+
+Файл состоит из четырёх частей с собственной нумерацией: ТЗ, вайрфреймы, контракты сторов, скаффолд. Перекрёстная ссылка всегда с префиксом части («ТЗ §2.7», «вайрфреймы §8», «контракты §3.4», «скаффолд §6»). Ссылка без префикса означает раздел той же части.
 
 ## 0. Принятые решения и разрешённые противоречия
 Перед чтением зафиксируем ключевые решения по ответам:
@@ -55,7 +57,7 @@ FR-T-1. Создание дела. Форма содержит поля:
 
 - Длительность: кратно 15 мин, 15 – 1440 мин (обязательно, дефолт 30 мин)
 FR-T-2. Редактирование дела. Допустимо, если дело не стоит ни в одном активном (незавершённом) экземпляре дня. Иначе — только название/приоритет/цвет; длительность заморожена для активных размещений (сохраняется снимок durationMin в Placement).
-FR-T-3. Удаление дела. Soft-delete: дело помечается archived: true, пропадает из списка, но остаётся в истории для статистики. При удалении из активных размещений — они помечаются skipped.
+FR-T-3. Удаление дела. Soft-delete: дело помечается archived: true, пропадает из списка, но остаётся в истории для статистики. В активном экземпляре дня в skipped переводятся только размещения со статусом pending. Уже отмеченные done не меняются.
 FR-T-4. Список дел. Отображается на отдельной странице. Поддерживается:
 
 - Сортировка: по названию, приоритету, дате создания, длительности.
@@ -97,7 +99,7 @@ FR-D-5. Запрет дублей дат (ответ на Q7). При сохра
 - Для weekdays и monthdays между собой — пересечения допустимы, приоритет отдаётся monthdays.
 
 - При попытке создать конфликт — показать диалог с перечнем конфликтующих шаблонов.
-FR-D-6. Пустой день (ответ на Q7). Если на текущую дату ни один шаблон не подходит — рендерится «пустой день»: сетка по дефолту 08:00–22:00, без дел, с CTA «Настроить день / Взять дело из списка». Пустой день не имеет привязки к шаблону и не сохраняется в историю как экземпляр, пока в него не положат хотя бы одно дело или не завершат его.
+FR-D-6. Пустой день (ответ на Q7). Если на текущую дату ни один шаблон не подходит — рендерится «пустой день»: сетка по дефолту 08:00–22:00, без дел, с CTA «Настроить день / Взять дело из списка». Пустой день не имеет привязки к шаблону и не сохраняется в историю как экземпляр, пока в него не положат хотя бы одно дело или не завершат его. В скаффолде resolveCurrentDay пока пишет пустой экземпляр в Dexie сразу — это расхождение со требованием, а не принятое поведение (скаффолд §6, §11).
 
 ### 2.3 Правила повторения и цикл
 FR-C-1. Разрешение текущего дня. При открытии приложения:
@@ -111,19 +113,27 @@ FR-C-1. Разрешение текущего дня. При открытии п
 - Иначе — берётся следующий циклический шаблон (см. FR-C-2).
 
 - Если ничего не найдено → пустой день.
-FR-C-2. Циклическая последовательность. Шаблоны с правилом «без привязки» упорядочены по order. После завершения текущего циклического экземпляра следующий вычисляется как:
 
-- Первый шаблон с order больше текущего;
+Числа 29–31, которых нет в текущем месяце, не совпадают ни с одним monthday. День проваливается в weekday, затем в цикл. Отдельного «пустого» исхода только из-за короткого месяца нет.
+FR-C-2. Циклическая последовательность. Шаблоны с правилом «без привязки» упорядочены по order. После завершения текущего циклического экземпляра указатель lastCyclicTemplateId становится id этого шаблона. Следующий циклический — первый с order больше указателя; если такого нет — шаблон с минимальным order (зацикливание). Указатель двигается только когда завершённый шаблон циклический. Календарное завершение его не меняет.
+FR-C-3. Ручной сдвиг дня (ответ на Q4). Кнопка «Следующий день →» доступна, только пока текущий экземпляр в статусе active и CycleStateDto.manualShiftDate не равен сегодняшней локальной дате. Повторный сдвиг в те же сутки запрещён (правило 12). Сценарий один и тот же в ТЗ, контрактах и скаффолде:
 
-- Если такого нет — шаблон с минимальным order (зацикливание).
-FR-C-3. Ручной сдвиг дня (ответ на Q4). Пока текущий день не завершён, доступна кнопка «Следующий день →»:
+- Нажатие ставит сессионный флаг shiftPending и открывает диалог завершения (FR-E-1). До подтверждения БД не меняется. Закрытие диалога без подтверждения сбрасывает shiftPending.
 
-- Действие триггерит диалог завершения дня (FR-E-1).
+- Подтверждение идёт через completeDay. Обычная кнопка «Завершить день» флаг не ставит и следующий экземпляр не создаёт.
 
-- После подтверждения текущий экземпляр закрывается, а следующий берётся по FR-C-1/FR-C-2 от текущей даты.
+- Если shiftPending: день фиксируется по FR-E-2, затем manualShiftDate записывается как сегодня (YYYY-MM-DD, локальная дата). Обычное завершение это поле не очищает и не перезаписывает.
 
-- Если сдвинутый день относится к календарному правилу другой даты — его date проставляется как дата сдвига (ручное смещение фиксируется в CycleState.manualShiftDate).
-FR-C-4. Автопереход в 00:00. При открытии приложения после смены суток, если предыдущий активный экземпляр не завершён, автоматически показывается диалог завершения (FR-E-1). Отмена диалога оставляет старый день активным до следующего открытия.
+- Следующий экземпляр материализуется сразу, его date — дата сдвига (сегодня), даже если шаблон взят из календаря завтрашнего дня. Шаблон: monthdays завтрашнего числа, иначе weekdays завтрашнего дня недели, иначе следующий циклический по FR-C-2, иначе пустой день. timeStart/timeEnd — снимок шаблона или 08:00–22:00. Новый экземпляр становится активным (activeInstanceId). Завершённый остаётся в истории со своей датой.
+
+- Отмена завершения (FR-E-3) удаляет только что созданный сдвигом экземпляр, возвращает manualShiftDate к значению до сдвига и снова делает активным завершённый экземпляр.
+
+Скаффолд этот переход реализует (скаффолд §6.3). Пустой день по-прежнему пишется в Dexie сразу — это отдельно FR-D-6.
+FR-C-4. Автопереход при смене локальной даты. Если активный экземпляр не завершён и его date меньше сегодня, показывается диалог завершения (FR-E-1). Триггеры одни и те же: старт (initialize), возврат во вкладку (visibilitychange), таймер на ближайшую локальную полночь. Сравнение дат берёт сегодня из new Date() в момент проверки, а не из минутного кэша useNow. Смена currentDate дополнительно вызывает ту же проверку, когда кэш часов догоняет полночь.
+
+Отмена авто-диалога («Вернуться к дню» и «Пропустить диалог в этот раз») ставит сессионный skippedAutoPromptDate = сегодня. Пока флаг равен текущей дате, visibility и таймер диалог не открывают снова. Флаг не пишется в БД и не меняет askToCompleteOnNewDay (ТЗ §2.7). После перезагрузки страницы флаг пуст, диалог показывается снова. Ручное открытие и сдвиг этот флаг не ставят.
+
+Если autoShiftAtMidnight выключен и askToCompleteOnNewDay выключен — диалога нет, старый день остаётся активным, пока пользователь не завершит его сам. Если autoShiftAtMidnight включён — диалог не показывается: при тех же трёх триггерах выполняется подтверждённый сдвиг из FR-C-3 (неотмеченное становится skipped, пишется manualShiftDate, материализуется следующий шаблон). Настройка «спрашивать» в этом режиме диалог не возвращает.
 FR-C-5. Состояние цикла. Хранится в CycleStateDto — синглтоне cycleState (см. §3.1, файл src/models/dayInstance.ts):
 
 ```
@@ -151,8 +161,10 @@ FR-B-3. Пересечения. Разрешены (по дефолту), но �
 - Конфликтующие дела отображаются полосами с частичным наложением (50% opacity) и иконкой warning.
 
 - В шапке дня счётчик конфликтов.
-FR-B-4. Выход за пределы. Дело, не помещающееся до timeEnd, автоматически переносится в «нераспределённую зону» под сеткой.
-FR-B-5. Нераспределённая зона. Список дел, размещённых на день, но не вставленных в слоты (например, не влезли). Пользователь может позже перетащить их в сетку.
+
+- Настройка showConflicts (ТЗ §2.7) только прячет подсветку и счётчик. Выключение не запрещает наложение и не удаляет пересечения.
+FR-B-4. Выход за пределы. Дело, которое не помещается в интервал экземпляра (timeStart–timeEnd снимка, не текущего шаблона), не отклоняется: оно попадает в нераспределённую зону. Признак — Placement.startMin === null. Отрицательный startMin не используется. Проверка «помещается / не помещается» — ветка укладки, а не ошибка валидации. Укладка в скаффолде пока заглушка placeTask (скаффолд §6, §11); решение по признаку уже принято и отражено в модели.
+FR-B-5. Нераспределённая зона. Список размещений текущего дня с startMin === null. Пользователь может позже перетащить их в сетку — тогда startMin становится смещением от timeStart, кратным 15 и не меньшим 0.
 FR-B-6. Карточка размещения. Показывает:
 
 - Название дела
@@ -192,16 +204,18 @@ FR-E-1. Диалог завершения. Триггерится:
 
 - Кнопка «Подтвердить».
 
-- Опция «Пропустить диалог в этот раз» (только для авто-триггера, FR-C-4). Это разовый пропуск: он не меняет настройку askToCompleteOnNewDay из §2.7. Постоянный отказ от авто-диалога — только через настройку («Больше не спрашивать» на SettingsPage, см. §7).
+- Опция «Пропустить диалог в этот раз» только у авто-триггера (FR-C-4). Это разовый сессионный пропуск: skippedAutoPromptDate, без записи в настройки. Постоянный отказ — тумблер «Спрашивать о завершении при новом дне» на SettingsPage (вайрфреймы §8, ТЗ §2.7, поле askToCompleteOnNewDay). «Вернуться к дню» у авто-диалога делает тот же разовый пропуск. У ручного завершения и у сдвига «Вернуться к дню» только закрывает диалог.
 FR-E-2. Логика фиксации после подтверждения:
 
 - Отмеченные → status = 'done'.
 
 - Не отмеченные (включая ранее помеченные done, с которых сняли галочку) → status = 'skipped'.
 
-- Экземпляр получает status = 'completed', completedAt = Date.now().
+- Экземпляр получает status = 'completed', completedAt = Date.now() и остаётся в БД для статистики.
 
-- Экземпляр записывается в историю (остаётся в БД для статистики).
+- activeInstanceId не обнуляется. Завершённый экземпляр остаётся текущим до смены календарной даты или до ручного сдвига. Повторное открытие приложения в ту же дату не вызывает resolveCurrentDay и не создаёт второй экземпляр. Второй экземпляр на ту же дату появляется только как результат FR-C-3.
+
+- Если завершённый шаблон циклический, lastCyclicTemplateId продвигается и в IndexedDB, и в памяти cycleState. Календарный шаблон указатель не двигает. manualShiftDate при обычном завершении не изменяется.
 FR-E-3. Отмена завершения. В течение сессии после завершения доступна кнопка «Отменить завершение» (до перезагрузки страницы). После перезагрузки — экземпляр считается закрытым.
 FR-E-4. Отсутствие переноса. В MVP невыполненные дела не переносятся на следующий день. Пользователь переносит их вручную из списка дел.
 
@@ -215,8 +229,17 @@ FR-S-1. Накопительные счётчики по каждому делу
 - totalSkipped — пропущено
 
 - completionRate = totalDone / (totalDone + totalSkipped)
-Соответствие коду и UI: в TaskStats (контракты §4.1, services/stats.ts) те же величины названы placed / done / skipped / rate; в интерфейсе подписи — «размещено / выполнено / пропущено / рейт».
-FR-S-2. Экран статистики. Таблица со всеми делами:
+
+Имена FR и поля TaskStats (контракты §4.1, скаффолд services/stats.ts):
+
+- totalPlaced — placed, подпись «размещено»
+
+- totalDone — done, подпись «выполнено»
+
+- totalSkipped — skipped, подпись «пропущено»
+
+- completionRate — rate, подпись «рейт»
+FR-S-2. Экран статистики. Таблица дел, у которых есть хотя бы одно размещение в завершённых экземплярах выбранного периода. Дело без такой истории в таблицу не попадает (нулевой строки «0 / 0» для никогда не размещённого дела нет). Колонки:
 
 - Название, цвет, приоритет
 
@@ -225,7 +248,7 @@ FR-S-2. Экран статистики. Таблица со всеми дела
 - Прогресс-бар completionRate
 
 - Сортировка по любой колонке
-FR-S-3. Периоды (заготовка). Фильтр по периоду: 7 дней / 30 дней / всё время. В MVP — минимум «всё время».
+FR-S-3. Периоды. Фильтр: 7 дней / 30 дней / всё время. В MVP обязателен вариант «всё время», он же дефолт экрана. Окно 7 дней — сегодня и 6 предыдущих локальных дат, 30 дней — сегодня и 29 предыдущих.
 FR-S-4. Отдельная страница дела. История размещений: дата, время, статус.
 
 ### 2.7 Настройки
@@ -234,6 +257,10 @@ FR-SET-2. Язык: ru (дефолт) / en (заготовка).
 FR-SET-3. Формат времени: 24ч / 12ч.
 FR-SET-4. Экспорт данных: JSON-дамп всех сущностей.
 FR-SET-5. Импорт данных: из JSON, с подтверждением перезаписи.
+FR-SET-6. Спрашивать о завершении при новом дне (askToCompleteOnNewDay, по умолчанию включено). Постоянный выключатель авто-диалога FR-C-4. Разовый пропуск в диалоге эту настройку не меняет.
+FR-SET-7. Авто-сдвиг в 00:00 (autoShiftAtMidnight, по умолчанию выключено). Если включено, смена даты выполняет подтверждённый FR-C-3 без диалога. Пока выключено, сдвиг только кнопкой «Следующий день».
+FR-SET-8. Показывать конфликты (showConflicts, по умолчанию включено). См. FR-B-3: прячет подсветку, пересечения по-прежнему разрешены.
+FR-SET-9. Первый день недели для отображения (firstDayOfWeek): 0 — понедельник (дефолт), 1 — воскресенье. На RepeatRule.weekdays не влияет: там 0 всегда понедельник.
 
 ## 3. Модель данных
 
@@ -307,7 +334,7 @@ import type { TaskSnapshot } from './task';
 export interface Placement {
   id: string;
   taskId: string;
-  startMin: number;         // смещение от timeStart, кратно 15
+  startMin: number | null;  // смещение от timeStart, кратно 15, >= 0; null — нераспределённое (FR-B-4)
   durationMin: number;      // снимок длительности на момент размещения
   status: PlacementStatus;
   placedAt: number;
@@ -340,9 +367,9 @@ export interface CycleStateDto {
 export interface Slot {
   index: number;         // 0..N-1
   startMin: number;      // смещение от timeStart: 0, 15, 30, ...
-  label: string;         // '08:15'
-  isHour: boolean;       // кратно 60
-  isHalfHour: boolean;   // кратно 30
+  label: string;         // '08:15' — часы на циферблате, не «startMin % 60»
+  isHour: boolean;       // минуты подписи === 0 (09:00), а не «смещение кратно 60»
+  isHalfHour: boolean;   // минуты подписи === 30 (ровно :30, часовая отметка сюда не входит)
 }
 
 export interface Conflict {
@@ -460,7 +487,7 @@ src/
 | --- | --- |
 | useTasksStore | CRUD дел, архивация, выборки, поиск |
 | useDaysStore | CRUD шаблонов дней, порядок, валидация конфликтов |
-| useCycleStore | Разрешение текущего дня, сдвиг, автопереход, CycleState |
+| useCycleStore | Разрешение текущего дня, сдвиг, автопереход, CycleStateDto |
 | useStatsStore | Агрегация по Placement |
 | useSettingsStore | Тема, язык, формат времени |
 | useUiStore | Глобальный UI: тосты, confirm-диалог, drawer, online/offline |
@@ -473,7 +500,7 @@ src/
 
 - scheduler.detectConflicts(placements): Conflict[] — FR-B-3.
 
-- scheduler.fitInDay(placement, template): boolean — FR-B-4 (в скаффолде пока не реализован, см. §6 скаффолда).
+- scheduler.fitInDay(placement, instance): boolean — FR-B-4. Границы берутся из снимка экземпляра (timeStart/timeEnd), не из шаблона. true — дело помещается при своём startMin. В скаффолде функция пока не реализована (скаффолд §6, §11).
 
 - stats.aggregateStats(instances, period): { perTask: Map<string, TaskStats>; overall: OverallStats } — FR-S-1.
 
@@ -536,14 +563,14 @@ Quasar Dark plugin + авто-переключение по системной.
 | 2 | Конфликт правил дней | Запрет сохранения (FR-D-5) |
 | 3 | Дело длиннее дня | Валидация при размещении: не помещается → в «нераспределённые» |
 | 4 | Пересечения дел | Разрешены, подсветка warning |
-| 5 | День не завершён в 00:00 | Авто-диалог при следующем открытии |
+| 5 | День не завершён к смене даты | Авто-диалог на старте, при возврате во вкладку и в полночь (FR-C-4). Отмена гасит диалог до перезагрузки |
 | 6 | Отмена завершения | Доступна в рамках сессии |
 | 7 | Удаление шаблона с активным экземпляром | Запрет, предложение сначала завершить |
-| 8 | Удаление дела из активного размещения | status = 'skipped', дело в архив |
+| 8 | Архивация дела с pending-размещением в активном дне | Это размещение → skipped; done не меняется; дело в архив |
 | 9 | Изменение длительности дела с активными размещениями | Не применяется к снимкам в Placement |
 | 10 | Изменение правила повторения | История не пересчитывается |
-| 11 | Одновременное редактирование (несколько вкладок) | Dexie liveQuery синхронизирует состояние; последний пишет — выигрывает |
-| 12 | Ручной сдвиг, а день уже прошёл | Разрешён; manualShiftDate фиксируется, не даёт повторно сдвинуть в тот же день |
+| 11 | Одновременное редактирование (несколько вкладок) | Целевое поведение: Dexie liveQuery, последний пишет — выигрывает. В скаффолде подписки liveQuery ещё нет (скаффолд §6) |
+| 12 | Повторный ручной сдвиг в те же сутки | Запрещён, пока manualShiftDate равен сегодня. Первый сдвиг за сутки разрешён, в том числе если незавершённый день начался вчера |
 
 ## 7. Нефункциональные требования
 
@@ -571,7 +598,7 @@ Quasar Dark plugin + авто-переключение по системной.
 | 2 | Модели, БД, миграции | 0.5 дня |
 | 3 | Модуль «Дела»: стор, страница, форма, список | 1.5 дня |
 | 4 | Модуль «Шаблоны дней»: стор, форма, правила, конфликты | 1.5 дня |
-| 5 | Разрешение текущего дня, CycleState, автопереход | 1 день |
+| 5 | Разрешение текущего дня, CycleStateDto, автопереход | 1 день |
 | 6 | Доска дня: сетка, размещение, drag-and-drop, конфликты | 2.5 дня |
 | 7 | Завершение дня: диалог, фиксация, отмена | 1 день |
 | 8 | Статистика: агрегация, страница, страница дела | 1 день |
@@ -602,7 +629,11 @@ Quasar Dark plugin + авто-переключение по системной.
 
 - □  Кнопка «Следующий день» доступна только для незавершённого дня.
 
-- □  Автопереход в 00:00 показывает диалог завершения.
+- □  Смена даты показывает диалог завершения, если день не закрыт и авто-сдвиг выключен.
+
+- □  Повторное открытие в ту же дату не создаёт второй экземпляр уже завершённого дня.
+
+- □  Второй сдвиг за сутки недоступен.
 По доске:
 
 - □  Drag-and-drop из списка в слот и между слотами работает.
@@ -1081,7 +1112,7 @@ Context menu (long-press / right-click):
 
 - После подтверждения — тост «День завершён» + кнопка «Отменить» (в течение сессии).
 
-- Авто-триггер доп. опция: «Больше не спрашивать при наступлении новых суток» (сохраняется в настройках).
+- Авто-триггер: доп. опция «Пропустить диалог в этот раз». Она не пишет настройки. Постоянный тумблер — только экран настроек (вайрфреймы §8, поле askToCompleteOnNewDay). «Вернуться к дню» у авто-диалога тоже ставит разовый пропуск до перезагрузки.
 
 ## 7. Экран статистики (StatsPage)
 
@@ -1119,6 +1150,8 @@ Context menu (long-press / right-click):
 │  ...                                    │
 └─────────────────────────────────────────┘
 ```
+
+Нулевая строка на макете — дело, которое в периоде размещали и все разы пропустили (rate = 0), либо размещали вне выбранного периода и в текущей выборке его нет. Дело, которое не размещали ни разу, в таблицу не попадает (ТЗ FR-S-2). Дефолт периода — «всё время».
 
 ### 7.2 Desktop
 
@@ -1349,7 +1382,7 @@ type Result<T> =
 
 Исключения ловятся внутри, логируются через logger, UI показывает тост.
 
-- Реактивность БД: используются liveQuery из Dexie для синхронизации между вкладками.
+- Реактивность БД: целевой контракт — liveQuery из Dexie для синхронизации между вкладками. В скаффолде подписки subscribe/unsubscribe ещё нет (скаффолд §6). Правило 11 ТЗ §6 описывает это целевое поведение.
 
 - Оптимистичные обновления: для UI-критичных операций (drag-and-drop, чекбоксы) state обновляется сразу, при ошибке — откат.
 
@@ -1607,6 +1640,13 @@ interface CycleStoreState {
   lastCompletedInstanceId: Ref<string | null>;         // id экземпляра, завершённого в этой сессии
   placementsSnapshot: Ref<Placement[] | null>;         // копия placements на момент completeDay
   lastCyclicTemplateIdSnapshot: Ref<string | null>;    // прежний указатель цикла (completeDay мог его продвинуть)
+  manualShiftDateSnapshot: Ref<string | null>;         // manualShiftDate до completeDay
+  shiftedInstanceId: Ref<string | null>;               // экземпляр, созданный этим сдвигом (для отмены)
+
+  // Сессия диалога (не персистится)
+  shiftPending: Ref<boolean>;                          // завершение открыто из «Следующий день»
+  completionSource: Ref<'manual' | 'auto' | 'shift' | null>;
+  skippedAutoPromptDate: Ref<string | null>;           // YYYY-MM-DD, разовый пропуск авто-диалога
 
   // UI
   completing: Ref<boolean>;         // диалог завершения открыт
@@ -1624,25 +1664,25 @@ interface CycleStoreState {
 
 | Getter | Тип | Описание |
 | --- | --- | --- |
-| currentDate | ComputedRef<string> | ISO YYYY-MM-DD, локальная дата |
+| currentDate | ComputedRef<string> | ISO YYYY-MM-DD для подписей UI. Тикает от useNow (раз в минуту). Проверки смены даты в checkDayChange берут format(new Date()), а не этот кэш |
 | currentTemplate | ComputedRef<DayTemplate \| null> | По currentInstance.templateId |
 | isCurrentDayEmpty | ComputedRef<boolean> | Пустой день (FR-D-6) |
 | slots | ComputedRef<Slot[]> | Массив слотов 15 мин на текущий день |
 | placementsBySlot | ComputedRef<Map<number, Placement[]>> | Индекс по startMin |
 | conflicts | ComputedRef<Conflict[]> | Пересекающиеся размещения |
 | hasConflicts | ComputedRef<boolean> | — |
-| unallocatedPlacements | ComputedRef<Placement[]> | Вне сетки (не поместились) |
+| unallocatedPlacements | ComputedRef<Placement[]> | Размещения с startMin === null |
 | dayProgress | ComputedRef<{done:number; skipped:number; pending:number; total:number}> | Прогресс |
-| canShiftNext | ComputedRef<boolean> | true, если день не завершён |
-| canComplete | ComputedRef<boolean> | Аналогично |
+| canShiftNext | ComputedRef<boolean> | status === 'active' и manualShiftDate !== сегодня |
+| canComplete | ComputedRef<boolean> | status === 'active' (сдвиг за сутки на это не влияет) |
 
 ```
 interface Slot {
   index: number;         // 0..N-1
   startMin: number;      // 0, 15, 30, ...
   label: string;         // '08:15'
-  isHour: boolean;       // кратно 60
-  isHalfHour: boolean;   // кратно 30
+  isHour: boolean;       // минуты подписи === 0
+  isHalfHour: boolean;   // минуты подписи === 30
 }
 
 interface Conflict {
@@ -1659,6 +1699,7 @@ interface Conflict {
 async function initialize(): Promise<Result<void>>;
 async function resolveCurrentDay(): Promise<Result<DayInstance>>;
 function checkDayChange(): void;                              // FR-C-4: автопроверка смены суток
+function dismissCompletion(): void;                           // закрыть диалог без фиксации
 function startCompletion(): void;                             // FR-E-1: ручное открытие диалога завершения
 function dispose(): void;                                     // отписка от emitter архивации (unmount/HMR)
 
@@ -1669,7 +1710,7 @@ async function cancelCompletion(): Promise<Result<void>>;      // в течен�
 async function resetCurrentDay(): Promise<Result<void>>;       // отладка/сброс
 
 // Размещение
-async function placeTask(taskId: string, startMin: number): Promise<Result<Placement>>;
+async function placeTask(taskId: string, startMin: number | null): Promise<Result<Placement>>;
 async function movePlacement(placementId: string, newStartMin: number): Promise<Result<void>>;
 async function removePlacement(placementId: string): Promise<Result<void>>;
 async function replacePlacement(placementId: string, newTaskId: string): Promise<Result<void>>;
@@ -1690,105 +1731,106 @@ function endDrag(): void;
 
 #### initialize()
 
-- Загрузить CycleState из БД (singleton).
+- Загрузить CycleStateDto из БД (singleton).
 
 - Если activeInstanceId существует — загрузить экземпляр.
 
-- Иначе — вызвать resolveCurrentDay().
+- Если экземпляр есть и его date равна сегодняшней локальной дате — оставить его текущим, даже если status уже completed. resolveCurrentDay не вызывать.
 
-- Проверить автопереход (FR-C-4) через checkDayChange().
+- Если экземпляра нет, или он completed и его date меньше сегодня — вызвать resolveCurrentDay() на сегодня.
 
-- Подписаться на liveQuery.
+- Если экземпляр active и его date меньше сегодня — не материализовать новый день, перейти к checkDayChange().
+
+- Подписка liveQuery — целевой контракт; в скаффолде её ещё нет (скаффолд §6).
 
 #### checkDayChange() — FR-C-4
 
-- Вызывается из App.vue при старте, по visibilitychange и по таймеру до ближайшей полуночи.
+- Вызывается из initialize, из App.vue по visibilitychange и по таймеру на 00:00:05 локального времени, а также когда computed currentDate меняет значение.
 
-- Если currentInstance активен и currentInstance.date < currentDate (локальная дата) и settingsStore.askToCompleteOnNewDay === true → completing = true (открыть диалог завершения, FR-E-1).
+- «Сегодня» внутри функции — format(new Date(), 'yyyy-MM-dd'), не кэш useNow.
 
-- Если настройка выключена или экземпляр уже завершён — ничего не делаем.
+- Если нет активного (status === 'active') экземпляра или его date >= сегодня — выйти.
 
-- Отмена диалога оставляет старый день активным до следующего открытия.
+- Если skippedAutoPromptDate === сегодня — выйти.
+
+- Если settings.autoShiftAtMidnight — выполнить тот же переход, что подтверждённый сдвиг: completeDay со всеми размещениями в skipped, shiftPending уже истинен на время вызова. Диалог не открывать.
+
+- Если settings.askToCompleteOnNewDay — completionSource = 'auto', completing = true.
+
+- Иначе ничего не делать: старый день остаётся активным.
 
 #### resolveCurrentDay() — FR-C-1
 
 ```
-date = today (ISO)
-1. template = daysStore.monthdayMap.get(dayOfMonth(date))
-2. если нет → daysStore.weekdayMap.get(isoWeekday0(date))    // 0 = Пн
-3. если нет → следующий циклический шаблон после cycleState.lastCyclicTemplateId
-4. если нет → создать пустой DayInstance { templateId: null, timeStart: '08:00', timeEnd: '22:00' }
-5. Материализовать DayInstance { date, templateId, timeStart, timeEnd, placements: [], status: 'active' }
-6. Сохранить в БД, обновить cycleState.activeInstanceId
+date = сегодняшняя локальная дата
+Не вызывать, если текущий экземпляр уже имеет эту date.
+1. template = repeat.resolveDayForDate(date, templates, lastCyclicTemplateId)
+2. если нет шаблона → пустой DayInstance { templateId: null, timeStart: '08:00', timeEnd: '22:00' }
+3. Материализовать { date, templateId, timeStart, timeEnd, placements: [], status: 'active' }
+4. Сохранить в БД, cycleState.activeInstanceId = новый id, currentInstance = он
 ```
 
-Шаги 1–3 инкапсулированы в чистую функцию repeat.resolveDayForDate(date, templates, lastCyclicTemplateId) — см. §4.4 ТЗ и юнит-тесты в §9. Стор только материализует её результат (плюс ветку «пустой день»).
+Шаги выбора шаблона — чистая функция repeat.resolveDayForDate (ТЗ §4.4, тесты в контрактах §9). Числа 29–31 в коротком месяце не совпадают с monthday и проваливаются дальше по приоритету FR-C-1. Пустой день по FR-D-6 не должен попадать в Dexie до первого размещения или завершения; скаффолд пока сохраняет его сразу.
 
 #### shiftToNextDay() — FR-C-3
 
-- Проверка: canShiftNext.
+- Проверка: canShiftNext (active и manualShiftDate !== сегодня). Иначе Result с CONFLICT.
 
-- Открыть диалог завершения (completing = true), вернуть управление UI.
+- shiftPending = true, completionSource = 'shift', completing = true. Вернуть управление UI. manualShiftDate на этом шаге не писать.
 
-- После подтверждения (completeDay) → cycleState.manualShiftDate = today.
-
-- Вычислить следующий день:
-
-- Если есть календарный шаблон на завтра — использовать его.
-
-- Иначе — следующий циклический.
-
-- Материализовать.
+- Материализация следующего экземпляра выполняется внутри completeDay, пока shiftPending истинен. Отдельного продолжения после возврата из shiftToNextDay нет.
 
 #### completeDay(marks)
 
-- Для каждого Placement:
+- Для каждого Placement: marks[id] === 'done' → done, иначе (в том числе отсутствует и ошибочный 'pending') → skipped.
 
-- marks[id] === 'done' → status = 'done'
+- status = 'completed', completedAt = now. activeInstanceId пока остаётся на этом экземпляре.
 
-- marks[id] === 'skipped' → status = 'skipped'
+- Снапшоты сессии до мутации: lastCompletedInstanceId, placementsSnapshot, lastCyclicTemplateIdSnapshot, manualShiftDateSnapshot.
 
-- отсутствует → status = 'skipped' (по умолчанию)
+- Транзакция: записать экземпляр. Если шаблон циклический — обновить lastCyclicTemplateId и в БД, и в памяти cycleState. manualShiftDate не очищать.
 
-- 'pending' в marks не приходит (см. сигнатуру); если пришёл по ошибке — трактуется как 'skipped'
+- Если shiftPending (кнопка сдвига или autoShiftAtMidnight): записать manualShiftDate = сегодня; шаблон следующего экземпляра — resolveDayForDate(завтра, templates, уже продвинутый lastCyclicTemplateId); date нового экземпляра = сегодня; он становится currentInstance и activeInstanceId; id сохранить в shiftedInstanceId. Если шаблона нет — пустой день на дату сдвига.
 
-- currentInstance.status = 'completed', completedAt = now.
+- Если shiftPending ложен: currentInstance остаётся завершённым экземпляром. Новый экземпляр не создаётся.
 
-- Транзакция: bulk-update placements + update dayInstance + update cycleState.lastCyclicTemplateId (если template был циклическим) + очистить manualShiftDate.
+- shiftPending = false, completionSource = null, completing = false только в успешной ветке.
 
-- Сохранить lastCompletedInstanceId = inst.id и placementsSnapshot = структурную копию inst.placements (до мутации статусов) для cancelCompletion.
+- При ошибке БД откатить статусы и снапшоты. completing не сбрасывать: диалог остаётся, пользователь может повторить. shifted-экземпляр, если транзакция откатилась, не оставлять.
 
-- statsStore.aggregate() — пересчёт (или liveQuery сам подтянет).
-
-- currentInstance = null.
-
-- completing = false (диалог завершения закрывается).
+- Пересчёт статистики — statsStore.recompute() (или liveQuery, когда подписка появится). Имени aggregate() у стора нет.
 
 #### cancelCompletion() — FR-E-3
 
-- Проверка: lastCompletedInstanceId в памяти сессии.
+- Проверка: lastCompletedInstanceId и placementsSnapshot в памяти сессии.
 
-- Вернуть экземпляр в status = 'active', completedAt = null.
+- Вернуть тот экземпляр в status = 'active', убрать completedAt, восстановить placements.
 
-- Восстановить placements из placementsSnapshot (снапшот в памяти на момент completeDay).
+- cycleState.activeInstanceId = восстановленный id, currentInstance = он.
 
-- cycleState.activeInstanceId = restored.id.
+- lastCyclicTemplateId вернуть из lastCyclicTemplateIdSnapshot (и в БД, и в памяти).
 
-- Восстановить cycleState.lastCyclicTemplateId из lastCyclicTemplateIdSnapshot (completeDay мог продвинуть указатель циклического шаблона).
+- manualShiftDate вернуть из manualShiftDateSnapshot.
 
-- Сбросить lastCompletedInstanceId = null, placementsSnapshot = null и lastCyclicTemplateIdSnapshot = null (повторная отмена невозможна, новая completeDay перезапишет все три).
+- Если shiftedInstanceId задан — удалить этот экземпляр из БД (он создан тем же завершением и размещений не накопил).
 
-- Доступно только в текущей сессии (после перезагрузки lastCompletedInstanceId сбрасывается).
+- Сбросить lastCompletedInstanceId, placementsSnapshot, lastCyclicTemplateIdSnapshot, manualShiftDateSnapshot, shiftedInstanceId. Повторная отмена невозможна.
 
-#### checkDayChange() — FR-C-4 (описание логики — выше, в начале §3.4)
+- completing = false. Доступно только в текущей сессии.
+
+#### dismissCompletion()
+
+- completing = false, shiftPending = false.
+
+- Если completionSource === 'auto' — skippedAutoPromptDate = сегодняшняя локальная дата (format(new Date())). Настройку askToCompleteOnNewDay не менять.
+
+- completionSource = null.
 
 #### startCompletion() — FR-E-1
 
-- Ручное открытие диалога завершения кнопкой «Завершить день»: `completing = true`, если есть currentInstance.
+- Если currentInstance в статусе active: completionSource = 'manual', completing = true.
 
-- Альтернатива для UI — писать `cycle.completing = true` напрямую, но action предпочтительнее (одно место для guard-условий).
-
-- Закрытие диалога без подтверждения (кнопка «Вернуться к дню») выставляет `completing = false` на стороне UI (`v-model` на диалоге); `completeDay` и `cancelCompletion` делают это сами.
+- Закрытие без подтверждения идёт через dismissCompletion, а не прямой записью в completing. completeDay и cancelCompletion сами ставят completing = false в успешной ветке. Откат completeDay после ошибки БД completing не трогает.
 
 #### skipPendingPlacementsForTask(taskId)
 
@@ -1804,11 +1846,11 @@ date = today (ISO)
 
 - Найти задачу в tasksStore.taskById.
 
-- Проверка: startMin % 15 === 0, startMin >= 0.
+- Границы дня — timeStart/timeEnd текущего экземпляра. scheduler.fitInDay(placement, instance) отвечает, помещается ли дело.
 
-- Проверка: startMin + durationMin <= (timeEnd - timeStart).
+- Если startMin передан и кратен 15, не меньше 0, и дело помещается до timeEnd — записать этот startMin.
 
-- Если не помещается → разместить в unallocatedPlacements (по FR-B-4).
+- Если не помещается или слот не задан — startMin = null (нераспределённое, FR-B-4). Это не ошибка валидации и не отрицательное число.
 
 - Создать Placement со снимком:
 
@@ -1834,19 +1876,20 @@ date = today (ISO)
 
 | Action | Side effect |
 | --- | --- |
-| initialize | Подписка liveQuery на dayInstances и cycleState; подписка на emitter архивации (onTaskArchived) |
-| completeDay | Закрывает диалог (completing = false); при cancelCompletion — восстанавливает экземпляр |
-| cancelCompletion | Возвращает экземпляр из completed в active, восстанавливает placementsSnapshot и lastCyclicTemplateId |
+| initialize | Подписка на emitter архивации (onTaskArchived). liveQuery — когда появится в скаффолде |
+| completeDay | В успехе закрывает диалог. Завершённый экземпляр остаётся текущим, если это не сдвиг. Сдвиг пишет manualShiftDate и подменяет currentInstance. Откат БД диалог не закрывает |
+| cancelCompletion | Возвращает экземпляр в active, восстанавливает placements, lastCyclicTemplateId и manualShiftDate, удаляет экземпляр сдвига |
+| dismissCompletion | Закрывает диалог без фиксации. Для авто-триггера ставит skippedAutoPromptDate |
 | placeTask | Триггерит пересчёт conflicts (через getter) |
-| shiftToNextDay | Устанавливает manualShiftDate |
-| startCompletion | Открывает диалог завершения вручную (FR-E-1) |
-| skipPendingPlacementsForTask | Побочный эффект FR-T-3: pending-размещения архивного дела → skipped |
+| shiftToNextDay | Только shiftPending и диалог. manualShiftDate пишет последующий completeDay |
+| startCompletion | Открывает диалог завершения вручную (FR-E-1), source = manual |
+| skipPendingPlacementsForTask | Побочный эффект FR-T-3: pending-размещения архивного дела → skipped. done не меняется |
 | dispose | Снимает подписку на emitter архивации |
-| checkDayChange (вызывается из App.vue) | Проверяет смену суток, если дата изменилась — открывает диалог завершения |
+| checkDayChange | Смена даты: авто-сдвиг, либо диалог, либо тишина — по настройкам ТЗ §2.7 |
 
 ### 3.6 Взаимодействие
 
-- Читает: tasksStore, daysStore, settingsStore (askToCompleteOnNewDay).
+- Читает: tasksStore, daysStore, settingsStore (askToCompleteOnNewDay, autoShiftAtMidnight).
 
 - Пишет: db.dayInstances, db.cycleState.
 
@@ -1900,7 +1943,7 @@ interface OverallStats {
 interface PlacementHistoryEntry {
   instanceId: string;
   date: string;         // ISO
-  startMin: number;
+  startMin: number | null;
   durationMin: number;
   status: PlacementStatus;
   completedAt?: number;
@@ -1955,7 +1998,7 @@ const instances = await db.dayInstances
 
 ### 4.6 Взаимодействие
 
-- Читает: db.dayInstances напрямую (без других сторов — см. §7).
+- Читает: db.dayInstances напрямую (без других сторов — см. контракты §7).
 
 - Используется: StatsPage, TaskStatsPage.
 
@@ -1972,12 +2015,12 @@ interface SettingsState {
   askToCompleteOnNewDay: Ref<boolean>;    // persist, default true
   autoShiftAtMidnight: Ref<boolean>;      // persist, default false
   showConflicts: Ref<boolean>;            // persist, default true
-  firstDayOfWeek: Ref<0 | 1>;             // persist, 0 = Пн (default)
+  firstDayOfWeek: Ref<0 | 1>;             // persist, 0 = понедельник (default), 1 = воскресенье. Только UI; RepeatRule.weekdays не сдвигает
   lastBackupAt: Ref<string | null>;       // persist ISO
 }
 ```
 
-Все поля — через useStorage('tododay:<key>', default, localStorage) (ключи: tododay:theme, tododay:language, tododay:timeFormat, tododay:askOnNewDay, tododay:autoShift, tododay:showConflicts, tododay:firstDayOfWeek, tododay:lastBackupAt). Настройки в IndexedDB не хранятся — см. §3.2 ТЗ.
+Все поля — через useStorage('tododay:<key>', default, localStorage) (ключи: tododay:theme, tododay:language, tododay:timeFormat, tododay:askOnNewDay, tododay:autoShift, tododay:showConflicts, tododay:firstDayOfWeek, tododay:lastBackupAt). Настройки в IndexedDB не хранятся — см. ТЗ §3.2. Имя поля и суффикс ключа не совпадают один в один: askToCompleteOnNewDay хранится как tododay:askOnNewDay, autoShiftAtMidnight — как tododay:autoShift.
 
 ### 5.2 Getters
 
@@ -2114,7 +2157,7 @@ notify оборачивает Quasar Notify.
 
 - useTasksStore не знает о useStatsStore (и вообще о статистике).
 
-- useCycleStore зависит от tasksStore и daysStore, а также читает настройку askToCompleteOnNewDay из settingsStore (в checkDayChange) и подписывается на emitter архивации из tasksStore.
+- useCycleStore зависит от tasksStore и daysStore, читает askToCompleteOnNewDay и autoShiftAtMidnight из settingsStore (в checkDayChange) и подписывается на emitter архивации из tasksStore.
 
 - useStatsStore читает БД напрямую, не зависит от cycleStore/tasksStore/daysStore (чтобы не плодить циклы). На диаграмме выше к useStats ведёт стрелка от IndexedDB, а не от сторов.
 
@@ -2124,13 +2167,13 @@ notify оборачивает Quasar Notify.
 Порядок инициализации в App.vue (onMounted):
 
 ```
-1. settingsStore (sync, из localStorage)
-2. tasksStore.loadAll()
-3. daysStore.loadAll()
-4. cycleStore.initialize()   (внутри сам вызывает loadAll обоих сторов)
-5. statsStore.recompute()   (lazy — на странице статистики; initialize в контракте §4.3 = подписка + первый recompute)
-6. uiStore (listeners: online/offline, visibilitychange), cycleStore.checkDayChange()
+1. settingsStore.setTheme(settings.theme)   // sync, из localStorage
+2. cycleStore.initialize()                  // сам вызывает tasks.loadAll() и days.loadAll(), в конце checkDayChange()
+3. statsStore.recompute()                   // lazy, на странице статистики
+4. uiStore: слушатели online/offline и visibilitychange; таймер полуночи вызывает cycleStore.checkDayChange()
 ```
+
+Повторный loadAll снаружи initialize не нужен: App.vue вызывает только cycle.initialize().
 
 ## 8. Полный список действий по FR (трассируемость)
 
@@ -2150,14 +2193,14 @@ notify оборачивает Quasar Notify.
 | FR-C-1 | cycleStore.resolveCurrentDay + repeat.resolveDayForDate |
 | FR-C-2 | cycleStore.resolveCurrentDay + repeat.resolveDayForDate (ветка циклическая) |
 | FR-C-3 | cycleStore.shiftToNextDay |
-| FR-C-4 | cycleStore.checkDayChange (вызывается из App.vue: старт, visibilitychange, таймер до полуночи) |
+| FR-C-4 | cycleStore.checkDayChange (initialize, visibilitychange, таймер полуночи, смена currentDate) |
 | FR-C-5 | cycleStore.cycleState |
 | FR-B-2 | cycleStore.placeTask/movePlacement |
 | FR-B-3 | cycleStore.conflicts (getter) |
 | FR-B-4 | cycleStore.placeTask (ветка «не помещается») |
 | FR-B-5 | cycleStore.unallocatedPlacements |
 | FR-B-6 | cycleStore.setPlacementStatus |
-| FR-E-1 | cycleStore.startCompletion (ручная кнопка) / shiftToNextDay / checkDayChange → completing = true |
+| FR-E-1 | startCompletion / shiftToNextDay / checkDayChange → completing; закрытие без фиксации — dismissCompletion |
 | FR-E-2 | cycleStore.completeDay |
 | FR-E-3 | cycleStore.cancelCompletion |
 | FR-E-4 | — (не реализуется) |
@@ -2165,7 +2208,7 @@ notify оборачивает Quasar Notify.
 | FR-S-2 | statsStore.visibleTaskStats |
 | FR-S-3 | statsStore.setPeriod |
 | FR-S-4 | statsStore.loadTaskHistory |
-| FR-SET-1..5 | settingsStore.* |
+| FR-SET-1..9 | settingsStore.* |
 
 ## 9. Тестирование
 Юнит-тесты (Vitest) для каждой чистой функции:
@@ -2180,12 +2223,14 @@ notify оборачивает Quasar Notify.
 
 - aggregateStats — границы периодов, отсутствие данных, деление на ноль.
 
-- fitInDay — ровно в притык / на 15 мин больше / отрицательный старт.
+- fitInDay(placement, instance) — ровно в притык по границам экземпляра / на 15 мин больше / startMin === null.
 Интеграционные тесты сторов:
 
 - cycleStore.completeDay → статистика обновилась.
 
-- cycleStore.shiftToNextDay → manualShiftDate установлен, следующий день материализован.
+- cycleStore.shiftToNextDay + completeDay → manualShiftDate равен сегодня, новый экземпляр с date = сегодня, повторный сдвиг в те же сутки недоступен.
+
+- Повторный initialize в ту же дату не создаёт второй экземпляр.
 
 - tasksStore.archiveTask → активный placement переведён в skipped.
 
@@ -2645,7 +2690,7 @@ import type { TaskSnapshot } from './task'
 export interface Placement {
   id: string
   taskId: string
-  startMin: number
+  startMin: number | null   // null — нераспределённое (FR-B-4)
   durationMin: number
   status: PlacementStatus
   placedAt: number
@@ -2678,9 +2723,9 @@ export interface CycleStateDto {
 export interface Slot {
   index: number
   startMin: number
-  label: string
-  isHour: boolean
-  isHalfHour: boolean
+  label: string          // часы на циферблате, не startMin % 60
+  isHour: boolean        // минуты подписи === 0
+  isHalfHour: boolean    // минуты подписи === 30
 }
 
 export interface Conflict {
@@ -2754,15 +2799,15 @@ export default defineBoot(async () => {
 | Стор | Есть в контракте, но нет в скаффолде |
 | --- | --- |
 | useTasksStore | subscribe, unsubscribe, refresh, isTitleTaken, tasksByPriority, totalCount / activeCount / archivedCount; TaskSortField объявлен инлайн (в контракте §1.1 — отдельный тип) |
-| useDaysStore | moveToPosition, validateNoOverlap (публичный), subscribe, unsubscribe, hasConflicts, templatesCount, calendarTemplates, lastValidationErrors, sortMode; createTemplate / updateTemplate / deleteTemplate / reorder не обёрнуты в try/catch, хотя §0.1 требует возвращать Result вместо исключений |
-| useCycleStore | resetCurrentDay, replacePlacement, changePlacementDuration, dayProgress (placeTask / movePlacement / removePlacement / setPlacementStatus — заглушки, возвращают err('UNKNOWN')); нет подписки liveQuery из §3.4/§3.5; shiftToNextDay только открывает диалог — manualShiftDate не пишется и следующий день после completeDay не материализуется (FR-C-3) |
+| useDaysStore | moveToPosition, validateNoOverlap (публичный), subscribe, unsubscribe, hasConflicts, templatesCount, calendarTemplates, lastValidationErrors, sortMode; createTemplate / updateTemplate / deleteTemplate / reorder не обёрнуты в try/catch, хотя контракты §0.1 требуют возвращать Result вместо исключений. createTemplate / updateTemplate не проверяют длину имени (1–50), timeEnd > timeStart и непустое правило weekdays/monthdays (контракты §2.5) |
+| useCycleStore | resetCurrentDay, replacePlacement, changePlacementDuration, dayProgress (placeTask / movePlacement / removePlacement / setPlacementStatus — заглушки, возвращают err('UNKNOWN')); нет подписки liveQuery из контрактов §3.4/§3.5. Сдвиг, удержание завершённого дня и checkDayChange в этом скаффолде уже соответствуют ТЗ FR-C-3/FR-C-4/FR-E-2 |
 | useStatsStore | initialize, subscribe, unsubscribe, setSort, sortBy, sortOrder, history, topTasks, worstTasks, taskStatsById |
-| useSettingsStore | exportAll, importAll, clearAll, lastBackupAt, toggleAskOnNewDay, toggleAutoShift; setLanguage не переключает локаль i18n (нужен экспорт инстанса из src/boot/i18n.ts); autoShiftAtMidnight / showConflicts / firstDayOfWeek нигде не используются |
+| useSettingsStore | exportAll, importAll, clearAll, lastBackupAt, toggleAskOnNewDay, toggleAutoShift; setLanguage не переключает локаль i18n (нужен экспорт инстанса из src/boot/i18n.ts). autoShiftAtMidnight читает checkDayChange. showConflicts и firstDayOfWeek в сторе есть, экраны их ещё не рисуют |
 | useDaysStore (типы) | Контракт §2.1 объявляет ValidationIssue { code, message, conflictingTemplateIds }, а скаффолд repeat.ts возвращает OverlapIssue { code, templateId, values }. При доработке вернуть ValidationIssue из контракта |
-| scheduler | fitInDay не реализован (нужен для FR-B-4), хотя объявлен в §4.4 ТЗ и в плане тестов §9 |
+| scheduler | fitInDay(placement, instance) не реализован (FR-B-4). Объявлен в ТЗ §4.4 и в плане тестов контрактов §9. detectConflicts пропускает размещения с startMin === null |
 | tasks (правила) | FR-T-2 (заморозка durationMin при активных размещениях) и FR-D-6 (пустой день не сохраняется, пока в него не положили дело) в скаффолде не реализованы |
-| Placement (модель) | unallocatedPlacements фильтрует `startMin < 0`, но отрицательный startMin нигде не задокументирован (§4.4 ТЗ требует startMin >= 0 и кратность 15). Нужен явный признак (unallocated: true или slotIndex: null) — решение за разработчиком |
-| i18n | нет раздела settings.*, хотя SettingsPage есть и §7 ТЗ требует все строки через vue-i18n |
+| Placement (модель) | Нераспределённое размещение — startMin === null (ТЗ FR-B-4, контракты §3.4 placeTask). Отрицательный startMin не используется. placeTask в скаффолде по-прежнему заглушка и этот признак сам не выставляет |
+| i18n | нет раздела settings.*, хотя SettingsPage есть и ТЗ §7 требует все строки через vue-i18n |
 
 Всё перечисленное нужно добавить при переработке соответствующего модуля; имена и типы берутся из контрактов (раздел «Контракты сторов Pinia» — источник истины).
 
@@ -3128,9 +3173,9 @@ export const useDaysStore = defineStore('days', () => {
 
 ```
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useNow } from '@vueuse/core'
-import { format } from 'date-fns'
+import { addDays, format } from 'date-fns'
 import { db } from 'src/services/db'
 import { resolveDayForDate } from 'src/services/repeat'
 import type { DayInstance, Placement, CycleStateDto } from 'src/models/dayInstance'
@@ -3152,6 +3197,18 @@ export const useCycleStore = defineStore('cycle', () => {
   const lastCompletedInstanceId = ref<string | null>(null)
   const placementsSnapshot = ref<Placement[] | null>(null)
   const lastCyclicTemplateIdSnapshot = ref<string | null>(null)
+  const manualShiftDateSnapshot = ref<string | null>(null)
+  const shiftedInstanceId = ref<string | null>(null)
+  const shiftPending = ref(false)
+  const completionSource = ref<'manual' | 'auto' | 'shift' | null>(null)
+  const skippedAutoPromptDate = ref<string | null>(null)
+  const dayChangeInFlight = ref(false)
+
+  // Свежая локальная дата. currentDate ниже тикает раз в минуту и для проверки
+  // полуночи опаздывает — FR-C-4 читает todayISO().
+  function todayISO(): string {
+    return format(new Date(), 'yyyy-MM-dd')
+  }
 
   const draggingTaskId = ref<string | null>(null)
   const dragSource = ref<'list' | 'board' | null>(null)
@@ -3159,8 +3216,8 @@ export const useCycleStore = defineStore('cycle', () => {
 
   let unsubscribeArchived: (() => void) | null = null
 
-  // useNow даёт реактивный тик (раз в минуту) — иначе computed без зависимостей
-  // закэшировался бы навсегда и автопереход в 00:00 (FR-C-4) не сработал бы.
+  // Подписи UI. Проверка смены даты — в checkDayChange через todayISO(),
+  // плюс watch ниже: когда минутный тик наконец сменит строку даты.
   const now = useNow({ interval: 60_000 })
 
   // Локальная дата. Важно: new Date().toISOString() даёт UTC-дату и в UTC+3
@@ -3191,7 +3248,7 @@ export const useCycleStore = defineStore('cycle', () => {
         index: i,
         startMin: i * 15,
         label: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
-        isHour: m === 0,
+        isHour: m === 0,          // минуты циферблата, не startMin % 60
         isHalfHour: m === 30,
       }
     })
@@ -3200,6 +3257,7 @@ export const useCycleStore = defineStore('cycle', () => {
   const placementsBySlot = computed(() => {
     const map = new Map<number, Placement[]>()
     for (const p of currentInstance.value?.placements ?? []) {
+      if (p.startMin === null) continue
       const arr = map.get(p.startMin) ?? []
       arr.push(p)
       map.set(p.startMin, arr)
@@ -3215,14 +3273,16 @@ export const useCycleStore = defineStore('cycle', () => {
   const hasConflicts = computed(() => conflicts.value.length > 0)
 
   const unallocatedPlacements = computed(() =>
-    (currentInstance.value?.placements ?? []).filter(p => p.startMin < 0),
+    (currentInstance.value?.placements ?? []).filter(p => p.startMin === null),
   )
 
-  const canShiftNext = computed(() =>
-    currentInstance.value?.status === 'active',
-  )
+  const canShiftNext = computed(() => {
+    void now.value // пересчёт раз в минуту; сама дата — из todayISO(), не из кэша подписи
+    return currentInstance.value?.status === 'active' &&
+      cycleState.value?.manualShiftDate !== todayISO()
+  })
 
-  const canComplete = computed(() => canShiftNext.value)
+  const canComplete = computed(() => currentInstance.value?.status === 'active')
 
   async function initialize(): Promise<Result<void>> {
     loading.value = true
@@ -3238,13 +3298,20 @@ export const useCycleStore = defineStore('cycle', () => {
       }
 
       const cs = await db.cycleState.get('current')
-      if (!cs) return err('DB_ERROR', 'CycleState не инициализирован')
+      if (!cs) return err('DB_ERROR', 'CycleStateDto не инициализирован')
       cycleState.value = cs
 
       if (cs.activeInstanceId) {
         currentInstance.value = (await db.dayInstances.get(cs.activeInstanceId)) ?? null
       }
-      if (!currentInstance.value) {
+      const today = todayISO()
+      const inst = currentInstance.value
+      // Ту же дату не материализуем повторно. Незавершённый вчерашний день
+      // тоже оставляем: его закроет диалог или авто-сдвиг, а не новый экземпляр.
+      const keep =
+        inst != null &&
+        (inst.date === today || (inst.status === 'active' && inst.date < today))
+      if (!keep) {
         const resolved = await resolveCurrentDay()
         if (!resolved.ok) {
           return err(resolved.error.code, resolved.error.message, resolved.error.details)
@@ -3261,11 +3328,12 @@ export const useCycleStore = defineStore('cycle', () => {
   }
 
   async function resolveCurrentDay(): Promise<Result<DayInstance>> {
-    const days = useDaysStore()
-    const today = currentDate.value   // локальная дата, не UTC
+    const today = todayISO()
+    if (currentInstance.value?.date === today) return ok(currentInstance.value)
 
-    // FR-C-1: приоритет месяц → день недели → следующий циклический → пустой день.
-    // Логика выбора — в чистой функции repeat.resolveDayForDate (юнит-тесты в §9 ТЗ).
+    const days = useDaysStore()
+    // FR-C-1. Выбор шаблона — repeat.resolveDayForDate (тесты в контрактах §9).
+    // Пустой день скаффолд пока пишет в Dexie сразу — это расхождение с FR-D-6.
     const tpl = resolveDayForDate(
       today,
       days.orderedTemplates,
@@ -3291,56 +3359,90 @@ export const useCycleStore = defineStore('cycle', () => {
     return ok(inst)
   }
 
+  function buildShiftedInstance(today: string, nextLastCyclicId: string | null): DayInstance {
+    const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd')
+    const tpl = resolveDayForDate(tomorrow, useDaysStore().orderedTemplates, nextLastCyclicId)
+    return {
+      id: crypto.randomUUID(),
+      templateId: tpl?.id ?? null,
+      date: today,
+      status: 'active',
+      placements: [],
+      timeStart: tpl?.timeStart ?? '08:00',
+      timeEnd: tpl?.timeEnd ?? '22:00',
+      createdAt: Date.now(),
+    }
+  }
+
   async function completeDay(
     marks: Record<string, 'done' | 'skipped'>,
   ): Promise<Result<void>> {
     const inst = currentInstance.value
-    if (!inst) return err('NOT_FOUND', 'Нет активного дня')
+    if (!inst || inst.status !== 'active') return err('NOT_FOUND', 'Нет активного дня')
 
-    // Снапшот для отмены завершения (FR-E-3) — до мутации статусов
+    const wasShift = shiftPending.value
+    const today = todayISO()
+    const prevLast = cycleState.value?.lastCyclicTemplateId ?? null
+    const prevManual = cycleState.value?.manualShiftDate ?? null
+
     lastCompletedInstanceId.value = inst.id
-    placementsSnapshot.value = inst.placements.map(p => ({ ...p }))
-    lastCyclicTemplateIdSnapshot.value = cycleState.value?.lastCyclicTemplateId ?? null
+    placementsSnapshot.value = inst.placements.map(p => ({ ...p, taskSnapshot: { ...p.taskSnapshot } }))
+    lastCyclicTemplateIdSnapshot.value = prevLast
+    manualShiftDateSnapshot.value = prevManual
 
     for (const p of inst.placements) {
-      // FR-E-2: всё, что не отмечено 'done', становится 'skipped'
       p.status = marks[p.id] === 'done' ? 'done' : 'skipped'
     }
     inst.status = 'completed'
     inst.completedAt = Date.now()
 
+    const finishedTemplate = inst.templateId
+      ? useDaysStore().templateById(inst.templateId)
+      : undefined
+    const nextLast = finishedTemplate?.repeatRule.type === 'none'
+      ? inst.templateId
+      : prevLast
+    const shifted = wasShift ? buildShiftedInstance(today, nextLast) : null
+
     try {
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
         await db.dayInstances.put(inst)
-        if (inst.templateId) {
-          const tpl = useDaysStore().templateById(inst.templateId)
-          if (tpl?.repeatRule.type === 'none') {
-            await db.cycleState.update('current', {
-              lastCyclicTemplateId: inst.templateId,
-              activeInstanceId: null,
-              manualShiftDate: null,
-            })
-          } else {
-            await db.cycleState.update('current', { activeInstanceId: null })
-          }
-        } else {
-          await db.cycleState.update('current', { activeInstanceId: null })
+        const patch: Partial<CycleStateDto> = {}
+        if (nextLast !== prevLast && nextLast) patch.lastCyclicTemplateId = nextLast
+        if (shifted) {
+          await db.dayInstances.add(shifted)
+          patch.manualShiftDate = today
+          patch.activeInstanceId = shifted.id
         }
+        if (Object.keys(patch).length) await db.cycleState.update('current', patch)
       })
     } catch (e) {
-      // откат оптимистичных изменений, чтобы память совпадала с БД
       inst.status = 'active'
       delete inst.completedAt
-      inst.placements = placementsSnapshot.value?.map(p => ({ ...p })) ?? inst.placements
+      inst.placements = placementsSnapshot.value?.map(p => ({ ...p, taskSnapshot: { ...p.taskSnapshot } })) ?? inst.placements
       lastCompletedInstanceId.value = null
       placementsSnapshot.value = null
       lastCyclicTemplateIdSnapshot.value = null
+      manualShiftDateSnapshot.value = null
+      shiftedInstanceId.value = null
+      // Диалог не закрываем: пользователь может повторить подтверждение.
       return err('DB_ERROR', 'Не удалось завершить день', e)
     }
 
-    if (cycleState.value) cycleState.value.activeInstanceId = null
-    currentInstance.value = null
-    completing.value = false          // диалог завершения закрывается
+    if (cycleState.value) {
+      if (nextLast !== prevLast) cycleState.value.lastCyclicTemplateId = nextLast
+      if (shifted) {
+        cycleState.value.manualShiftDate = today
+        cycleState.value.activeInstanceId = shifted.id
+      }
+    }
+    if (shifted) {
+      currentInstance.value = shifted
+      shiftedInstanceId.value = shifted.id
+    }
+    shiftPending.value = false
+    completionSource.value = null
+    completing.value = false
     return ok(undefined)
   }
 
@@ -3358,12 +3460,14 @@ export const useCycleStore = defineStore('cycle', () => {
       delete inst.completedAt
       inst.placements = snapshot.map(p => ({ ...p }))
 
+      const shiftedId = shiftedInstanceId.value
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
         await db.dayInstances.put(inst)
+        if (shiftedId) await db.dayInstances.delete(shiftedId)
         await db.cycleState.update('current', {
           activeInstanceId: inst.id,
-          // completeDay мог продвинуть указатель цикла — возвращаем прежнее значение
           lastCyclicTemplateId: lastCyclicTemplateIdSnapshot.value,
+          manualShiftDate: manualShiftDateSnapshot.value,
         })
       })
 
@@ -3371,10 +3475,15 @@ export const useCycleStore = defineStore('cycle', () => {
       if (cycleState.value) {
         cycleState.value.activeInstanceId = inst.id
         cycleState.value.lastCyclicTemplateId = lastCyclicTemplateIdSnapshot.value
+        cycleState.value.manualShiftDate = manualShiftDateSnapshot.value
       }
       lastCompletedInstanceId.value = null
       placementsSnapshot.value = null
       lastCyclicTemplateIdSnapshot.value = null
+      manualShiftDateSnapshot.value = null
+      shiftedInstanceId.value = null
+      shiftPending.value = false
+      completionSource.value = null
       completing.value = false
       return ok(undefined)
     } catch (e) {
@@ -3382,18 +3491,40 @@ export const useCycleStore = defineStore('cycle', () => {
     }
   }
 
-  // FR-E-1: ручное открытие диалога завершения (кнопка «Завершить день»)
   function startCompletion(): void {
-    if (!currentInstance.value) return
+    if (currentInstance.value?.status !== 'active') return
+    completionSource.value = 'manual'
     completing.value = true
   }
 
-  // FR-C-4: автопереход. Вызывается из App.vue (старт, visibilitychange, таймер до полуночи)
+  function dismissCompletion(): void {
+    if (completionSource.value === 'auto') skippedAutoPromptDate.value = todayISO()
+    completing.value = false
+    shiftPending.value = false
+    completionSource.value = null
+  }
+
+  // FR-C-4. «Сегодня» — todayISO(), не кэш useNow.
   function checkDayChange(): void {
     const inst = currentInstance.value
+    const today = todayISO()
     if (!inst || inst.status !== 'active') return
-    if (inst.date >= currentDate.value) return
-    if (!useSettingsStore().askToCompleteOnNewDay) return
+    if (inst.date >= today) return
+    if (skippedAutoPromptDate.value === today) return
+    if (dayChangeInFlight.value) return
+    const settings = useSettingsStore()
+    if (settings.autoShiftAtMidnight) {
+      dayChangeInFlight.value = true
+      shiftPending.value = true
+      completionSource.value = 'shift'
+      const marks: Record<string, 'skipped'> = {}
+      for (const p of inst.placements) marks[p.id] = 'skipped'
+      void completeDay(marks).finally(() => { dayChangeInFlight.value = false })
+      return
+    }
+    if (!settings.askToCompleteOnNewDay) return
+    if (completing.value) return
+    completionSource.value = 'auto'
     completing.value = true
   }
 
@@ -3410,7 +3541,12 @@ export const useCycleStore = defineStore('cycle', () => {
   }
 
   async function shiftToNextDay(): Promise<Result<void>> {
-    if (!canShiftNext.value) return err('CONFLICT', 'День уже завершён')
+    if (currentInstance.value?.status !== 'active') return err('CONFLICT', 'День уже завершён')
+    if (cycleState.value?.manualShiftDate === todayISO()) {
+      return err('CONFLICT', 'Сдвиг в эти сутки уже выполнен')
+    }
+    shiftPending.value = true
+    completionSource.value = 'shift'
     completing.value = true
     return ok(undefined)
   }
@@ -3449,13 +3585,20 @@ export const useCycleStore = defineStore('cycle', () => {
     unsubscribeArchived = null
   }
 
+  watch(currentDate, () => {
+    if (!initialized.value) return
+    checkDayChange()
+  })
+
   return {
     currentInstance, cycleState, completing, loading, initialized,
-    lastCompletedInstanceId, placementsSnapshot,
+    lastCompletedInstanceId, placementsSnapshot, shiftedInstanceId,
+    shiftPending, completionSource, skippedAutoPromptDate,
     draggingTaskId, dragSource, hoveredSlot,
     currentDate, currentTemplate, isCurrentDayEmpty, slots, placementsBySlot,
     conflicts, hasConflicts, unallocatedPlacements, canShiftNext, canComplete,
-    initialize, resolveCurrentDay, completeDay, cancelCompletion, checkDayChange, startCompletion,
+    initialize, resolveCurrentDay, completeDay, cancelCompletion, checkDayChange,
+    startCompletion, dismissCompletion,
     skipPendingPlacementsForTask, shiftToNextDay, dispose,
     placeTask, movePlacement, removePlacement, setPlacementStatus,
     startDrag, setHoveredSlot, endDrag,
@@ -3484,7 +3627,7 @@ export type { StatsPeriod }
 export const useStatsStore = defineStore('stats', () => {
   const taskStats = ref<Map<string, TaskStats>>(new Map())
   const overallStats = ref<OverallStats | null>(null)
-  const period = ref<StatsPeriod>('7d')
+  const period = ref<StatsPeriod>('all')
   const loading = ref(false)
   const initialized = ref(false)
 
@@ -3571,7 +3714,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const askToCompleteOnNewDay = useStorage<boolean>('tododay:askOnNewDay', true)
   const autoShiftAtMidnight = useStorage<boolean>('tododay:autoShift', false)
   const showConflicts = useStorage<boolean>('tododay:showConflicts', true)
-  const firstDayOfWeek = useStorage<0 | 1>('tododay:firstDayOfWeek', 0)
+  const firstDayOfWeek = useStorage<0 | 1>('tododay:firstDayOfWeek', 0) // 0 = Пн, 1 = Вс; RepeatRule не сдвигает
 
   const effectiveTheme = computed<'light' | 'dark'>(() => {
     if (theme.value === 'auto') {
@@ -3816,7 +3959,7 @@ export interface OverallStats {
 export interface PlacementHistoryEntry {
   instanceId: string
   date: string
-  startMin: number
+  startMin: number | null
   durationMin: number
   status: PlacementStatus
   completedAt?: number
@@ -3916,7 +4059,8 @@ import type { Placement } from 'src/models/dayInstance'
 import type { Conflict } from 'src/models/cycle'
 
 export function detectConflicts(placements: Placement[]): Conflict[] {
-  const sorted = [...placements].sort((a, b) => a.startMin - b.startMin)
+  const sorted = placements.filter((p): p is Placement & { startMin: number } => p.startMin !== null)
+    .sort((a, b) => a.startMin - b.startMin)
   const out: Conflict[] = []
   for (let i = 0; i < sorted.length; i++) {
     for (let j = i + 1; j < sorted.length; j++) {
@@ -4225,8 +4369,10 @@ onMounted(async () => {
   // Инициализация цикла
   await cycle.initialize()
 
-  // FR-C-4: автопереход в 00:00. Проверяем при возврате во вкладку и по таймеру,
-  // который каждый раз переставляется на ближайшую полночь.
+  // FR-C-4: старт уже проверен внутри cycle.initialize(). Здесь — возврат во вкладку
+  // и таймер на 00:00:05. checkDayChange сам берёт todayISO() из new Date(),
+  // поэтому минутный useNow к этому таймеру не привязан. Смена currentDate
+  // дополнительно будит проверку из стора.
   let midnightTimer: ReturnType<typeof setTimeout> | undefined
 
   function scheduleMidnightCheck() {
@@ -4263,9 +4409,9 @@ onMounted(async () => {
 | --- | --- |
 | Доработать cycle.placeTask / movePlacement / removePlacement / setPlacementStatus | src/stores/cycle.ts |
 | Реализовать detectConflicts в cycle (сервис уже есть) | src/services/scheduler.ts + геттер conflicts |
-| Реализовать scheduler.fitInDay (FR-B-4) | src/services/scheduler.ts |
-| FR-C-3: писать manualShiftDate и материализовать следующий день после completeDay | src/stores/cycle.ts |
-| FR-D-6: не сохранять пустой день, пока в него не положили дело (или явно разрешить сохранение и поправить FR-D-6) | src/stores/cycle.ts |
+| Реализовать scheduler.fitInDay(placement, instance) по границам экземпляра (ТЗ FR-B-4) | src/services/scheduler.ts |
+| FR-D-6: не сохранять пустой день, пока в него не положили дело | src/stores/cycle.ts |
+| Валидация шаблона: имя 1–50, timeEnd > timeStart, непустое правило weekdays/monthdays | src/stores/days.ts |
 | Доделать остаток API сторов из таблицы §6 (tasks: refresh / isTitleTaken / subscribe; days: moveToPosition / validateNoOverlap; cycle: replacePlacement / changePlacementDuration / resetCurrentDay / dayProgress; stats: setSort / topTasks / history; settings: exportAll / importAll / clearAll / lastBackupAt / toggle*) | src/stores/*.ts |
 | Подписки liveQuery (subscribe / unsubscribe) в tasks, days, stats | src/stores/*.ts |
 | Экспорт/импорт данных (§5.4 контрактов) + UI в настройках | src/stores/settings.ts, src/pages/SettingsPage.vue |
@@ -4307,7 +4453,7 @@ pnpm lint
 | 2.3 | quasar.config.ts использует плагин, которого нет в package.json | Плагин убран из `vitePlugins`: локали — .ts-модули, их компилирует штатная сборка vue-i18n для бандлеров, предкомпиляция не нужна. В §3.1 скаффолда добавлено пояснение, когда плагин действительно понадобится и какую ветку версий брать |
 | 2.4 | Скаффолд реализует подмножество контрактов без пометки | В шапке контрактов добавлена явная пометка «полный API — здесь, скаффолд — подмножество»; в §6 скаффолда добавлена таблица «чего нет в скаффолде» по каждому стору; §11 дополнен соответствующими строками |
 | 2.5 | FR-E-3 (отмена завершения) не реализована | В контракте §3.1 добавлены `lastCompletedInstanceId` и `placementsSnapshot`, в §3.4 уточнён алгоритм; в скаффолде реализованы `cancelCompletion()`, снапшот placements в `completeDay()` и откат при ошибке БД |
-| 2.6/2.7 | resolveCurrentDay использует UTC-дату | В скаффолде — `format(new Date(), 'yyyy-MM-dd')` (date-fns), добавлен геттер `currentDate`. Заодно исправлена та же ошибка в `services/stats.ts`: сравнение границ периода по локальной дате вместо `new Date('YYYY-MM-DD')` + `toISOString()` |
+| 2.6/2.7 | resolveCurrentDay использует UTC-дату | В том проходе дата стала локальной: `format(new Date(), 'yyyy-MM-dd')` и геттер `currentDate`. Приложение Б затем перевело `currentDate` на `useNow`. Проверка смены даты, которая читает `new Date()` в момент вызова, — приложение В. В `services/stats.ts` границы периода сравниваются по локальной дате, без `new Date('YYYY-MM-DD')` и `toISOString()` |
 | 2.8 | completeDay пропускает pending | Сигнатура изменена на `Record<string, 'done' \| 'skipped'>` (и в контракте §3.3, и в скаффолде): всё, что не `done`, становится `skipped`; `'pending'` трактуется как `skipped` |
 | 2.9 | aggregateStats считает pending, которых не бывает | Явно задокументировано: при выборке только completed экземпляров pending всегда 0; поле сохранено для случая, когда в агрегацию попадут активные экземпляры. В §4.4 контракта убрана ссылка на несуществующий хелпер `isInPeriod` |
 | 2.10 | isDark дублирует effectiveTheme | Убран из контракта §5.2 и из скаффолда; в UI используется сравнение `effectiveTheme === 'dark'` |
@@ -4332,8 +4478,8 @@ pnpm lint
 
 | Проблема | Как исправлено |
 | --- | --- |
-| `currentDate` — computed без реактивных зависимостей: кэшировался навсегда, автопереход в 00:00 (FR-C-4) не срабатывал | В цикл-сторе добавлен `const now = useNow({ interval: 60_000 })` из @vueuse/core, `currentDate` считается от `now.value` |
-| `completing` никогда не сбрасывался → диалог завершения не закрывался | `completing = false` в успешной и в откатной ветках `completeDay()` и в `cancelCompletion()`; отражено в §3.4 контракта |
+| `currentDate` — computed без реактивных зависимостей: кэшировался навсегда, автопереход в 00:00 (FR-C-4) не срабатывал | В цикл-сторе добавлен `useNow({ interval: 60_000 })`, `currentDate` считается от `now.value`. Минутный кэш всё ещё опаздывает на полночь относительно таймера 00:00:05; это закрыто в приложении В (`todayISO()` внутри `checkDayChange` и `watch(currentDate)`) |
+| `completing` никогда не сбрасывался → диалог завершения не закрывался | `completing = false` в успешной ветке `completeDay()` и в `cancelCompletion()`. В откате после ошибки БД флаг не сбрасывается: диалог остаётся, подтверждение можно повторить. Прежняя редакция этой строки ошибочно относила сброс и к откату |
 | Неиспользуемый импорт `RepeatRule` в скаффолде days.ts при `noUnusedLocals: true` | Импорт убран |
 | `deleteTask` удалял любое дело, хотя контракт разрешает hard delete только из архива | Добавлена проверка `archived` → `CONSTRAINT_VIOLATION` |
 | `duplicateTask` на названии ≥ 93 символов давал VALIDATION_ERROR | База названия обрезается до 100 символов с учётом суффикса « (копия)» |
@@ -4353,21 +4499,36 @@ pnpm lint
 | Дубли объявлений `Priority` / `PlacementStatus` / `InstanceStatus` / `RepeatRuleType` в §3.1 | Добавлен блок `src/models/enums.ts`, модели импортируют типы из него |
 | `// src/types/common.ts` вместо `src/models/common.ts`; опечатки «кратко 60/30»; комментарий `StatsSortField`; `PlacementHistoryEntry.status` как литерал | Исправлено |
 | §2.5 — таблица с пустой 4-й колонкой и примечанием внутри ячейки | Приведена к 3 колонкам, примечание вынесено в текст |
-| Разовый пропуск авто-диалога (FR-E-1) путался с постоянной настройкой `askToCompleteOnNewDay` | Формулировки разведены |
-| Имена счётчиков FR-S-1 не совпадали с `TaskStats` | Добавлена таблица соответствия (totalPlaced→placed и т.д.) |
+| Разовый пропуск авто-диалога (FR-E-1) путался с постоянной настройкой `askToCompleteOnNewDay` | Разведены формулировки FR-E-1. Вайрфрейм диалога в том проходе ещё говорил «Больше не спрашивать» с записью в настройки; это поправлено в приложении В |
+| Имена счётчиков FR-S-1 не совпадали с `TaskStats` | В FR-S-1 добавлен перечень соответствия (totalPlaced → placed и т.д.), не отдельная markdown-таблица |
 | Стрелка useTasksStore → useCycleStore читалась как импорт стора | Под диаграммой §7 добавлено пояснение, что это emitter `onTaskArchived` |
 
 ### Осознанно оставлено как задача (не противоречие, а объём работ)
 
 Эти пункты требуют продуктовых решений или отдельной реализации; они зафиксированы в таблице §6 скаффолда и в §11, чтобы не выглядеть «сломанным скаффолдом»:
 
-- FR-D-6: пустой день сейчас сохраняется в Dexie сразу — нужно либо не сохранять его до первого размещения/завершения, либо переформулировать FR-D-6.
-- FR-C-3: `shiftToNextDay` только открывает диалог; `manualShiftDate` не пишется, следующий день после `completeDay` не материализуется (правило 12 §6 ТЗ не проверяется).
-- `scheduler.fitInDay` (FR-B-4), подписки liveQuery, `resetCurrentDay`, `replacePlacement`, `changePlacementDuration`, `dayProgress` — не реализованы.
-- `unallocatedPlacements` опирается на `startMin < 0`, что не описано в модели Placement и противоречит проверке `startMin >= 0` (§4.4 ТЗ) — нужен явный признак нераспределённого размещения.
-- `setLanguage` не переключает локаль i18n (нужен экспорт инстанса i18n из boot-файла); настройки `autoShiftAtMidnight`, `showConflicts`, `firstDayOfWeek` нигде не используются.
-- `createTemplate` / `updateTemplate` / `deleteTemplate` / `reorder` в days.ts не обёрнуты в try/catch, хотя §0.1 контрактов требует возвращать Result.
-- FR-T-2 (заморозка `durationMin` при активных размещениях) и правило 7 §6 ТЗ («запрещены дубли дат») не обеспечены кодом: уникальности дат нет ни в схеме, ни в материализации сдвинутого дня.
+- FR-D-6: пустой день сейчас сохраняется в Dexie сразу. Требование ТЗ не менялось: не писать экземпляр, пока в день не положили дело или не завершили его.
+- `scheduler.fitInDay(placement, instance)` (ТЗ FR-B-4), подписки liveQuery, `resetCurrentDay`, `replacePlacement`, `changePlacementDuration`, `dayProgress` — не реализованы. `placeTask` остаётся заглушкой.
+- `setLanguage` не переключает локаль i18n. `showConflicts` и `firstDayOfWeek` в сторе есть, экраны их ещё не читают. `autoShiftAtMidnight` читает `checkDayChange` (приложение В).
+- `createTemplate` / `updateTemplate` не проверяют длину имени, диапазон времени и непустое правило; эти actions и `deleteTemplate` / `reorder` не обёрнуты в try/catch, хотя контракты §0.1 требуют Result.
+- FR-T-2 (заморозка `durationMin` при активных размещениях) кодом не обеспечена. Правило 7 ТЗ §6 — это запрет удалять шаблон с активным экземпляром, его как раз проверяет `deleteTemplate`. Уникального индекса `dayInstances.date` нет нарочно: ручной сдвиг создаёт второй экземпляр на ту же календарную дату. Автоматический resolve второй экземпляр на уже текущую дату не создаёт.
 - Нет раздела `settings.*` в i18n, хотя страница настроек есть.
+
+## Приложение В. Ревизия 1.1 (закрытие противоречий ревью)
+
+Версия документа поднята до 1.1. Перекрёстные ссылки между частями файла идут с префиксом («ТЗ §…», «контракты §…», «скаффолд §…», «вайрфреймы §…»).
+
+| Что расходилось | Как зафиксировано |
+| --- | --- |
+| После `completeDay` обнулялся `activeInstanceId`, и следующий запуск создавал второй экземпляр на ту же дату | Завершённый экземпляр остаётся текущим до смены даты или до сдвига. `resolveCurrentDay` не вызывается, если текущий экземпляр уже на сегодня |
+| FR-C-3, контракт сдвига и `completeDay` по-разному обращались с `manualShiftDate` | Один сценарий: `shiftPending`, запись `manualShiftDate` только внутри `completeDay` при сдвиге, дата нового экземпляра — сегодня, шаблон — от завтрашнего календаря или следующего циклического. Повторный сдвиг в те же сутки запрещён (правило 12). Обычное завершение поле не очищает |
+| FR-C-4 говорил только про открытие приложения, а таймер и `visibilitychange` открывали диалог снова. `useNow` опаздывал на полночь | Три триггера. `checkDayChange` сравнивает даты через `todayISO()` (`new Date()`). `watch(currentDate)` догоняет минутный кэш. Разовый пропуск — сессионный `skippedAutoPromptDate`, без записи в настройки |
+| Вайрфрейм «Больше не спрашивать» писал настройку | Опция диалога — «Пропустить диалог в этот раз». Постоянный тумблер — только Settings (ТЗ §2.7, вайрфреймы §8) |
+| `autoShiftAtMidnight` не был описан во FR | FR-SET-7: при включении смена даты выполняет подтверждённый сдвиг без диалога. `showConflicts` только прячет подсветку (FR-SET-8). `firstDayOfWeek`: 0 = понедельник, 1 = воскресенье, на `RepeatRule` не влияет (FR-SET-9) |
+| Нераспределённое размещение кодировалось как `startMin < 0`, а контракт требовал `startMin >= 0` (ссылка ошибочно вела на ТЗ §4.4) | Признак — `startMin === null`. Проверка «не помещается» — ветка укладки, не ошибка. `fitInDay(placement, instance)` смотрит границы экземпляра. Ссылка на порог — контракты §3.4 |
+| `statsStore.aggregate()`, побочный эффект `completeDay` «восстанавливает экземпляр», имя `CycleState` | Вызов заменён на `recompute()`. Восстановление отнесено к `cancelCompletion`. В ТЗ §4.3, плане и тексте ошибки — `CycleStateDto` |
+| Дефолт периода статистики `7d` при формулировке «минимум — всё время» | Дефолт — `all`. В таблицу попадают только дела с размещениями в завершённых экземплярах периода |
+| FR-T-3 обещал skipped для любых активных размещений | В skipped переводится только `pending`; `done` не меняется |
+| Комментарий `isHour` / `isHalfHour` «кратно 60/30» | Это минуты подписи (`=== 0` и `=== 30`), не остаток смещения `startMin` |
 
 
