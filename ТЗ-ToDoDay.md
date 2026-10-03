@@ -124,13 +124,14 @@ FR-C-3. Ручной сдвиг дня (ответ на Q4). Пока текущ
 
 - Если сдвинутый день относится к календарному правилу другой даты — его date проставляется как дата сдвига (ручное смещение фиксируется в CycleState.manualShiftDate).
 FR-C-4. Автопереход в 00:00. При открытии приложения после смены суток, если предыдущий активный экземпляр не завершён, автоматически показывается диалог завершения (FR-E-1). Отмена диалога оставляет старый день активным до следующего открытия.
-FR-C-5. Состояние цикла. Хранится в CycleState:
+FR-C-5. Состояние цикла. Хранится в CycleStateDto — синглтоне cycleState (см. §3.1, файл src/models/dayInstance.ts):
 
 ```
-interface CycleState {
-  activeInstanceId: string | null;   // текущий экземпляр дня (если есть)
-  lastCyclicTemplateId: string | null; // последний завершённый циклический
-  manualShiftDate: string | null;    // дата ручного сдвига (ISO)
+interface CycleStateDto {
+  id: 'current';                        // ключ синглтона
+  activeInstanceId: string | null;      // текущий экземпляр дня (если есть)
+  lastCyclicTemplateId: string | null;  // последний завершённый циклический
+  manualShiftDate: string | null;       // дата ручного сдвига (ISO)
 }
 ```
 
@@ -191,7 +192,7 @@ FR-E-1. Диалог завершения. Триггерится:
 
 - Кнопка «Подтвердить».
 
-- Опция «Пропустить диалог в этот раз» (только для авто-триггера).
+- Опция «Пропустить диалог в этот раз» (только для авто-триггера, FR-C-4). Это разовый пропуск: он не меняет настройку askToCompleteOnNewDay из §2.7. Постоянный отказ от авто-диалога — только через настройку («Больше не спрашивать» на SettingsPage, см. §7).
 FR-E-2. Логика фиксации после подтверждения:
 
 - Отмеченные → status = 'done'.
@@ -214,6 +215,7 @@ FR-S-1. Накопительные счётчики по каждому делу
 - totalSkipped — пропущено
 
 - completionRate = totalDone / (totalDone + totalSkipped)
+Соответствие коду и UI: в TaskStats (контракты §4.1, services/stats.ts) те же величины названы placed / done / skipped / rate; в интерфейсе подписи — «размещено / выполнено / пропущено / рейт».
 FR-S-2. Экран статистики. Таблица со всеми делами:
 
 - Название, цвет, приоритет
@@ -237,9 +239,21 @@ FR-SET-5. Импорт данных: из JSON, с подтверждением 
 
 ### 3.1 TypeScript-интерфейсы
 
+Общие перечисления живут в одном файле и импортируются остальными моделями (как в скаффолде §4.1):
+
+```
+// src/models/enums.ts
+export type Priority = 'low' | 'medium' | 'high' | 'critical';
+export type PlacementStatus = 'pending' | 'done' | 'skipped';
+export type InstanceStatus = 'active' | 'completed';
+export type RepeatRuleType = 'none' | 'weekdays' | 'monthdays';
+export type ThemeMode = 'light' | 'dark' | 'auto';
+export type TimeFormat = '24h' | '12h';
+```
+
 ```
 // src/models/task.ts
-export type Priority = 'low' | 'medium' | 'high' | 'critical';
+import type { Priority } from './enums';
 
 export interface Task {
   id: string;               // uuid
@@ -251,11 +265,20 @@ export interface Task {
   createdAt: number;
   updatedAt: number;
 }
+
+// Снимок полей дела на момент размещения (хранится в Placement, см. §3.1 ниже
+// и «Побочные эффекты» useTasksStore в контрактах). Позволяет удалять дела
+// без потери истории статистики.
+export interface TaskSnapshot {
+  title: string;
+  color: string;
+  priority: Priority;
+}
 ```
 
 ```
 // src/models/day.ts
-export type RepeatRuleType = 'none' | 'weekdays' | 'monthdays';
+import type { RepeatRuleType } from './enums';
 
 export interface RepeatRule {
   type: RepeatRuleType;
@@ -278,8 +301,8 @@ export interface DayTemplate {
 
 ```
 // src/models/dayInstance.ts
-export type InstanceStatus = 'active' | 'completed';
-export type PlacementStatus = 'pending' | 'done' | 'skipped';
+import type { InstanceStatus, PlacementStatus } from './enums';
+import type { TaskSnapshot } from './task';
 
 export interface Placement {
   id: string;
@@ -288,6 +311,7 @@ export interface Placement {
   durationMin: number;      // снимок длительности на момент размещения
   status: PlacementStatus;
   placedAt: number;
+  taskSnapshot: TaskSnapshot;  // снимок { title, color, priority } на момент размещения
 }
 
 export interface DayInstance {
@@ -301,14 +325,30 @@ export interface DayInstance {
   createdAt: number;
   completedAt?: number;
 }
+
+// Синглтон состояния цикла (ключ id = 'current')
+export interface CycleStateDto {
+  id: 'current';
+  activeInstanceId: string | null;
+  lastCyclicTemplateId: string | null;
+  manualShiftDate: string | null;
+}
 ```
 
 ```
 // src/models/cycle.ts
-export interface CycleState {
-  activeInstanceId: string | null;
-  lastCyclicTemplateId: string | null;
-  manualShiftDate: string | null;
+export interface Slot {
+  index: number;         // 0..N-1
+  startMin: number;      // смещение от timeStart: 0, 15, 30, ...
+  label: string;         // '08:15'
+  isHour: boolean;       // кратно 60
+  isHalfHour: boolean;   // кратно 30
+}
+
+export interface Conflict {
+  placementIds: [string, string];
+  overlapStart: number;
+  overlapEnd: number;
 }
 ```
 
@@ -320,7 +360,8 @@ export interface CycleState {
 | dayTemplates | id | order |
 | dayInstances | id | date, templateId, status |
 | cycleState | singleton (id = 'current') | — |
-| settings | singleton | — |
+
+Таблицы settings в IndexedDB нет: пользовательские настройки живут только в localStorage через useStorage (см. §5.1 контрактов сторов и §6.5 скаффолда). В экспорт/импорт (см. §5.4 контрактов) они попадают чтением из localStorage, а не из Dexie.
 
 ## 4. Архитектура
 
@@ -370,24 +411,35 @@ src/
 │       ├── ColorPicker.vue
 │       ├── PriorityBadge.vue
 │       └── ConfirmDialog.vue
+├── layouts/
+│   └── MainLayout.vue     # AppBar + drawer (desktop) + bottom tab bar (mobile)
 ├── pages/
 │   ├── TasksPage.vue
 │   ├── DaysPage.vue
 │   ├── DayBoardPage.vue
 │   ├── StatsPage.vue
-│   └── SettingsPage.vue
+│   ├── TaskStatsPage.vue
+│   ├── SettingsPage.vue
+│   └── ErrorNotFound.vue
 ├── stores/
+│   ├── index.ts
 │   ├── tasks.ts
 │   ├── days.ts
 │   ├── cycle.ts
 │   ├── stats.ts
-│   └── settings.ts
+│   ├── settings.ts
+│   └── ui.ts
 ├── services/
 │   ├── db.ts
-│   ├── repeat.ts          # resolveDayForDate, validateNoDuplicates
+│   ├── repeat.ts          # resolveDayForDate, validateNoOverlap
 │   ├── scheduler.ts       # расчёт слотов, конфликтов, укладки
-│   └── stats.ts
+│   ├── stats.ts
+│   └── validators/
+│       ├── task.ts
+│       └── day.ts
 ├── models/
+│   ├── common.ts          # Result, AppError, ErrorCode
+│   ├── enums.ts           # Priority, PlacementStatus, InstanceStatus, ...
 │   ├── task.ts
 │   ├── day.ts
 │   ├── dayInstance.ts
@@ -395,8 +447,11 @@ src/
 ├── router/
 │   └── routes.ts
 └── i18n/
-    ├── ru.ts
-    └── en.ts
+    ├── index.ts
+    ├── ru/
+    │   └── index.ts
+    └── en/
+        └── index.ts
 ```
 
 ### 4.3 Сторы Pinia
@@ -408,18 +463,19 @@ src/
 | useCycleStore | Разрешение текущего дня, сдвиг, автопереход, CycleState |
 | useStatsStore | Агрегация по Placement |
 | useSettingsStore | Тема, язык, формат времени |
+| useUiStore | Глобальный UI: тосты, confirm-диалог, drawer, online/offline |
 
 ### 4.4 Сервисы (чистые функции)
 
-- repeat.resolveDayForDate(date, templates): DayTemplate | null — FR-C-1.
+- repeat.resolveDayForDate(date, templates, lastCyclicTemplateId): DayTemplate | null — FR-C-1.
 
-- repeat.validateNoDuplicates(templates, candidate): Conflict[] — FR-D-5.
+- repeat.validateNoOverlap(rule, templates, excludeId?): ValidationIssue[] — FR-D-5.
 
 - scheduler.detectConflicts(placements): Conflict[] — FR-B-3.
 
-- scheduler.fitInDay(placement, template): boolean — FR-B-4.
+- scheduler.fitInDay(placement, template): boolean — FR-B-4 (в скаффолде пока не реализован, см. §6 скаффолда).
 
-- stats.aggregate(placements): TaskStats — FR-S-1.
+- stats.aggregateStats(instances, period): { perTask: Map<string, TaskStats>; overall: OverallStats } — FR-S-1.
 
 ## 5. UI/UX
 
@@ -474,9 +530,9 @@ Quasar Dark plugin + авто-переключение по системной.
 
 ## 6. Бизнес-правила и краевые случаи
 
- # ¦ Кейс ¦ Поведение ¦ ¦
-| 1 | Пустой день без дел | Показ дефолтной сетки + CTA |
+| # | Кейс | Поведение |
 | --- | --- | --- |
+| 1 | Пустой день без дел | Показ дефолтной сетки + CTA |
 | 2 | Конфликт правил дней | Запрет сохранения (FR-D-5) |
 | 3 | Дело длиннее дня | Валидация при размещении: не помещается → в «нераспределённые» |
 | 4 | Пересечения дел | Разрешены, подсветка warning |
@@ -1271,6 +1327,8 @@ Context menu (long-press / right-click):
 # ToDoDay — Контракты сторов Pinia
 Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (defineStore('name', () => {...})), типизированы, работают поверх Dexie (IndexedDB).
 
+> **Важно про объём.** Этот раздел — полный целевой контракт API. Стартовый скаффолд (раздел «Стартовый скаффолд») реализует только подмножество: CRUD дел, шаблоны дней, разрешение текущего дня и завершение дня. Всё остальное помечено ниже (см. §6 скаффолда, «Заглушки сторов») и не считается «сломанным скаффолдом»: расхождение устранено явной пометкой, а не доработкой кода. Контракт — источник истины для имён и типов; при расхождении имён правится скаффолд.
+
 ## 0. Общие принципы
 
 ### 0.1 Соглашения
@@ -1300,7 +1358,7 @@ type Result<T> =
 ### 0.2 Общие типы
 
 ```
-// src/types/common.ts
+// src/models/common.ts
 export interface AppError {
   code: ErrorCode;
   message: string;         // человекочитаемое
@@ -1338,7 +1396,7 @@ interface TasksState {
   // Данные
   tasks: Ref<Task[]>;                        // все неархивные + архивные
   loading: Ref<boolean>;                     // идёт загрузка
-  initialized: Ref<boolean>;                 // liveQuery подписан
+  initialized: Ref<boolean>;                 // данные загружены (при активной liveQuery — ещё и подписка)
 
   // UI-состояние (не персистится)
   searchQuery: Ref<string>;                  // '' по умолчанию
@@ -1419,7 +1477,7 @@ interface TaskInput {
 
 - Читает: db.tasks.
 
-- Использует: useDaysStore, useCycleStore — при архивации/удалении для корректной обработки активных размещений.
+- Использует: только db.tasks. Обратная связь с циклом — через emitter: archiveTask публикует onTaskArchived(taskId), а useCycleStore подписывается на него и снимает активные (pending) размещения. Прямой зависимости useTasksStore → useCycleStore нет (иначе получился бы цикл импортов).
 
 - Используется: TasksPage, TaskForm, TaskCard, панель дел в DayBoard, StatsPage (для заголовков).
 
@@ -1497,13 +1555,15 @@ interface DayTemplateInput {
 
 ### 2.5 Правила валидации (детально)
 
-| Правило | Проверка | Issue |  |
-| --- | --- | --- | --- |
-| Время | timeEnd > timeStart, длина ≥ 60 мин | INVALID_TIME |  |
-| Правило не пустое | для weekdays — массив не пуст; для monthdays — массив не пуст | EMPTY_RULE |  |
-| Пересечение weekdays | Ни один weekday из нового правила не занят другим шаблоном | OVERLAP_WEEKDAYS |  |
-| Пересечение monthdays | Ни одно monthday не занято | OVERLAP_MONTHDAYS |  |
-| Имя | 1..50, trim | VALIDATION_ERROR | weekdays и monthdays между собой не конфликтуют — приоритет у monthdays (FR-C-1). |
+| Правило | Проверка | Issue |
+| --- | --- | --- |
+| Время | timeEnd > timeStart, длина ≥ 60 мин | INVALID_TIME |
+| Правило не пустое | для weekdays — массив не пуст; для monthdays — массив не пуст | EMPTY_RULE |
+| Пересечение weekdays | Ни один weekday из нового правила не занят другим шаблоном | OVERLAP_WEEKDAYS |
+| Пересечение monthdays | Ни одно monthday не занято | OVERLAP_MONTHDAYS |
+| Имя | 1..50, trim | VALIDATION_ERROR |
+
+weekdays и monthdays между собой не конфликтуют — приоритет у monthdays (FR-C-1).
 
 ### 2.6 reorder — детали
 Принимает индексы из UI (vuedraggable). Реализация:
@@ -1536,12 +1596,17 @@ interface DayTemplateInput {
 ### 3.1 State
 
 ```
-interface CycleState {
+interface CycleStoreState {
   // Текущий экземпляр дня
   currentInstance: Ref<DayInstance | null>;
 
-  // Состояние цикла (персистится в БД)
-  cycleState: Ref<CycleStateDto>;   // { activeInstanceId, lastCyclicTemplateId, manualShiftDate }
+  // Состояние цикла (персистится в БД). null — до завершения initialize()
+  cycleState: Ref<CycleStateDto | null>;   // { id: 'current', activeInstanceId, lastCyclicTemplateId, manualShiftDate }
+
+  // Отмена завершения (FR-E-3) — только в памяти текущей сессии, не персистится
+  lastCompletedInstanceId: Ref<string | null>;         // id экземпляра, завершённого в этой сессии
+  placementsSnapshot: Ref<Placement[] | null>;         // копия placements на момент completeDay
+  lastCyclicTemplateIdSnapshot: Ref<string | null>;    // прежний указатель цикла (completeDay мог его продвинуть)
 
   // UI
   completing: Ref<boolean>;         // диалог завершения открыт
@@ -1576,8 +1641,8 @@ interface Slot {
   index: number;         // 0..N-1
   startMin: number;      // 0, 15, 30, ...
   label: string;         // '08:15'
-  isHour: boolean;       // кратко 60
-  isHalfHour: boolean;   // кратко 30
+  isHour: boolean;       // кратно 60
+  isHalfHour: boolean;   // кратно 30
 }
 
 interface Conflict {
@@ -1593,10 +1658,13 @@ interface Conflict {
 // Инициализация / разрешение дня
 async function initialize(): Promise<Result<void>>;
 async function resolveCurrentDay(): Promise<Result<DayInstance>>;
+function checkDayChange(): void;                              // FR-C-4: автопроверка смены суток
+function startCompletion(): void;                             // FR-E-1: ручное открытие диалога завершения
+function dispose(): void;                                     // отписка от emitter архивации (unmount/HMR)
 
 // Сдвиг и завершение
 async function shiftToNextDay(): Promise<Result<void>>;
-async function completeDay(marks: Record<string /*placementId*/, 'done'|'skipped'|'pending'>): Promise<Result<void>>;
+async function completeDay(marks: Record<string /*placementId*/, 'done' | 'skipped'>): Promise<Result<void>>;
 async function cancelCompletion(): Promise<Result<void>>;      // в течение сессии
 async function resetCurrentDay(): Promise<Result<void>>;       // отладка/сброс
 
@@ -1616,6 +1684,8 @@ function setHoveredSlot(slotIndex: number | null): void;
 function endDrag(): void;
 ```
 
+На входе completeDay допустимы только 'done' | 'skipped': по FR-E-2 всё неотмеченное (включая Placement, с которого сняли галочку) становится skipped, поэтому 'pending' в marks смысла не имеет и из сигнатуры убран.
+
 ### 3.4 Детальная логика
 
 #### initialize()
@@ -1626,9 +1696,19 @@ function endDrag(): void;
 
 - Иначе — вызвать resolveCurrentDay().
 
-- Проверить автопереход: если currentInstance.date < currentDate и экземпляр активен → открыть completing = true (диалог).
+- Проверить автопереход (FR-C-4) через checkDayChange().
 
 - Подписаться на liveQuery.
+
+#### checkDayChange() — FR-C-4
+
+- Вызывается из App.vue при старте, по visibilitychange и по таймеру до ближайшей полуночи.
+
+- Если currentInstance активен и currentInstance.date < currentDate (локальная дата) и settingsStore.askToCompleteOnNewDay === true → completing = true (открыть диалог завершения, FR-E-1).
+
+- Если настройка выключена или экземпляр уже завершён — ничего не делаем.
+
+- Отмена диалога оставляет старый день активным до следующего открытия.
 
 #### resolveCurrentDay() — FR-C-1
 
@@ -1641,6 +1721,8 @@ date = today (ISO)
 5. Материализовать DayInstance { date, templateId, timeStart, timeEnd, placements: [], status: 'active' }
 6. Сохранить в БД, обновить cycleState.activeInstanceId
 ```
+
+Шаги 1–3 инкапсулированы в чистую функцию repeat.resolveDayForDate(date, templates, lastCyclicTemplateId) — см. §4.4 ТЗ и юнит-тесты в §9. Стор только материализует её результат (плюс ветку «пустой день»).
 
 #### shiftToNextDay() — FR-C-3
 
@@ -1668,15 +1750,19 @@ date = today (ISO)
 
 - отсутствует → status = 'skipped' (по умолчанию)
 
+- 'pending' в marks не приходит (см. сигнатуру); если пришёл по ошибке — трактуется как 'skipped'
+
 - currentInstance.status = 'completed', completedAt = now.
 
 - Транзакция: bulk-update placements + update dayInstance + update cycleState.lastCyclicTemplateId (если template был циклическим) + очистить manualShiftDate.
 
-- Сохранить lastCompletedInstanceId для cancelCompletion.
+- Сохранить lastCompletedInstanceId = inst.id и placementsSnapshot = структурную копию inst.placements (до мутации статусов) для cancelCompletion.
 
 - statsStore.aggregate() — пересчёт (или liveQuery сам подтянет).
 
 - currentInstance = null.
+
+- completing = false (диалог завершения закрывается).
 
 #### cancelCompletion() — FR-E-3
 
@@ -1684,11 +1770,35 @@ date = today (ISO)
 
 - Вернуть экземпляр в status = 'active', completedAt = null.
 
-- Восстановить placements до состояния перед завершением (хранится снапшот в памяти на момент completeDay).
+- Восстановить placements из placementsSnapshot (снапшот в памяти на момент completeDay).
 
 - cycleState.activeInstanceId = restored.id.
 
+- Восстановить cycleState.lastCyclicTemplateId из lastCyclicTemplateIdSnapshot (completeDay мог продвинуть указатель циклического шаблона).
+
+- Сбросить lastCompletedInstanceId = null, placementsSnapshot = null и lastCyclicTemplateIdSnapshot = null (повторная отмена невозможна, новая completeDay перезапишет все три).
+
 - Доступно только в текущей сессии (после перезагрузки lastCompletedInstanceId сбрасывается).
+
+#### checkDayChange() — FR-C-4 (описание логики — выше, в начале §3.4)
+
+#### startCompletion() — FR-E-1
+
+- Ручное открытие диалога завершения кнопкой «Завершить день»: `completing = true`, если есть currentInstance.
+
+- Альтернатива для UI — писать `cycle.completing = true` напрямую, но action предпочтительнее (одно место для guard-условий).
+
+- Закрытие диалога без подтверждения (кнопка «Вернуться к дню») выставляет `completing = false` на стороне UI (`v-model` на диалоге); `completeDay` и `cancelCompletion` делают это сами.
+
+#### skipPendingPlacementsForTask(taskId)
+
+- Служебный action для побочного эффекта FR-T-3: получает taskId от emitter onTaskArchived (см. контракты §1.5/§1.6) и переводит pending-размещения этого дела в текущем активном экземпляре в skipped + persist.
+
+- Не вызывается из UI; экспортируется, чтобы его можно было покрыть тестом.
+
+#### dispose()
+
+- Отписка от emitter onTaskArchived (unmount/HMR). В setup-сторе подписка ставится в initialize().
 
 #### placeTask(taskId, startMin)
 
@@ -1724,15 +1834,19 @@ date = today (ISO)
 
 | Action | Side effect |
 | --- | --- |
-| initialize | Подписка liveQuery на dayInstances и cycleState |
-| completeDay | Останавливает отслеживание; при cancelCompletion — восстанавливает |
+| initialize | Подписка liveQuery на dayInstances и cycleState; подписка на emitter архивации (onTaskArchived) |
+| completeDay | Закрывает диалог (completing = false); при cancelCompletion — восстанавливает экземпляр |
+| cancelCompletion | Возвращает экземпляр из completed в active, восстанавливает placementsSnapshot и lastCyclicTemplateId |
 | placeTask | Триггерит пересчёт conflicts (через getter) |
 | shiftToNextDay | Устанавливает manualShiftDate |
-| Автопроверка при focus окна | Проверяет смену суток, если дата изменилась — открывает диалог |
+| startCompletion | Открывает диалог завершения вручную (FR-E-1) |
+| skipPendingPlacementsForTask | Побочный эффект FR-T-3: pending-размещения архивного дела → skipped |
+| dispose | Снимает подписку на emitter архивации |
+| checkDayChange (вызывается из App.vue) | Проверяет смену суток, если дата изменилась — открывает диалог завершения |
 
 ### 3.6 Взаимодействие
 
-- Читает: tasksStore, daysStore.
+- Читает: tasksStore, daysStore, settingsStore (askToCompleteOnNewDay).
 
 - Пишет: db.dayInstances, db.cycleState.
 
@@ -1752,7 +1866,7 @@ interface StatsState {
 
   // UI-фильтр
   period: Ref<StatsPeriod>;    // '7d' | '30d' | 'all'
-  sortBy: Ref<StatsSortField>; // 'title' | 'rate' | 'done' | 'skipped'
+  sortBy: Ref<StatsSortField>; // 'title' | 'rate' | 'done' | 'skipped' | 'placed'
   sortOrder: Ref<'asc' | 'desc'>;
 
   loading: Ref<boolean>;
@@ -1815,19 +1929,18 @@ function unsubscribe(): void;
 ```
 
 ### 4.4 Детали recompute
-Выборка:
+Выборка — только завершённые экземпляры; фильтр по периоду делается внутри aggregateStats (чистая функция), а не в запросе Dexie, чтобы логика дат не дублировалась:
 
 ```
 const instances = await db.dayInstances
   .where('status').equals('completed')
-  .and(i => period === 'all' || isInPeriod(i.date, period))
   .toArray();
 ```
 
-Агрегация — чистая функция aggregateStats(instances, period) в services/stats.ts (юнит-тестируема).
+Агрегация — чистая функция aggregateStats(instances, period) в services/stats.ts (юнит-тестируема). Границы периода сравниваются по локальной дате 'YYYY-MM-DD'; отдельный хелпер isInPeriod не вводится.
 Правила:
 
-- pending не учитывается в rate.
+- pending не учитывается в rate (для завершённых экземпляров pending всегда 0 — см. комментарий в aggregateStats).
 
 - Дела с archived = true включаются в статистику (история не теряется).
 
@@ -1842,7 +1955,7 @@ const instances = await db.dayInstances
 
 ### 4.6 Взаимодействие
 
-- Читает: db.dayInstances, tasksStore.
+- Читает: db.dayInstances напрямую (без других сторов — см. §7).
 
 - Используется: StatsPage, TaskStatsPage.
 
@@ -1864,14 +1977,15 @@ interface SettingsState {
 }
 ```
 
-Все поля — через useStorage('tododay:settings:<key>', default, localStorage).
+Все поля — через useStorage('tododay:<key>', default, localStorage) (ключи: tododay:theme, tododay:language, tododay:timeFormat, tododay:askOnNewDay, tododay:autoShift, tododay:showConflicts, tododay:firstDayOfWeek, tododay:lastBackupAt). Настройки в IndexedDB не хранятся — см. §3.2 ТЗ.
 
 ### 5.2 Getters
 
 | Getter | Тип |
 | --- | --- |
 | effectiveTheme | ComputedRef<'light' \| 'dark'> (учитывает auto + prefers-color-scheme) |
-| isDark | ComputedRef<boolean> |
+
+Отдельный isDark не вводим: это тавтология effectiveTheme === 'dark', в UI используем сравнение `effectiveTheme === 'dark'` (см. §10 скаффолда, App.vue).
 
 ### 5.3 Actions
 
@@ -1905,14 +2019,16 @@ async function clearAll(): Promise<Result<void>>;
 }
 ```
 
-exportAll: собирает все таблицы, сериализует, возвращает Blob для q-file/download.
+exportAll: собирает все таблицы Dexie (tasks, dayTemplates, dayInstances, cycleState) плюс блок settings — он читается из localStorage по ключам из §5.1 и собирается в объект вручную. Сериализует всё в JSON, возвращает Blob для q-file/download. После успешного экспорта обновляется lastBackupAt (ISO-строка в localStorage).
 importAll:
 
 - Парсит, валидирует version.
 
 - Диалог подтверждения: «Перезаписать все данные?»
 
-- Транзакция: очистка + bulk-add.
+- Транзакция: очистка + bulk-add (Dexie).
+
+- Блок settings записывается в localStorage, а не в Dexie.
 
 - Переинициализация сторов (перезагрузка страницы или reload всех).
 
@@ -1961,48 +2077,59 @@ notify оборачивает Quasar Notify.
 ## 7. Взаимодействие сторов — карта зависимостей
 
 ```
-                  ┌───────────────────┐
-                  │ useSettingsStore  │
-                  │ (тема, язык,      │
-                  │  экспорт/импорт)  │
-                  └─────────┬─────────┘
-                            │ читают все
-                            ▼
-   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
-   │ useTasks    │──▶│ useCycle    │◀──│ useDays     │
-   │ Store       │   │ Store       │   │ Store       │
-   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
-          │                 │                 │
-          │                 ▼                 │
-          │          ┌─────────────┐          │
-          └─────────▶│ useStats    │◀─────────┘
-                     │ Store       │
-                     └──────┬──────┘
-                            │
-                            ▼
-                     ┌─────────────┐
-                     │ useUiStore  │ (опционально)
-                     └─────────────┘
+                   ┌───────────────────┐
+                   │ useSettingsStore  │  независим; настройки — localStorage,
+                   │ (тема, язык,      │  читается остальными сторами и UI
+                   │  экспорт/импорт)  │
+                   └─────────┬─────────┘
+                             │ читают настройки
+                             ▼
+    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+    │ useTasks    │──▶│ useCycle    │◀──│ useDays     │
+    │ Store       │   │ Store       │   │ Store       │
+    └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
+           │                 │                 │
+           │ пишут в Dexie   │                 │
+           └────────┬────────┴────────┬────────┘
+                    ▼                 ▼
+         ┌───────────────────────────────────────┐
+         │ IndexedDB (Dexie): tasks,             │
+         │ dayTemplates, dayInstances, cycleState│
+         └───────────────────┬───────────────────┘
+                             │ читает напрямую
+                             ▼
+                      ┌─────────────┐
+                      │ useStats    │  ← не зависит ни от одного стора
+                      │ Store       │
+                      └─────────────┘
+
+    ┌─────────────┐
+    │ useUiStore  │  ← независим (тосты, диалоги, online/offline)
+    └─────────────┘
 ```
+
+Стрелка useTasksStore → useCycleStore на схеме — не импорт стора, а emitter onTaskArchived (archiveTask снимает pending-размещения; см. контракты §1.5/§1.6). Остальные стрелки — обычные зависимости между сторами.
 
 Правила зависимостей:
 
-- useTasksStore не знает о useStatsStore.
+- useTasksStore не знает о useStatsStore (и вообще о статистике).
 
-- useCycleStore зависит от tasksStore и daysStore.
+- useCycleStore зависит от tasksStore и daysStore, а также читает настройку askToCompleteOnNewDay из settingsStore (в checkDayChange) и подписывается на emitter архивации из tasksStore.
 
-- useStatsStore читает БД напрямую, не зависит от cycleStore (чтобы не плодить циклы).
+- useStatsStore читает БД напрямую, не зависит от cycleStore/tasksStore/daysStore (чтобы не плодить циклы). На диаграмме выше к useStats ведёт стрелка от IndexedDB, а не от сторов.
+
+- useUiStore — независим.
 
 - useSettingsStore — независим, но его actions вызывают reload других сторов при импорте.
 Порядок инициализации в App.vue (onMounted):
 
 ```
 1. settingsStore (sync, из localStorage)
-2. tasksStore.initialize()
-3. daysStore.initialize()
-4. cycleStore.initialize()
-5. statsStore.initialize()  (lazy — на странице статистики)
-6. uiStore (listeners: online/offline, visibilitychange)
+2. tasksStore.loadAll()
+3. daysStore.loadAll()
+4. cycleStore.initialize()   (внутри сам вызывает loadAll обоих сторов)
+5. statsStore.recompute()   (lazy — на странице статистики; initialize в контракте §4.3 = подписка + первый recompute)
+6. uiStore (listeners: online/offline, visibilitychange), cycleStore.checkDayChange()
 ```
 
 ## 8. Полный список действий по FR (трассируемость)
@@ -2011,7 +2138,7 @@ notify оборачивает Quasar Notify.
 | --- | --- |
 | FR-T-1 | tasksStore.createTask |
 | FR-T-2 | tasksStore.updateTask |
-| FR-T-3 | tasksStore.archiveTask + cycleStore.setPlacementStatus |
+| FR-T-3 | tasksStore.archiveTask (+ emitter onTaskArchived → cycleStore.skipPendingPlacementsForTask) |
 | FR-T-4 | tasksStore.setSearch/setFilter*/setSort |
 | FR-T-5 | tasksStore.duplicateTask |
 | FR-D-1 | daysStore.createTemplate |
@@ -2020,17 +2147,17 @@ notify оборачивает Quasar Notify.
 | FR-D-4 | daysStore.deleteTemplate (+ проверка активных экземпляров) |
 | FR-D-5 | daysStore.validateNoOverlap |
 | FR-D-6 | cycleStore.resolveCurrentDay (ветка «пустой день») |
-| FR-C-1 | cycleStore.resolveCurrentDay |
-| FR-C-2 | cycleStore.resolveCurrentDay (ветка циклическая) |
+| FR-C-1 | cycleStore.resolveCurrentDay + repeat.resolveDayForDate |
+| FR-C-2 | cycleStore.resolveCurrentDay + repeat.resolveDayForDate (ветка циклическая) |
 | FR-C-3 | cycleStore.shiftToNextDay |
-| FR-C-4 | cycleStore.initialize (проверка смены суток) |
+| FR-C-4 | cycleStore.checkDayChange (вызывается из App.vue: старт, visibilitychange, таймер до полуночи) |
 | FR-C-5 | cycleStore.cycleState |
 | FR-B-2 | cycleStore.placeTask/movePlacement |
 | FR-B-3 | cycleStore.conflicts (getter) |
 | FR-B-4 | cycleStore.placeTask (ветка «не помещается») |
 | FR-B-5 | cycleStore.unallocatedPlacements |
 | FR-B-6 | cycleStore.setPlacementStatus |
-| FR-E-1 | cycleStore.completeDay (открывается через completing) |
+| FR-E-1 | cycleStore.startCompletion (ручная кнопка) / shiftToNextDay / checkDayChange → completing = true |
 | FR-E-2 | cycleStore.completeDay |
 | FR-E-3 | cycleStore.cancelCompletion |
 | FR-E-4 | — (не реализуется) |
@@ -2095,8 +2222,9 @@ Presets typescript, pinia, i18n, eslint доступны в create-quasar для
 pnpm add dexie vuedraggable @vueuse/core date-fns
 
 # Dev
-pnpm add -D vitest @vue/test-utils jsdom fake-indexeddb \
-  @types/node eslint-plugin-import
+pnpm add -D vitest @vitest/coverage-v8 @vue/test-utils jsdom fake-indexeddb \
+  @types/node eslint @eslint/js eslint-plugin-vue typescript-eslint globals \
+  prettier vue-tsc
 ```
 
 ## 1. Структура папок
@@ -2129,6 +2257,8 @@ tododay/
 │   │       ├── ColorPicker.vue
 │   │       ├── PriorityBadge.vue
 │   │       └── ConfirmDialog.vue
+│   ├── layouts/
+│   │   └── MainLayout.vue         # AppBar + drawer (desktop) + bottom tab bar (mobile)
 │   ├── pages/
 │   │   ├── DayBoardPage.vue
 │   │   ├── TasksPage.vue
@@ -2188,7 +2318,7 @@ tododay/
 ├── tsconfig.node.json
 ├── vitest.config.ts
 ├── package.json
-├── .eslintrc.cjs
+├── eslint.config.js
 ├── .prettierrc
 └── .gitignore
 ```
@@ -2208,7 +2338,7 @@ tododay/
     "dev": "quasar dev",
     "build": "quasar build",
     "build:pwa": "quasar build -m pwa",
-    "lint": "eslint --ext .js,.ts,.vue ./",
+    "lint": "eslint .",
     "format": "prettier --write \"**/*.{js,ts,vue,scss,json,md}\"",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -2228,16 +2358,20 @@ tododay/
     "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.13.0",
     "@quasar/app-vite": "^3.0.0",
     "@types/node": "^22.7.5",
     "@vitejs/plugin-vue": "^5.1.4",
+    "@vitest/coverage-v8": "^2.1.3",
     "@vue/test-utils": "^2.4.6",
     "eslint": "^9.13.0",
-    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-vue": "^9.30.0",
     "fake-indexeddb": "^6.0.0",
+    "globals": "^15.11.0",
     "jsdom": "^25.0.1",
     "prettier": "^3.3.3",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.11.0",
     "vitest": "^2.1.3",
     "vue-tsc": "^2.1.6"
   },
@@ -2252,9 +2386,10 @@ tododay/
 
 ### 3.1 quasar.config.ts
 
+> Почему нет vitePlugins с @intlify/unplugin-vue-i18n: сообщения лежат в .ts-модулях (src/i18n/ru/index.ts, src/i18n/en/index.ts) и экспортируются как обычные объекты. Их компилирует штатная сборка vue-i18n для бандлеров (vue-i18n.esm-bundler.js, которая резолвится по умолчанию), поэтому плагин не нужен — раньше он был указан в конфиге, но отсутствовал в package.json и ломал `pnpm dev`. Если позже локаль переедет в .json/.yaml и понадобится runtime-only сборка (vue-i18n/dist/vue-i18n.runtime.esm-bundler.js), тогда включите плагин и добавьте `@intlify/unplugin-vue-i18n` в devDependencies (ветка 6.x совместима с Vite 5/6 и Node ≥ 18; ветка 11.x требует Node ≥ 22.13 и Vite ≥ 6).
+
 ```
 import { configure } from 'quasar/wrappers'
-import { fileURLToPath } from 'node:url'
 
 export default configure((/* ctx */) => {
   return {
@@ -2268,15 +2403,6 @@ export default configure((/* ctx */) => {
       target: { browser: ['es2022', 'firefox115', 'chrome115', 'safari14'] },
       typescript: { strict: true, vueShim: true },
       vueRouterMode: 'hash',
-      vitePlugins: [
-        [
-          '@intlify/unplugin-vue-i18n/vite',
-          {
-            include: fileURLToPath(new URL('./src/i18n/**', import.meta.url)),
-            ssr: false,
-          },
-        ],
-      ],
     },
 
     devServer: { open: true },
@@ -2362,6 +2488,48 @@ export default defineConfig({
 
 ```
 import 'fake-indexeddb/auto'
+```
+
+### 3.5 eslint.config.js (flat config, ESLint 9)
+
+```
+import js from '@eslint/js'
+import pluginVue from 'eslint-plugin-vue'
+import tseslint from 'typescript-eslint'
+import globals from 'globals'
+
+export default tseslint.config(
+  { ignores: ['dist/**', '.quasar/**', 'src-pwa/**', 'node_modules/**'] },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  ...pluginVue.configs['flat/recommended'],
+  {
+    files: ['**/*.vue'],
+    languageOptions: { parserOptions: { parser: tseslint.parser } },
+  },
+  {
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+    rules: {
+      'vue/multi-word-component-names': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
+)
+```
+
+ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `--ext`, поэтому конфиг оформлен как flat config, а скрипт lint — `eslint .`.
+
+### 3.6 .prettierrc
+
+```
+{
+  "semi": false,
+  "singleQuote": true,
+  "printWidth": 100,
+  "trailingComma": "all"
+}
 ```
 
 ## 4. Модели
@@ -2581,6 +2749,23 @@ export default defineBoot(async () => {
 
 ## 6. Заглушки сторов
 
+Ниже — код, который можно скопировать как есть. Это именно скаффолд: он компилируется и запускается, но реализует только часть контрактов из раздела «Контракты сторов Pinia». Полный целевой API — в контрактах; здесь перечислено, чего в коде ещё нет (это не баги, а запланированная работа):
+
+| Стор | Есть в контракте, но нет в скаффолде |
+| --- | --- |
+| useTasksStore | subscribe, unsubscribe, refresh, isTitleTaken, tasksByPriority, totalCount / activeCount / archivedCount; TaskSortField объявлен инлайн (в контракте §1.1 — отдельный тип) |
+| useDaysStore | moveToPosition, validateNoOverlap (публичный), subscribe, unsubscribe, hasConflicts, templatesCount, calendarTemplates, lastValidationErrors, sortMode; createTemplate / updateTemplate / deleteTemplate / reorder не обёрнуты в try/catch, хотя §0.1 требует возвращать Result вместо исключений |
+| useCycleStore | resetCurrentDay, replacePlacement, changePlacementDuration, dayProgress (placeTask / movePlacement / removePlacement / setPlacementStatus — заглушки, возвращают err('UNKNOWN')); нет подписки liveQuery из §3.4/§3.5; shiftToNextDay только открывает диалог — manualShiftDate не пишется и следующий день после completeDay не материализуется (FR-C-3) |
+| useStatsStore | initialize, subscribe, unsubscribe, setSort, sortBy, sortOrder, history, topTasks, worstTasks, taskStatsById |
+| useSettingsStore | exportAll, importAll, clearAll, lastBackupAt, toggleAskOnNewDay, toggleAutoShift; setLanguage не переключает локаль i18n (нужен экспорт инстанса из src/boot/i18n.ts); autoShiftAtMidnight / showConflicts / firstDayOfWeek нигде не используются |
+| useDaysStore (типы) | Контракт §2.1 объявляет ValidationIssue { code, message, conflictingTemplateIds }, а скаффолд repeat.ts возвращает OverlapIssue { code, templateId, values }. При доработке вернуть ValidationIssue из контракта |
+| scheduler | fitInDay не реализован (нужен для FR-B-4), хотя объявлен в §4.4 ТЗ и в плане тестов §9 |
+| tasks (правила) | FR-T-2 (заморозка durationMin при активных размещениях) и FR-D-6 (пустой день не сохраняется, пока в него не положили дело) в скаффолде не реализованы |
+| Placement (модель) | unallocatedPlacements фильтрует `startMin < 0`, но отрицательный startMin нигде не задокументирован (§4.4 ТЗ требует startMin >= 0 и кратность 15). Нужен явный признак (unallocated: true или slotIndex: null) — решение за разработчиком |
+| i18n | нет раздела settings.*, хотя SettingsPage есть и §7 ТЗ требует все строки через vue-i18n |
+
+Всё перечисленное нужно добавить при переработке соответствующего модуля; имена и типы берутся из контрактов (раздел «Контракты сторов Pinia» — источник истины).
+
 ### 6.1 src/stores/tasks.ts
 
 ```
@@ -2591,6 +2776,17 @@ import type { Task, TaskInput } from 'src/models/task'
 import type { Priority } from 'src/models/enums'
 import { ok, err, type Result } from 'src/models/common'
 import { validateTaskInput } from 'src/services/validators/task'
+
+// Мини-emitter для побочного эффекта архивации (контракт §1.5: «через emitter/событие»).
+// Так useCycleStore подписывается на архивацию, не создавая циклический импорт.
+type TaskArchivedHandler = (taskId: string) => void | Promise<void>
+const archivedHandlers = new Set<TaskArchivedHandler>()
+
+/** Подписка на архивацию дела. Возвращает функцию отписки. */
+export function onTaskArchived(handler: TaskArchivedHandler): () => void {
+  archivedHandlers.add(handler)
+  return () => archivedHandlers.delete(handler)
+}
 
 export const useTasksStore = defineStore('tasks', () => {
   const tasks = ref<Task[]>([])
@@ -2684,37 +2880,71 @@ export const useTasksStore = defineStore('tasks', () => {
   }
 
   async function archiveTask(id: string): Promise<Result<void>> {
-    return updateTask(id, {}).then(() => {
-      const t = taskById(id)
-      if (!t) return err<void>('NOT_FOUND', 'Дело не найдено')
-      t.archived = true
-      return db.tasks.put(t).then(() => ok(undefined))
-    })
+    const t = taskById(id)
+    if (!t) return err<void>('NOT_FOUND', 'Дело не найдено')
+    if (t.archived) return ok(undefined)
+
+    try {
+      const updatedAt = Date.now()
+      await db.tasks.update(id, { archived: true, updatedAt })
+      const idx = tasks.value.findIndex(x => x.id === id)
+      if (idx >= 0) tasks.value[idx] = { ...t, archived: true, updatedAt }
+
+      // Побочный эффект из контракта §1.5: активные (pending) размещения этого дела
+      // переводятся в skipped. Подписчики — через emitter, чтобы не создавать
+      // циклическую зависимость useTasksStore → useCycleStore (см. onTaskArchived).
+      for (const handler of archivedHandlers) {
+        try {
+          await handler(id)
+        } catch (e) {
+          console.warn('[tasks] не удалось обработать архивные размещения', e)
+        }
+      }
+      return ok(undefined)
+    } catch (e) {
+      return err<void>('DB_ERROR', 'Не удалось архивировать дело', e)
+    }
   }
 
   async function unarchiveTask(id: string): Promise<Result<void>> {
     const t = taskById(id)
     if (!t) return err<void>('NOT_FOUND', 'Дело не найдено')
-    t.archived = false
-    await db.tasks.put(t)
-    return ok(undefined)
+
+    try {
+      const updatedAt = Date.now()
+      await db.tasks.update(id, { archived: false, updatedAt })
+      const idx = tasks.value.findIndex(x => x.id === id)
+      if (idx >= 0) tasks.value[idx] = { ...t, archived: false, updatedAt }
+      return ok(undefined)
+    } catch (e) {
+      return err<void>('DB_ERROR', 'Не удалось вернуть дело из архива', e)
+    }
   }
 
   async function deleteTask(id: string): Promise<Result<void>> {
+    const t = taskById(id)
+    if (!t) return err<void>('NOT_FOUND', 'Дело не найдено')
+    // Hard delete разрешён только для архивных (контракт §1.3/§1.5)
+    if (!t.archived) {
+      return err<void>('CONSTRAINT_VIOLATION', 'Удалять можно только дела из архива')
+    }
     try {
       await db.tasks.delete(id)
-      tasks.value = tasks.value.filter(t => t.id !== id)
+      tasks.value = tasks.value.filter(x => x.id !== id)
       return ok(undefined)
     } catch (e) {
-      return err('DB_ERROR', 'Не удалось удалить дело', e)
+      return err<void>('DB_ERROR', 'Не удалось удалить дело', e)
     }
   }
 
   async function duplicateTask(id: string): Promise<Result<Task>> {
     const src = taskById(id)
     if (!src) return err('NOT_FOUND', 'Дело не найдено')
+    // Название копии ограничено 100 символами (валидатор), поэтому обрезаем базу
+    const suffix = ' (копия)'
+    const base = src.title.slice(0, 100 - suffix.length).trimEnd()
     return createTask({
-      title: `${src.title} (копия)`,
+      title: `${base}${suffix}`,
       priority: src.priority,
       color: src.color,
       durationMin: src.durationMin,
@@ -2758,7 +2988,7 @@ export const useTasksStore = defineStore('tasks', () => {
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { db } from 'src/services/db'
-import type { DayTemplate, DayTemplateInput, RepeatRule } from 'src/models/day'
+import type { DayTemplate, DayTemplateInput } from 'src/models/day'
 import { ok, err, type Result } from 'src/models/common'
 import { validateNoOverlap } from 'src/services/repeat'
 
@@ -2899,13 +3129,17 @@ export const useDaysStore = defineStore('days', () => {
 ```
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { useNow } from '@vueuse/core'
+import { format } from 'date-fns'
 import { db } from 'src/services/db'
+import { resolveDayForDate } from 'src/services/repeat'
 import type { DayInstance, Placement, CycleStateDto } from 'src/models/dayInstance'
 import type { PlacementStatus } from 'src/models/enums'
 import type { Slot, Conflict } from 'src/models/cycle'
 import { ok, err, type Result } from 'src/models/common'
-import { useTasksStore } from './tasks'
+import { useTasksStore, onTaskArchived } from './tasks'
 import { useDaysStore } from './days'
+import { useSettingsStore } from './settings'
 
 export const useCycleStore = defineStore('cycle', () => {
   const currentInstance = ref<DayInstance | null>(null)
@@ -2914,9 +3148,24 @@ export const useCycleStore = defineStore('cycle', () => {
   const loading = ref(false)
   const initialized = ref(false)
 
+  // FR-E-3: отмена завершения доступна только в текущей сессии (память, не БД)
+  const lastCompletedInstanceId = ref<string | null>(null)
+  const placementsSnapshot = ref<Placement[] | null>(null)
+  const lastCyclicTemplateIdSnapshot = ref<string | null>(null)
+
   const draggingTaskId = ref<string | null>(null)
   const dragSource = ref<'list' | 'board' | null>(null)
   const hoveredSlot = ref<number | null>(null)
+
+  let unsubscribeArchived: (() => void) | null = null
+
+  // useNow даёт реактивный тик (раз в минуту) — иначе computed без зависимостей
+  // закэшировался бы навсегда и автопереход в 00:00 (FR-C-4) не сработал бы.
+  const now = useNow({ interval: 60_000 })
+
+  // Локальная дата. Важно: new Date().toISOString() даёт UTC-дату и в UTC+3
+  // ночью (00:00–03:00) вернёт вчерашний день — используем format из date-fns.
+  const currentDate = computed(() => format(now.value, 'yyyy-MM-dd'))
 
   const currentTemplate = computed(() => {
     const id = currentInstance.value?.templateId
@@ -2978,8 +3227,15 @@ export const useCycleStore = defineStore('cycle', () => {
   async function initialize(): Promise<Result<void>> {
     loading.value = true
     try {
-      await useTasksStore().loadAll()
-      await useDaysStore().loadAll()
+      const tasksLoaded = await useTasksStore().loadAll()
+      if (!tasksLoaded.ok) return err(tasksLoaded.error.code, tasksLoaded.error.message, tasksLoaded.error.details)
+      const daysLoaded = await useDaysStore().loadAll()
+      if (!daysLoaded.ok) return err(daysLoaded.error.code, daysLoaded.error.message, daysLoaded.error.details)
+
+      // Побочный эффект FR-T-3: архивация дела переводит его pending-размещения в skipped
+      if (!unsubscribeArchived) {
+        unsubscribeArchived = onTaskArchived(skipPendingPlacementsForTask)
+      }
 
       const cs = await db.cycleState.get('current')
       if (!cs) return err('DB_ERROR', 'CycleState не инициализирован')
@@ -2989,8 +3245,12 @@ export const useCycleStore = defineStore('cycle', () => {
         currentInstance.value = (await db.dayInstances.get(cs.activeInstanceId)) ?? null
       }
       if (!currentInstance.value) {
-        await resolveCurrentDay()
+        const resolved = await resolveCurrentDay()
+        if (!resolved.ok) {
+          return err(resolved.error.code, resolved.error.message, resolved.error.details)
+        }
       }
+      checkDayChange()
       initialized.value = true
       return ok(undefined)
     } catch (e) {
@@ -3002,25 +3262,19 @@ export const useCycleStore = defineStore('cycle', () => {
 
   async function resolveCurrentDay(): Promise<Result<DayInstance>> {
     const days = useDaysStore()
-    const today = new Date().toISOString().slice(0, 10)
-    const dayOfMonth = new Date().getDate()
-    const weekday0 = (new Date().getDay() + 6) % 7 // 0 = Пн
+    const today = currentDate.value   // локальная дата, не UTC
 
-    let templateId = days.monthdayMap.get(dayOfMonth)
-      ?? days.weekdayMap.get(weekday0)
-      ?? null
+    // FR-C-1: приоритет месяц → день недели → следующий циклический → пустой день.
+    // Логика выбора — в чистой функции repeat.resolveDayForDate (юнит-тесты в §9 ТЗ).
+    const tpl = resolveDayForDate(
+      today,
+      days.orderedTemplates,
+      cycleState.value?.lastCyclicTemplateId ?? null,
+    )
 
-    if (!templateId && days.cyclicTemplates.length) {
-      const lastId = cycleState.value?.lastCyclicTemplateId
-      const idx = lastId ? days.cyclicTemplates.findIndex(t => t.id === lastId) : -1
-      const next = days.cyclicTemplates[(idx + 1) % days.cyclicTemplates.length]
-      templateId = next.id
-    }
-
-    const tpl = templateId ? days.templateById(templateId) : null
     const inst: DayInstance = {
       id: crypto.randomUUID(),
-      templateId: templateId,
+      templateId: tpl?.id ?? null,
       date: today,
       status: 'active',
       placements: [],
@@ -3038,37 +3292,121 @@ export const useCycleStore = defineStore('cycle', () => {
   }
 
   async function completeDay(
-    marks: Record<string, PlacementStatus>,
+    marks: Record<string, 'done' | 'skipped'>,
   ): Promise<Result<void>> {
     const inst = currentInstance.value
     if (!inst) return err('NOT_FOUND', 'Нет активного дня')
 
+    // Снапшот для отмены завершения (FR-E-3) — до мутации статусов
+    lastCompletedInstanceId.value = inst.id
+    placementsSnapshot.value = inst.placements.map(p => ({ ...p }))
+    lastCyclicTemplateIdSnapshot.value = cycleState.value?.lastCyclicTemplateId ?? null
+
     for (const p of inst.placements) {
-      p.status = marks[p.id] ?? 'skipped'
+      // FR-E-2: всё, что не отмечено 'done', становится 'skipped'
+      p.status = marks[p.id] === 'done' ? 'done' : 'skipped'
     }
     inst.status = 'completed'
     inst.completedAt = Date.now()
 
-    await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
-      await db.dayInstances.put(inst)
-      if (inst.templateId) {
-        const tpl = useDaysStore().templateById(inst.templateId)
-        if (tpl?.repeatRule.type === 'none') {
-          await db.cycleState.update('current', {
-            lastCyclicTemplateId: inst.templateId,
-            activeInstanceId: null,
-            manualShiftDate: null,
-          })
+    try {
+      await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
+        await db.dayInstances.put(inst)
+        if (inst.templateId) {
+          const tpl = useDaysStore().templateById(inst.templateId)
+          if (tpl?.repeatRule.type === 'none') {
+            await db.cycleState.update('current', {
+              lastCyclicTemplateId: inst.templateId,
+              activeInstanceId: null,
+              manualShiftDate: null,
+            })
+          } else {
+            await db.cycleState.update('current', { activeInstanceId: null })
+          }
         } else {
           await db.cycleState.update('current', { activeInstanceId: null })
         }
-      } else {
-        await db.cycleState.update('current', { activeInstanceId: null })
-      }
-    })
+      })
+    } catch (e) {
+      // откат оптимистичных изменений, чтобы память совпадала с БД
+      inst.status = 'active'
+      delete inst.completedAt
+      inst.placements = placementsSnapshot.value?.map(p => ({ ...p })) ?? inst.placements
+      lastCompletedInstanceId.value = null
+      placementsSnapshot.value = null
+      lastCyclicTemplateIdSnapshot.value = null
+      return err('DB_ERROR', 'Не удалось завершить день', e)
+    }
 
+    if (cycleState.value) cycleState.value.activeInstanceId = null
     currentInstance.value = null
+    completing.value = false          // диалог завершения закрывается
     return ok(undefined)
+  }
+
+  // FR-E-3: отмена завершения в рамках сессии
+  async function cancelCompletion(): Promise<Result<void>> {
+    const id = lastCompletedInstanceId.value
+    const snapshot = placementsSnapshot.value
+    if (!id || !snapshot) return err('NOT_FOUND', 'Нет завершённого дня для отмены')
+
+    try {
+      const inst = await db.dayInstances.get(id)
+      if (!inst) return err('NOT_FOUND', 'Экземпляр дня не найден')
+
+      inst.status = 'active'
+      delete inst.completedAt
+      inst.placements = snapshot.map(p => ({ ...p }))
+
+      await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
+        await db.dayInstances.put(inst)
+        await db.cycleState.update('current', {
+          activeInstanceId: inst.id,
+          // completeDay мог продвинуть указатель цикла — возвращаем прежнее значение
+          lastCyclicTemplateId: lastCyclicTemplateIdSnapshot.value,
+        })
+      })
+
+      currentInstance.value = inst
+      if (cycleState.value) {
+        cycleState.value.activeInstanceId = inst.id
+        cycleState.value.lastCyclicTemplateId = lastCyclicTemplateIdSnapshot.value
+      }
+      lastCompletedInstanceId.value = null
+      placementsSnapshot.value = null
+      lastCyclicTemplateIdSnapshot.value = null
+      completing.value = false
+      return ok(undefined)
+    } catch (e) {
+      return err('DB_ERROR', 'Не удалось отменить завершение дня', e)
+    }
+  }
+
+  // FR-E-1: ручное открытие диалога завершения (кнопка «Завершить день»)
+  function startCompletion(): void {
+    if (!currentInstance.value) return
+    completing.value = true
+  }
+
+  // FR-C-4: автопереход. Вызывается из App.vue (старт, visibilitychange, таймер до полуночи)
+  function checkDayChange(): void {
+    const inst = currentInstance.value
+    if (!inst || inst.status !== 'active') return
+    if (inst.date >= currentDate.value) return
+    if (!useSettingsStore().askToCompleteOnNewDay) return
+    completing.value = true
+  }
+
+  // Побочный эффект архивации дела (FR-T-3): pending-размещения → skipped
+  async function skipPendingPlacementsForTask(taskId: string): Promise<void> {
+    const inst = currentInstance.value
+    if (!inst || inst.status !== 'active') return
+
+    const affected = inst.placements.filter(p => p.taskId === taskId && p.status === 'pending')
+    if (!affected.length) return
+
+    for (const p of affected) p.status = 'skipped'
+    await db.dayInstances.put(inst)
   }
 
   async function shiftToNextDay(): Promise<Result<void>> {
@@ -3105,12 +3443,20 @@ export const useCycleStore = defineStore('cycle', () => {
     hoveredSlot.value = null
   }
 
+  // Отписка от emitter (вызывать при unmount/HMR, чтобы не копить обработчики в модульном Set)
+  function dispose() {
+    unsubscribeArchived?.()
+    unsubscribeArchived = null
+  }
+
   return {
     currentInstance, cycleState, completing, loading, initialized,
+    lastCompletedInstanceId, placementsSnapshot,
     draggingTaskId, dragSource, hoveredSlot,
-    currentTemplate, isCurrentDayEmpty, slots, placementsBySlot,
+    currentDate, currentTemplate, isCurrentDayEmpty, slots, placementsBySlot,
     conflicts, hasConflicts, unallocatedPlacements, canShiftNext, canComplete,
-    initialize, resolveCurrentDay, completeDay, shiftToNextDay,
+    initialize, resolveCurrentDay, completeDay, cancelCompletion, checkDayChange, startCompletion,
+    skipPendingPlacementsForTask, shiftToNextDay, dispose,
     placeTask, movePlacement, removePlacement, setPlacementStatus,
     startDrag, setHoveredSlot, endDrag,
   }
@@ -3123,11 +3469,17 @@ export const useCycleStore = defineStore('cycle', () => {
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { db } from 'src/services/db'
-import type { PlacementHistoryEntry, TaskStats, OverallStats } from 'src/services/stats'
 import { aggregateStats } from 'src/services/stats'
+import type {
+  PlacementHistoryEntry,
+  TaskStats,
+  OverallStats,
+  StatsPeriod,
+} from 'src/services/stats'
 import { ok, err, type Result } from 'src/models/common'
 
-export type StatsPeriod = '7d' | '30d' | 'all'
+// Тип объявлен один раз — в src/services/stats.ts; здесь только реэкспорт
+export type { StatsPeriod }
 
 export const useStatsStore = defineStore('stats', () => {
   const taskStats = ref<Map<string, TaskStats>>(new Map())
@@ -3147,6 +3499,7 @@ export const useStatsStore = defineStore('stats', () => {
     try {
       const target = p ?? period.value
       period.value = target
+      // Только завершённые экземпляры — поэтому в агрегатах pending всегда 0 (см. services/stats.ts)
       const instances = await db.dayInstances
         .where('status').equals('completed')
         .toArray()
@@ -3227,7 +3580,7 @@ export const useSettingsStore = defineStore('settings', () => {
     return theme.value
   })
 
-  const isDark = computed(() => effectiveTheme.value === 'dark')
+  // isDark не заводим: это тавтология effectiveTheme === 'dark' (см. контракт §5.2)
 
   function setTheme(t: ThemeMode) {
     theme.value = t
@@ -3246,7 +3599,7 @@ export const useSettingsStore = defineStore('settings', () => {
     theme, language, timeFormat,
     askToCompleteOnNewDay, autoShiftAtMidnight,
     showConflicts, firstDayOfWeek,
-    effectiveTheme, isDark,
+    effectiveTheme,
     setTheme, setLanguage, setTimeFormat,
   }
 })
@@ -3328,6 +3681,46 @@ export interface OverlapIssue {
   values: number[]
 }
 
+/** Разбор 'YYYY-MM-DD' по локальным компонентам: new Date('2025-09-23') дал бы UTC. */
+function parseISODate(date: string): { year: number; month: number; day: number } {
+  const [year, month, day] = date.split('-').map(Number)
+  return { year, month, day }
+}
+
+/**
+ * FR-C-1: выбор шаблона дня для даты 'YYYY-MM-DD'.
+ * Приоритет: число месяца → день недели (0 = Пн) → следующий циклический → null (пустой день).
+ * Если lastCyclicTemplateId не найден среди циклических — берём первый по order.
+ */
+export function resolveDayForDate(
+  date: string,
+  templates: DayTemplate[],
+  lastCyclicTemplateId: string | null = null,
+): DayTemplate | null {
+  const { year, month, day } = parseISODate(date)
+  const local = new Date(year, month - 1, day)
+  const dayOfMonth = local.getDate()
+  const weekday0 = (local.getDay() + 6) % 7
+
+  const byMonthday = templates.find(
+    t => t.repeatRule.type === 'monthdays' && t.repeatRule.monthdays?.includes(dayOfMonth),
+  )
+  if (byMonthday) return byMonthday
+
+  const byWeekday = templates.find(
+    t => t.repeatRule.type === 'weekdays' && t.repeatRule.weekdays?.includes(weekday0),
+  )
+  if (byWeekday) return byWeekday
+
+  const cyclic = templates
+    .filter(t => t.repeatRule.type === 'none')
+    .sort((a, b) => a.order - b.order)
+  if (!cyclic.length) return null
+
+  const idx = lastCyclicTemplateId ? cyclic.findIndex(t => t.id === lastCyclicTemplateId) : -1
+  return cyclic[(idx + 1) % cyclic.length]
+}
+
 export function validateNoOverlap(
   rule: RepeatRule,
   templates: DayTemplate[],
@@ -3395,7 +3788,7 @@ export function validateTaskInput(input: TaskInput): Result<TaskInput> {
 
 ```
 import type { DayInstance } from 'src/models/dayInstance'
-import type { Priority } from 'src/models/enums'
+import type { PlacementStatus, Priority } from 'src/models/enums'
 
 export type StatsPeriod = '7d' | '30d' | 'all'
 
@@ -3425,32 +3818,52 @@ export interface PlacementHistoryEntry {
   date: string
   startMin: number
   durationMin: number
-  status: 'pending' | 'done' | 'skipped'
+  status: PlacementStatus
   completedAt?: number
 }
 
-function periodStart(p: StatsPeriod, end: Date): Date | null {
-  if (p === 'all') return null
-  const d = new Date(end)
-  d.setDate(d.getDate() - (p === '7d' ? 7 : 30))
-  return d
+/** Локальная дата в виде 'YYYY-MM-DD' (toISOString() вернул бы UTC-дату). */
+function toLocalISO(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
+/** Начало периода как 'YYYY-MM-DD' (локальная дата) или null для 'all'.
+ *  Окно включительное: '7d' = сегодня и 6 предыдущих дней (итого 7 дат). */
+function periodStartISO(p: StatsPeriod, end: Date): string | null {
+  if (p === 'all') return null
+  const d = new Date(end)
+  d.setDate(d.getDate() - (p === '7d' ? 6 : 29))
+  return toLocalISO(d)
+}
+
+/**
+ * Агрегация чистой функцией: считает ровно те экземпляры, которые переданы.
+ *
+ * Про pending: поле pending в TaskStats остаётся, но при выборке только завершённых
+ * экземпляров (status = 'completed', как это делает useStatsStore.recompute) оно
+ * всегда 0 — completeDay переводит все размещения в done/skipped (FR-E-2).
+ * Ненулевым pending будет только если передать сюда активные экземпляры
+ * (например, для будущей «статистики текущего дня»).
+ */
 export function aggregateStats(
   instances: DayInstance[],
   period: StatsPeriod,
 ): { perTask: Map<string, TaskStats>; overall: OverallStats } {
   const end = new Date()
-  const start = periodStart(period, end)
+  const startISO = periodStartISO(period, end)
   const perTask = new Map<string, TaskStats>()
+  // Дата последнего встреченного размещения по делу — для снимка title/color/priority
+  const lastSeenDate = new Map<string, string>()
 
   let placed = 0, done = 0, skipped = 0
 
   for (const inst of instances) {
-    if (start) {
-      const d = new Date(inst.date)
-      if (d < start) continue
-    }
+    // Сравниваем строки 'YYYY-MM-DD' в локальной дате: new Date('2025-09-23')
+    // парсится как UTC-полночь и на границе периода даёт сдвиг на сутки.
+    if (startISO && inst.date < startISO) continue
     for (const p of inst.placements) {
       placed++
       const cur = perTask.get(p.taskId) ?? {
@@ -3464,6 +3877,16 @@ export function aggregateStats(
       if (p.status === 'done') { cur.done++; done++ }
       else if (p.status === 'skipped') { cur.skipped++; skipped++ }
       else cur.pending++
+
+      // Снимок подписи берём из последнего по дате размещения (экземпляры идут не по порядку)
+      const seen = lastSeenDate.get(p.taskId)
+      if (!seen || inst.date >= seen) {
+        cur.title = p.taskSnapshot.title
+        cur.color = p.taskSnapshot.color
+        cur.priority = p.taskSnapshot.priority
+        lastSeenDate.set(p.taskId, inst.date)
+      }
+
       perTask.set(p.taskId, cur)
     }
   }
@@ -3479,8 +3902,8 @@ export function aggregateStats(
     overall: {
       placed, done, skipped,
       rate: overallDenom === 0 ? null : done / overallDenom,
-      periodStart: start ? start.toISOString().slice(0, 10) : null,
-      periodEnd: end.toISOString().slice(0, 10),
+      periodStart: startISO,
+      periodEnd: toLocalISO(end),
     },
   }
 }
@@ -3660,8 +4083,6 @@ export default {
     repeatNone: 'Без привязки (циклический)',
     repeatWeekdays: 'По дням недели',
     repeatMonthdays: 'По числам месяца',
-    save: 'Сохранить',
-    cancel: 'Отмена',
     empty: 'Нет шаблонов дней',
   },
   stats: {
@@ -3749,8 +4170,6 @@ export default {
     repeatNone: 'No binding (cyclic)',
     repeatWeekdays: 'By weekdays',
     repeatMonthdays: 'By month days',
-    save: 'Save',
-    cancel: 'Cancel',
     empty: 'No day templates',
   },
   stats: {
@@ -3787,12 +4206,10 @@ export default {
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { useUiStore } from 'src/stores/ui'
 import { useCycleStore } from 'src/stores/cycle'
 
-const $q = useQuasar()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const cycle = useCycleStore()
@@ -3808,19 +4225,34 @@ onMounted(async () => {
   // Инициализация цикла
   await cycle.initialize()
 
-  // Автопереход в 00:00 — проверка при возврате во вкладку
+  // FR-C-4: автопереход в 00:00. Проверяем при возврате во вкладку и по таймеру,
+  // который каждый раз переставляется на ближайшую полночь.
+  let midnightTimer: ReturnType<typeof setTimeout> | undefined
+
+  function scheduleMidnightCheck() {
+    if (midnightTimer) clearTimeout(midnightTimer)
+    const now = new Date()
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5)
+    midnightTimer = setTimeout(checkDay, nextMidnight.getTime() - now.getTime())
+  }
+
+  function checkDay() {
+    cycle.checkDayChange()
+    scheduleMidnightCheck()
+  }
+
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      // TODO: проверить смену суток и, если нужно, открыть диалог
-    }
+    if (document.visibilityState === 'visible') checkDay()
   })
+  scheduleMidnightCheck()
 
   // Тост, если офлайн
   if (!ui.isOnline) {
     ui.notify('Приложение работает офлайн', 'info')
   }
 
-  $q.dark.set(settings.effectiveTheme === 'dark')
+  // Тему применил settings.setTheme() выше (он вызывает Dark.set), поэтому
+  // здесь НЕ форсируем boolean: иначе ломается режим 'auto' (dark: 'auto' в quasar.config.ts).
 })
 </script>
 ```
@@ -3829,14 +4261,20 @@ onMounted(async () => {
 
 | Шаг | Файлы |
 | --- | --- |
-| Доработать cycle.placeTask / movePlacement / removePlacement | src/stores/cycle.ts |
-| Реализовать detectConflicts в cycle | src/services/scheduler.ts + геттер |
+| Доработать cycle.placeTask / movePlacement / removePlacement / setPlacementStatus | src/stores/cycle.ts |
+| Реализовать detectConflicts в cycle (сервис уже есть) | src/services/scheduler.ts + геттер conflicts |
+| Реализовать scheduler.fitInDay (FR-B-4) | src/services/scheduler.ts |
+| FR-C-3: писать manualShiftDate и материализовать следующий день после completeDay | src/stores/cycle.ts |
+| FR-D-6: не сохранять пустой день, пока в него не положили дело (или явно разрешить сохранение и поправить FR-D-6) | src/stores/cycle.ts |
+| Доделать остаток API сторов из таблицы §6 (tasks: refresh / isTitleTaken / subscribe; days: moveToPosition / validateNoOverlap; cycle: replacePlacement / changePlacementDuration / resetCurrentDay / dayProgress; stats: setSort / topTasks / history; settings: exportAll / importAll / clearAll / lastBackupAt / toggle*) | src/stores/*.ts |
+| Подписки liveQuery (subscribe / unsubscribe) в tasks, days, stats | src/stores/*.ts |
+| Экспорт/импорт данных (§5.4 контрактов) + UI в настройках | src/stores/settings.ts, src/pages/SettingsPage.vue |
 | Создать MainLayout.vue (AppBar + drawer + bottom tab) | src/layouts/MainLayout.vue |
 | Написать страницы: DayBoardPage, TasksPage, DaysPage, StatsPage, SettingsPage | src/pages/* |
 | Реализовать компоненты: DayGrid, PlacementCard, TaskForm, DayTemplateForm, CompleteDayDialog | src/components/** |
 | Настроить PWA-манифест и иконки | quasar mode add pwa → src-pwa/ |
-| Добавить eslint/prettier конфиги | .eslintrc.cjs, .prettierrc |
-| Написать юнит-тесты для сервисов | src/services/**/*.spec.ts |
+| Проверить flat-конфиг ESLint/Prettier на реальном коде | eslint.config.js (см. §3.5), .prettierrc (см. §3.6) |
+| Написать юнит-тесты для сервисов и сторов (в т.ч. completeDay → cancelCompletion, archiveTask → skipped) | src/**/*.spec.ts |
 
 ## 12. Быстрый старт
 
@@ -3853,5 +4291,83 @@ pnpm dev
 
 # 5. Запустить тесты
 pnpm test
+
+# 6. Проверить линтер (flat config ESLint 9)
+pnpm lint
 ```
+
+# Приложение А. Журнал правок по итогам аудита
+
+Ниже — что именно изменено в документе после сверки ТЗ, контрактов сторов и скаффолда. Нумерация — по пунктам аудита.
+
+| № аудита | Проблема | Как исправлено |
+| --- | --- | --- |
+| 2.1 | Placement в §3.1 без taskSnapshot | В §3.1 добавлено поле `taskSnapshot: TaskSnapshot` и сам интерфейс `TaskSnapshot` в блоке `src/models/task.ts` |
+| 2.2 | Таблица settings в схеме IndexedDB (§3.2) | Строка убрана; добавлено пояснение, что настройки — в localStorage через useStorage. В §5.4 уточнено, что блок settings в экспорте/импорте читается и пишется через localStorage, а не Dexie |
+| 2.3 | quasar.config.ts использует плагин, которого нет в package.json | Плагин убран из `vitePlugins`: локали — .ts-модули, их компилирует штатная сборка vue-i18n для бандлеров, предкомпиляция не нужна. В §3.1 скаффолда добавлено пояснение, когда плагин действительно понадобится и какую ветку версий брать |
+| 2.4 | Скаффолд реализует подмножество контрактов без пометки | В шапке контрактов добавлена явная пометка «полный API — здесь, скаффолд — подмножество»; в §6 скаффолда добавлена таблица «чего нет в скаффолде» по каждому стору; §11 дополнен соответствующими строками |
+| 2.5 | FR-E-3 (отмена завершения) не реализована | В контракте §3.1 добавлены `lastCompletedInstanceId` и `placementsSnapshot`, в §3.4 уточнён алгоритм; в скаффолде реализованы `cancelCompletion()`, снапшот placements в `completeDay()` и откат при ошибке БД |
+| 2.6/2.7 | resolveCurrentDay использует UTC-дату | В скаффолде — `format(new Date(), 'yyyy-MM-dd')` (date-fns), добавлен геттер `currentDate`. Заодно исправлена та же ошибка в `services/stats.ts`: сравнение границ периода по локальной дате вместо `new Date('YYYY-MM-DD')` + `toISOString()` |
+| 2.8 | completeDay пропускает pending | Сигнатура изменена на `Record<string, 'done' \| 'skipped'>` (и в контракте §3.3, и в скаффолде): всё, что не `done`, становится `skipped`; `'pending'` трактуется как `skipped` |
+| 2.9 | aggregateStats считает pending, которых не бывает | Явно задокументировано: при выборке только completed экземпляров pending всегда 0; поле сохранено для случая, когда в агрегацию попадут активные экземпляры. В §4.4 контракта убрана ссылка на несуществующий хелпер `isInPeriod` |
+| 2.10 | isDark дублирует effectiveTheme | Убран из контракта §5.2 и из скаффолда; в UI используется сравнение `effectiveTheme === 'dark'` |
+| 2.11 | Сломанная markdown-таблица в §6 | Таблица восстановлена (шапка + разделитель + строки), проверены все таблицы документа |
+| 2.12 | .eslintrc.cjs vs ESLint 9 | В структуре проекта — `eslint.config.js`; добавлен §3.5 с flat config, §3.6 с `.prettierrc`; в devDependencies добавлены `@eslint/js`, `eslint-plugin-vue`, `typescript-eslint`, `globals` (вместо неиспользуемого `eslint-plugin-import`); скрипт lint — `eslint .` (без удалённого в ESLint 9 `--ext`) |
+| 2.13 | archiveTask — грязная реализация | Переписано на `db.tasks.update()` + обновление реактивного массива; побочный эффект «pending-размещения → skipped» реализован через мини-emitter `onTaskArchived` (задача — cycleStore) — без циклического импорта. `unarchiveTask` приведён к тому же виду |
+| 2.14 | Автопереход в 00:00 не реализован | В App.vue добавлены `visibilitychange` + таймер до ближайшей полуночи, в cycleStore — action `checkDayChange()` (с учётом `askToCompleteOnNewDay`); §3.3/§3.4/§3.5 и трассируемость FR-C-4 обновлены |
+| 2.15 | Дубли ключей i18n (days.save / days.cancel) | Удалены из ru и en, используются `common.save` / `common.cancel` |
+| 2.16 | Дублирование типа StatsPeriod | Тип объявлен один раз в `services/stats.ts`, в сторе — реэкспорт |
+| сверх аудита | Имя `CycleState` конфликтовало с `CycleStateDto` скаффолда | В §2.3 (FR-C-5) и §3.1 модель приведена к `CycleStateDto`; в `src/models/cycle.ts` вместо него — `Slot` и `Conflict`, как в скаффолде |
+| сверх аудита | Контракт настроек обещал ключи `tododay:settings:<key>`, скаффолд использовал `tododay:<key>` | §5.1 приведён к фактическим ключам скаффолда с их полным перечнем |
+| сверх аудита | Контракт §1.6 обещал прямую зависимость tasksStore → cycleStore | Заменено на emitter (`onTaskArchived`); правила §7 и взаимодействие §3.6 дополнены: cycleStore читает settingsStore для FR-C-4 |
+| сверх аудита | ТЗ §4.4 и план тестов §9 обещали `repeat.resolveDayForDate`, которого не было ни в контрактах, ни в скаффолде (логика была вписана в resolveCurrentDay) | Функция добавлена в скаффолд `services/repeat.ts`, cycleStore теперь делегирует ей выбор шаблона; §3.4 контракта дополнен ссылкой |
+| сверх аудита | В §4.2 структуре проекта не было `layouts/`, i18n значился как `ru.ts`/`en.ts`, сервис назывался `validateNoDuplicates`, статистика — `stats.aggregate` | Приведено к скаффолду: добавлен `layouts/MainLayout.vue`, i18n как `ru/index.ts`, `validateNoOverlap`, `stats.aggregateStats` |
+| сверх аудита | Расхождение типов ошибок перекрытия (ValidationIssue в контракте vs OverlapIssue в скаффолде) | Зафиксировано в таблице §6 скаффолда как задача при доработке (тип-источник — контракт) |
+
+## Приложение Б. Правки второго прохода (независимая проверка правок)
+
+После правок документ прошёл повторную независимую сверку. Ниже — что исправлено по её итогам и что осознанно оставлено как задача (со ссылкой на место, где это зафиксировано).
+
+### Исправлено
+
+| Проблема | Как исправлено |
+| --- | --- |
+| `currentDate` — computed без реактивных зависимостей: кэшировался навсегда, автопереход в 00:00 (FR-C-4) не срабатывал | В цикл-сторе добавлен `const now = useNow({ interval: 60_000 })` из @vueuse/core, `currentDate` считается от `now.value` |
+| `completing` никогда не сбрасывался → диалог завершения не закрывался | `completing = false` в успешной и в откатной ветках `completeDay()` и в `cancelCompletion()`; отражено в §3.4 контракта |
+| Неиспользуемый импорт `RepeatRule` в скаффолде days.ts при `noUnusedLocals: true` | Импорт убран |
+| `deleteTask` удалял любое дело, хотя контракт разрешает hard delete только из архива | Добавлена проверка `archived` → `CONSTRAINT_VIOLATION` |
+| `duplicateTask` на названии ≥ 93 символов давал VALIDATION_ERROR | База названия обрезается до 100 символов с учётом суффикса « (копия)» |
+| Нет action для ручного открытия диалога завершения (FR-E-1) | Добавлен `startCompletion()` в контракт §3.3/§3.4, в скаффолд и в трассируемость FR-E-1 |
+| Подписка на emitter архивации не снималась | Добавлен `dispose()` (в контракт §3.3/§3.5 и в скаффолд), `skipPendingPlacementsForTask` описан в контракте |
+| `cancelCompletion` не восстанавливал `lastCyclicTemplateId`, который мог продвинуть `completeDay` | Добавлен снапшот `lastCyclicTemplateIdSnapshot` (контракт §3.1/§3.4 + скаффолд) |
+| Снимок подписи дела брался из произвольного размещения | `aggregateStats` теперь берёт title/color/priority из последнего по дате размещения |
+| Окно «7 дней» включало 8 календарных дат | `periodStartISO`: `-6` для 7d и `-29` для 30d (окно включительное), зафиксировано в комментарии |
+| `@vitest/coverage-v8` отсутствовал при включённом покрытии | Добавлен в devDependencies и в команду установки |
+| App.vue форсировал boolean-тему и ломал режим `auto` | Строка `$q.dark.set(...)` убрана, тема применяется через `settings.setTheme()` |
+| `initialize` игнорировал `Result` от `loadAll`/`resolveCurrentDay` | Результаты проверяются, ошибка возвращается наружу |
+| Тип `cycleState` в контракте был не-nullable | В контракте §3.1 — `Ref<CycleStateDto \| null>` (null до `initialize()`) |
+| §4.6 «Читает: tasksStore» противоречил §7 | Исправлено: статистика читает `db.dayInstances` напрямую |
+| §7 называл несуществующие actions `tasksStore.initialize()` / `daysStore.initialize()` | Заменено на `loadAll()` / `recompute()` |
+| §4.2/§4.3 не совпадали со скаффолдом (нет `ui.ts`, `common.ts`, `enums.ts`, validators, TaskStatsPage, ErrorNotFound, useUiStore) | §4.2/§4.3 дополнены |
+| Сигнатуры `resolveDayForDate` / `validateNoOverlap` в §4.4 были короче реальных | В §4.4 добавлены `templates` и `lastCyclicTemplateId` |
+| Дубли объявлений `Priority` / `PlacementStatus` / `InstanceStatus` / `RepeatRuleType` в §3.1 | Добавлен блок `src/models/enums.ts`, модели импортируют типы из него |
+| `// src/types/common.ts` вместо `src/models/common.ts`; опечатки «кратко 60/30»; комментарий `StatsSortField`; `PlacementHistoryEntry.status` как литерал | Исправлено |
+| §2.5 — таблица с пустой 4-й колонкой и примечанием внутри ячейки | Приведена к 3 колонкам, примечание вынесено в текст |
+| Разовый пропуск авто-диалога (FR-E-1) путался с постоянной настройкой `askToCompleteOnNewDay` | Формулировки разведены |
+| Имена счётчиков FR-S-1 не совпадали с `TaskStats` | Добавлена таблица соответствия (totalPlaced→placed и т.д.) |
+| Стрелка useTasksStore → useCycleStore читалась как импорт стора | Под диаграммой §7 добавлено пояснение, что это emitter `onTaskArchived` |
+
+### Осознанно оставлено как задача (не противоречие, а объём работ)
+
+Эти пункты требуют продуктовых решений или отдельной реализации; они зафиксированы в таблице §6 скаффолда и в §11, чтобы не выглядеть «сломанным скаффолдом»:
+
+- FR-D-6: пустой день сейчас сохраняется в Dexie сразу — нужно либо не сохранять его до первого размещения/завершения, либо переформулировать FR-D-6.
+- FR-C-3: `shiftToNextDay` только открывает диалог; `manualShiftDate` не пишется, следующий день после `completeDay` не материализуется (правило 12 §6 ТЗ не проверяется).
+- `scheduler.fitInDay` (FR-B-4), подписки liveQuery, `resetCurrentDay`, `replacePlacement`, `changePlacementDuration`, `dayProgress` — не реализованы.
+- `unallocatedPlacements` опирается на `startMin < 0`, что не описано в модели Placement и противоречит проверке `startMin >= 0` (§4.4 ТЗ) — нужен явный признак нераспределённого размещения.
+- `setLanguage` не переключает локаль i18n (нужен экспорт инстанса i18n из boot-файла); настройки `autoShiftAtMidnight`, `showConflicts`, `firstDayOfWeek` нигде не используются.
+- `createTemplate` / `updateTemplate` / `deleteTemplate` / `reorder` в days.ts не обёрнуты в try/catch, хотя §0.1 контрактов требует возвращать Result.
+- FR-T-2 (заморозка `durationMin` при активных размещениях) и правило 7 §6 ТЗ («запрещены дубли дат») не обеспечены кодом: уникальности дат нет ни в схеме, ни в материализации сдвинутого дня.
+- Нет раздела `settings.*` в i18n, хотя страница настроек есть.
+
 
