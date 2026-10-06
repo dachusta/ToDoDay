@@ -2,12 +2,17 @@ import { defineBoot } from '#q-app/wrappers'
 import { createI18n } from 'vue-i18n'
 import messages from 'src/i18n'
 
+// useStorage со строковым дефолтом (settings.ts, ключ tododay:language) пишет
+// значение сырой строкой: StorageSerializers.string.write = String(v).
+// Поэтому JSON.parse здесь падал бы на 'en', catch возвращал 'ru', и локаль
+// всегда стартовала русской. Кавычки возможны только у записей, сделанных
+// через JSON.stringify, — их тоже принимаем.
 function storedLanguage(): 'ru' | 'en' {
   try {
     const raw = localStorage.getItem('tododay:language')
     if (!raw) return 'ru'
-    const parsed = JSON.parse(raw) as unknown
-    return parsed === 'en' ? 'en' : 'ru'
+    const value = raw.startsWith('"') ? (JSON.parse(raw) as unknown) : raw
+    return value === 'en' ? 'en' : 'ru'
   } catch {
     return 'ru'
   }

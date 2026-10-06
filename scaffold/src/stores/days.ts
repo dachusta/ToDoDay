@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { db } from 'src/services/db'
-import type { DayTemplate, DayTemplateInput, ValidationIssue } from 'src/models/day'
+import type { DayTemplate, DayTemplateInput, RepeatRule, ValidationIssue } from 'src/models/day'
 import { ok, err, type Result } from 'src/models/common'
-import { normalizeRule, validateNoOverlap } from 'src/services/repeat'
+import { normalizeRule, validateNoOverlap as repeatValidateNoOverlap } from 'src/services/repeat'
 import { parseClock } from 'src/services/dates'
 
 const OVERLAP_CODES = ['OVERLAP_WEEKDAYS', 'OVERLAP_MONTHDAYS'] as const
@@ -82,7 +82,7 @@ export const useDaysStore = defineStore('days', () => {
 
   // Валидация как в контрактах §2.5: сначала правило, затем пересечения, затем имя и время.
   function validate(input: DayTemplateInput, excludeId?: string): ValidationIssue[] {
-    const issues = validateNoOverlap(input.repeatRule, templates.value, excludeId)
+    const issues = repeatValidateNoOverlap(input.repeatRule, templates.value, excludeId)
 
     const name = input.name.trim()
     if (name.length < 1 || name.length > 50) {
@@ -110,6 +110,15 @@ export const useDaysStore = defineStore('days', () => {
       })
     }
     return issues
+  }
+
+  /**
+   * Контракты §2.3 + трассируемость FR-D-5: у стора есть собственное действие
+   * проверки пересечений. Тонкая обёртка над repeat.validateNoOverlap — сам
+   * алгоритм остаётся в сервисе и не дублируется.
+   */
+  function validateNoOverlap(rule: RepeatRule, excludeId?: string): ValidationIssue[] {
+    return repeatValidateNoOverlap(rule, templates.value, excludeId)
   }
 
   /** Конфликт правил → CONFLICT, остальное → VALIDATION_ERROR. null — проблем нет. */
@@ -249,6 +258,6 @@ export const useDaysStore = defineStore('days', () => {
   return {
     templates, loading, initialized,
     orderedTemplates, cyclicTemplates, cyclicUnreachable, templateById, weekdayMap, monthdayMap,
-    loadAll, createTemplate, updateTemplate, deleteTemplate, reorder, validate,
+    loadAll, createTemplate, updateTemplate, deleteTemplate, reorder, validate, validateNoOverlap,
   }
 })

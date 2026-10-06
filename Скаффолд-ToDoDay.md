@@ -4,7 +4,7 @@
 
 Скаффолд — это готовый код, вынесенный в каталог [`scaffold/`](scaffold): 34 файла, которые копируются поверх проекта, созданного мастером Quasar CLI (§0). Разделы ниже сохраняют нумерацию (на неё ссылаются ТЗ и журнал) и описывают, что лежит в каждом файле, что важно в нём и чего в скаффолде ещё нет.
 
-`scaffold/` — **оверлей, а не самостоятельное приложение**. Часть файлов проекта создаёт мастер Quasar, часть ещё не написана (таблица гэпов §6 и §11): без них `scaffold/` сам по себе не запустится. Содержание кода в этой ревизии не менялось — это перенос без правок.
+`scaffold/` — **оверлей, а не самостоятельное приложение**. Часть файлов проекта создаёт мастер Quasar, часть ещё не написана (таблица гэпов §6 и §11): без них `scaffold/` сам по себе не запустится. В ревизии 1.6 код перенесён из документа без правок; в ревизии 1.6.1 исправлены три файла — см. [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md), приложение И.
 
 ## 0. Создание проекта
 
@@ -32,7 +32,7 @@ pnpm add dexie vuedraggable @vueuse/core date-fns
 # Dev
 pnpm add -D vitest @vitest/coverage-v8 @vue/test-utils jsdom fake-indexeddb \
   @types/node eslint @eslint/js eslint-plugin-vue typescript-eslint globals \
-  prettier vue-tsc
+  prettier vue-tsc @vitejs/plugin-vue
 ```
 
 После этого скопируйте содержимое [`scaffold/`](scaffold) в корень проекта (`package.json`, `quasar.config.ts`, `tsconfig.json`, `vitest.config.ts`, `eslint.config.js`, `.prettierrc`, `test/`, `src/`).
@@ -43,8 +43,8 @@ pnpm add -D vitest @vitest/coverage-v8 @vue/test-utils jsdom fake-indexeddb \
 
 | Группа | Что это | Файлы |
 | --- | --- | --- |
-| В `scaffold/` (34 файла) | код, который копируется поверх проекта | `package.json`, `quasar.config.ts`, `tsconfig.json`, `vitest.config.ts`, `eslint.config.js`, `.prettierrc`, `test/vitest/setup.ts`, `src/models/*` (6), `src/services/*` (6), `src/stores/*` (7), `src/boot/*` (2), `src/router/*` (2), `src/i18n/**` (4), `src/App.vue` |
-| Создаёт мастер Quasar | файлы, которых в `scaffold/` нет намеренно: их генерирует `quasar create` / `quasar mode add pwa` | `src/css/app.scss`, `src/css/quasar.variables.scss`, `src/env.d.ts`, `src/shims-vue.d.ts`, `tsconfig.node.json`, `.gitignore`, `src-pwa/**`, заглушечные `src/pages/**`, `src/layouts/MainLayout.vue` |
+| В `scaffold/` (34 файла) | код, который копируется поверх проекта | `package.json`, `quasar.config.ts`, `tsconfig.json`, `vitest.config.ts`, `eslint.config.js`, `.prettierrc`, `test/vitest/setup.ts`, `src/models/*` (6), `src/services/**` (6, включая `validators/task.ts`), `src/stores/*` (7), `src/boot/*` (2), `src/router/*` (2), `src/i18n/**` (3), `src/App.vue` |
+| Создаёт мастер Quasar | файлы, которых в `scaffold/` нет намеренно: их генерирует `quasar create` / `quasar mode add pwa` | `index.html`, `.gitignore`, css-файлы (`src/css/app.scss`, `src/css/quasar.variables.scss`), `src-pwa/**`, корневой `/env.d.ts`, шим `*.vue` (генерируется опцией `build.typescript.vueShim`, см. §3.1), заглушечные `src/pages/**` и `src/layouts/MainLayout.vue` |
 | Осталось написать | гэпы скаффолда, см. §6 и §11 | `src/layouts/MainLayout.vue` (переписать), все `src/pages/**`, `src/components/**`, `src/services/validators/day.ts`, подписки liveQuery, экспорт/импорт |
 
 ## 2. package.json
@@ -113,12 +113,16 @@ ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `-
 | useTasksStore | subscribe, unsubscribe, refresh, tasksByPriority, totalCount / activeCount / archivedCount; TaskSortField объявлен инлайн. `isTitleTaken` в MVP не нужен | На TasksPage работают поиск, фильтры, сортировка и счётчики; изменения в другой вкладке видны без перезагрузки (liveQuery) |
 | useDaysStore | moveToPosition, subscribe, unsubscribe (liveQuery), hasConflicts, templatesCount, calendarTemplates, lastValidationErrors, sortMode. `deleteTemplate` и `reorder` уже в try/catch, удаление уплотняет order, reorder откатывает его | Вторая вкладка видит правки шаблонов; экран «Дни» показывает счётчики и режим сортировки |
 | useCycleStore | dayProgress, подписка liveQuery. `resetCurrentDay` в MVP нет. `replacePlacement` и `changePlacementDuration` реализованы в ревизии 1.3 | Вторая вкладка видит изменения активного дня; dayProgress совпадает с размещениями текущего дня |
-| useCycleStore (готово) | placeTask / movePlacement / removePlacement / replacePlacement / changePlacementDuration / setPlacementStatus, сдвиг, виртуальный пустой день, checkDayChange с dayChangeInFlight на всех ветках, авто-сдвиг сохраняет done | Тесты §9 контрактов (включая сценарии ТЗ §2.10 и «done не стал skipped») проходят на этом скаффолде |
 | useStatsStore | initialize, subscribe, unsubscribe, setSort, sortBy, sortOrder, history, taskStatsById. `topTasks` и `worstTasks` в MVP нет | StatsPage сортирует по любой колонке; TaskStatsPage берёт историю из кэша без повторного запроса |
 | useSettingsStore | exportAll, importAll, clearAll, lastBackupAt и сами экраны настроек. `toggleAskOnNewDay`, `toggleAutoShift`, `toggleShowConflicts`, `setFirstDayOfWeek` и `setLanguage` в сторе уже есть | FR-SET-4/5/10 проходят критерии приёмки ТЗ §9: экспорт даёт JSON с version «1.0», импорт отклоняет мусор без изменения данных, очистка чистит Dexie и localStorage |
-| Страницы и компоненты | MainLayout, TasksPage, DaysPage, DayBoardPage, StatsPage, TaskStatsPage, SettingsPage, DayGrid, PlacementCard, CompleteDayDialog, PWA-манифест | Все маршруты ТЗ §5.1 открываются, состояния экранов совпадают с вайрфреймами, приложение устанавливается как PWA |
+| Страницы и компоненты | MainLayout, TasksPage, DaysPage, DayBoardPage, StatsPage, TaskStatsPage, SettingsPage, DayGrid, PlacementCard, CompleteDayDialog, PWA-манифест. Заглушки `pages/**` и `layouts/**` мастер создаёт, их нужно переписать (см. §11) | Все маршруты ТЗ §5.1 открываются, состояния экранов совпадают с вайрфреймами, приложение устанавливается как PWA |
 | i18n | Разделы settings.*, placement.*, nav.tab.*, day.templateDeleted добавлены в ревизии 1.2, но компоненты их ещё не используют | Переключение ru/en меняет все видимые строки; в консоли нет предупреждений о missing key |
-| scheduler (готово) | isValidStartMin, fitInDay(startMin, durationMin, instance), detectConflicts (без skipped) реализованы в ревизии 1.2 | Юнит-тесты §9 контрактов по этим функциям зелёные |
+| Валидатор дня | `src/services/validators/day.ts` (ТЗ §4.2) не написан: проверки шаблона живут в `daysStore.validate` и `repeat.validateRule`/`repeat.validateNoOverlap` | Валидация шаблона не дублируется: либо сервис появляется, либо файл убирается из дерева ТЗ §4.2 |
+
+Реализовано и гэпом не является (раньше эти строки стояли в таблице с пометкой «(готово)»):
+
+- **useCycleStore** — placeTask / movePlacement / removePlacement / replacePlacement / changePlacementDuration / setPlacementStatus, сдвиг, виртуальный пустой день, checkDayChange с dayChangeInFlight на всех ветках, авто-сдвиг сохраняет done. Критерий: тесты §9 контрактов (включая сценарии ТЗ §2.10 и «done не стал skipped») проходят на этом скаффолде.
+- **scheduler** — isValidStartMin, fitInDay(startMin, durationMin, instance), detectConflicts (без skipped) — реализованы в ревизии 1.2. Критерий: юнит-тесты §9 контрактов по этим функциям зелёные.
 
 Всё перечисленное нужно добавить при переработке соответствующего модуля; имена и типы берутся из контрактов (раздел «Контракты сторов Pinia» — источник истины).
 
@@ -126,7 +130,7 @@ ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `-
 CRUD дел (`loadAll`, `createTask`, `updateTask`, `archiveTask`, `unarchiveTask`, `deleteTask`, `duplicateTask`), фильтры, поиск и сортировка в `visibleTasks`, мини-emitter `onTaskArchived` (на него подписывается cycleStore, циклического импорта нет).
 
 ### 6.2 [src/stores/days.ts](scaffold/src/stores/days.ts)
-CRUD шаблонов (`createTemplate`, `updateTemplate`, `deleteTemplate`, `reorder`), `validate`, emitter `onCyclicPointerRewritten` (удаление циклического шаблона-указателя не сбрасывает цикл в начало).
+CRUD шаблонов (`createTemplate`, `updateTemplate`, `deleteTemplate`, `reorder`), `validate`, `validateNoOverlap` (тонкая обёртка над `repeat.validateNoOverlap`, добавлена в ревизии 1.6.1 — контракты §2.3 и трассируемость FR-D-5), emitter `onCyclicPointerRewritten` (удаление циклического шаблона-указателя не сбрасывает цикл в начало).
 
 ### 6.3 [src/stores/cycle.ts](scaffold/src/stores/cycle.ts)
 Ядро приложения: `initialize`, `resolveCurrentDay` (в т.ч. `{ force: true }`), `completeDay` / `cancelCompletion` / `startCompletion` / `dismissCompletion`, `checkDayChange` / `autoShift` / `shiftToNextDay` с режимами `ShiftMode`, `placeTask` / `movePlacement` / `removePlacement` / `replacePlacement` / `changePlacementDuration` / `setPlacementStatus`, `skipPendingPlacementsForTask`, `dispose`. Алгоритм дня целиком описан в контрактах §3.4 — код реализует его, а не наоборот.
@@ -155,7 +159,7 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 `validateTaskInput` (непустое название, известный приоритет, длительность > 0).
 
 ### 7.3 [src/services/stats.ts](scaffold/src/services/stats.ts)
-`aggregateStats` + `periodStartISO` (периоды 7 / 30 / всё время, `today` передаётся явно).
+`aggregateStats` + внутренний помощник `periodStartISO` (периоды 7 / 30 / всё время, `today` передаётся явно; помощник не экспортируется).
 
 ### 7.4 [src/services/scheduler.ts](scaffold/src/services/scheduler.ts)
 `isValidStartMin` (целое, кратно 15, ≥ 0), `fitInDay`, `detectConflicts` — в конфликты идут только `pending`/`done` с заданным слотом, `skipped` не создаёт конфликтов (FR-B-3).
@@ -171,16 +175,16 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 ## 9. i18n
 
 ### 9.1 [src/boot/i18n.ts](scaffold/src/boot/i18n.ts)
-Инстанс `i18n` создаётся на уровне модуля и экспортируется: `settingsStore.setLanguage` пишет `i18n.global.locale.value` (иначе переключение языка не действует до перезагрузки); типизация сообщений через `MessageSchema`; стартовая локаль читается из `localStorage`.
+Инстанс `i18n` создаётся на уровне модуля и экспортируется: `settingsStore.setLanguage` пишет `i18n.global.locale.value` (иначе переключение языка не действует до перезагрузки); типизация сообщений через `MessageSchema`; стартовая локаль читается из `localStorage` — ключ `tododay:language`, значение сырой строкой, как его пишет `useStorage` (в ревизии 1.6.1 исправлено: раньше `JSON.parse` на сыром значении всегда давал `ru`).
 
 ### 9.2 [src/i18n/index.ts](scaffold/src/i18n/index.ts)
 Сборка словарей `{ ru, en }`.
 
 ### 9.3 [src/i18n/ru/index.ts](scaffold/src/i18n/ru/index.ts)
-142 ключа: `app`, `nav` (включая короткие подписи таб-панели), `more`, `tasks`, `priorities`, `day`, `placement`, `completion`, `days`, `stats`, `settings`, `common`.
+130 листовых ключей в 12 разделах: `app`, `nav` (включая короткие подписи таб-панели), `more`, `tasks`, `priorities`, `day`, `placement`, `completion`, `days`, `stats`, `settings`, `common`.
 
 ### 9.4 [src/i18n/en/index.ts](scaffold/src/i18n/en/index.ts)
-Зеркало тех же 142 ключей на английском (переключение ru/en должно менять все видимые строки).
+Зеркало тех же 130 ключей на английском (те же 12 разделов и тот же порядок; переключение ru/en должно менять все видимые строки).
 
 ## 10. [src/App.vue](scaffold/src/App.vue)
 
@@ -196,7 +200,7 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 | Подписки liveQuery (subscribe / unsubscribe) в tasks, days, stats | src/stores/*.ts | Изменения в одной вкладке видны в другой без перезагрузки |
 | Экспорт/импорт/очистка данных (§5.4 контрактов) + UI в настройках | src/stores/settings.ts, src/pages/SettingsPage.vue | FR-SET-4/5/10 проходят критерии приёмки ТЗ §9 |
 | Создать MainLayout.vue (AppBar + drawer с 1024 px, bottom tab bar с табом «Ещё» уже до 1024 px) | src/layouts/MainLayout.vue | Навигация совпадает с ТЗ §5.1 и вайрфреймами §1.1/§9.2/§11 |
-| Написать страницы: DayBoardPage, TasksPage, DaysPage, StatsPage, SettingsPage | src/pages/* | Экраны и пустые состояния совпадают с вайрфреймами; DaysPage вызывает resolveCurrentDay({ force: true }) после сохранения шаблона |
+| Написать страницы: DayBoardPage, TasksPage, DaysPage, StatsPage, TaskStatsPage, SettingsPage; `ErrorNotFound.vue` — заглушку даёт мастер, её достаточно оставить | src/pages/* | Экраны и пустые состояния совпадают с вайрфреймами; DaysPage вызывает resolveCurrentDay({ force: true }) после сохранения шаблона |
 | Реализовать компоненты: DayGrid, PlacementCard, TaskForm, DayTemplateForm, CompleteDayDialog, PlacementActions | src/components/** | Действия FR-B-7 доступны мышью и с клавиатуры; DnD имеет aria-атрибуты (НФТ ТЗ §7) |
 | Настроить PWA-манифест и иконки | quasar mode add pwa → src-pwa/ | Приложение устанавливается и работает офлайн |
 | Проверить flat-конфиг ESLint/Prettier на реальном коде (включая no-restricted-syntax для дат) | eslint.config.js (см. §3.5), .prettierrc (см. §3.6) | pnpm lint проходит; `new Date('2025-01-01')` в коде падает на линтере |
@@ -205,12 +209,12 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 ## 12. Быстрый старт
 
 ```
-# 1. Создать проект (см. раздел 0) — мастер даст css, env.d.ts, shims-vue.d.ts, tsconfig.node.json, .gitignore, src-pwa и заглушки страниц
+# 1. Создать проект (см. раздел 0) — мастер даст стандартные файлы: index.html, .gitignore, css-файлы, корневой env.d.ts, src-pwa и заглушки страниц
 pnpm create quasar@latest tododay --template app --engine vite-3 --preset typescript --preset pinia --preset i18n --preset eslint
 
-# 2. Скопировать оверлей поверх проекта
+# 2. Скопировать оверлей поверх проекта: только файлы из scaffold/
 #    package.json, quasar.config.ts, tsconfig.json, vitest.config.ts, eslint.config.js, .prettierrc, test/, src/
-#    (кроме src/css/, src/env.d.ts, src/shims-vue.d.ts, src-pwa/ — они остаются от мастера)
+#    (css-файлы, env.d.ts, шим *.vue и src-pwa в оверлее отсутствуют — их не трогаем)
 
 # 3. Установить зависимости (см. раздел 0 — дополнительные пакеты)
 pnpm install
@@ -229,4 +233,4 @@ pnpm typecheck
 pnpm lint
 ```
 
-Журнал правок (приложения А–Ж) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–З) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

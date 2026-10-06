@@ -146,9 +146,14 @@ export const useCycleStore = defineStore('cycle', () => {
       const inst = currentInstance.value
       // Ту же дату не материализуем повторно. Просроченный активный день тоже
       // оставляем: его закроет диалог, авто-сдвиг или ручной сдвиг, а не новый
-      // экземпляр. Завершённый вчерашний день и отсутствие текущего дня ведут
-      // к resolveCurrentDay() на сегодня (ТЗ §2.9).
-      const keep = inst != null && (inst.date === today || (inst.status === 'active' && inst.date < today))
+      // экземпляр. Экземпляр, датированный будущим (ранний сдвиг), тем более
+      // остаётся текущим: перезапуск до полуночи не должен создавать второй
+      // экземпляр на сегодня и терять день, выбранный пользователем (ТЗ §2.9,
+      // §2.10 сценарий 9). Завершённый вчерашний день и отсутствие текущего
+      // дня ведут к resolveCurrentDay() на сегодня.
+      const keep =
+        inst != null &&
+        (inst.date >= today || (inst.status === 'active' && inst.date < today))
       if (!keep) {
         const resolved = await resolveCurrentDay()
         if (!resolved.ok) {
@@ -174,10 +179,12 @@ export const useCycleStore = defineStore('cycle', () => {
   async function resolveCurrentDay(opts?: { force?: boolean }): Promise<Result<DayInstance>> {
     const today = todayISO()
     const cur = currentInstance.value
-    // `cur && cur.date === today`, а не `cur?.date === today`: optional chaining
+    // `cur && cur.date >= today`, а не `cur?.date >= today`: optional chaining
     // не сужает тип DayInstance | null, и ok(cur) не прошёл бы проверку
     // сигнатуры Promise<Result<DayInstance>> (strictNullChecks).
-    if (cur && cur.date === today && !(opts?.force && isVirtualInstance.value)) return ok(cur)
+    // `>=`, а не `===`: экземпляр на завтра после раннего сдвига уже текущий,
+    // второй экземпляр на сегодня не создаётся (ТЗ §2.9, §2.10 сценарий 9).
+    if (cur && cur.date >= today && !(opts?.force && isVirtualInstance.value)) return ok(cur)
 
     const days = useDaysStore()
     // FR-C-1. Выбор шаблона — repeat.resolveDayForDate (тесты в контрактах §9).

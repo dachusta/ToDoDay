@@ -407,6 +407,8 @@ function endDrag(): void;
 
 - Если экземпляр есть и его date равна сегодняшней локальной дате — оставить его текущим, даже если status уже completed. resolveCurrentDay не вызывать.
 
+- Если экземпляр датирован будущим (`date > сегодня` — следствие раннего сдвига) — тоже оставить его текущим: перезапуск приложения до полуночи не создаёт второй экземпляр на сегодня и не теряет выбранный день (ТЗ §2.9, §2.10 сценарий 9). Практически условие «оставить» формулируется как `date >= сегодня` (для active) либо `date` равна сегодня (для completed).
+
 - Если экземпляра нет (в том числе activeInstanceId === null — так выглядит перезагрузка на виртуальном пустом дне) — вызвать resolveCurrentDay() на сегодня. Для виртуального дня это пишет `activeInstanceId = null` (новая запись в Dexie не создаётся; id в памяти новый).
 
 - Если экземпляр completed и его date меньше сегодня — вызвать resolveCurrentDay() на сегодня (вчерашний завершённый день не переиспользуется, ТЗ §2.9).
@@ -425,7 +427,7 @@ function endDrag(): void;
 
 - «Сегодня» внутри функции — format(new Date(), 'yyyy-MM-dd'), не кэш useNow.
 
-- Если currentInstance пуст или его date >= сегодня — выйти.
+- Если currentInstance пуст или его date >= сегодня — выйти. Условие `>=`, а не `===`: экземпляр на завтра после раннего сдвига уже текущий (ТЗ §2.9).
 
 - Если текущий день виртуальный (нет в Dexie, isVirtualInstance) — диалога нет: вызвать resolveCurrentDay() на новую дату. В историю ничего не пишется (FR-D-6, ТЗ §2.9).
 
@@ -433,6 +435,7 @@ function endDrag(): void;
 
 - Если текущий день active и его date < сегодня:
   - Если skippedAutoPromptDate === сегодня — выйти.
+  - Если диалог завершения уже открыт (`completing`) — выйти: повторный вход (полночь и `visibilitychange` в одну секунду) не должен сбрасывать открытый диалог.
   - Если settings.autoShiftAtMidnight — выполнить авто-сдвиг: перечитать cycleState из БД; если lastAutoShiftDate === сегодня, выйти (второй авто-сдвиг в те же сутки запрещён). Иначе shiftPending = true, shiftMode = 'midnight', completionSource = 'shift' и вызвать completeDay с marks: у размещения со статусом `done` — `'done'`, у остальных — `'skipped'`. В skipped уходит только неотмеченное. Диалог не открывать.
   - Иначе, если settings.askToCompleteOnNewDay — completionSource = 'auto', completing = true.
   - Иначе ничего не делать: старый день остаётся активным.
@@ -1008,6 +1011,10 @@ notify оборачивает Quasar Notify.
 
 - Повторный initialize в ту же дату не создаёт второй экземпляр.
 
+- Ранний сдвиг + перезапуск до полуночи: экземпляр датирован завтра, затем initialize в те же сутки → текущим остаётся завтрашний экземпляр, новый на сегодня не создаётся, activeInstanceId не меняется (ТЗ §2.9, §2.10 сценарий 9).
+
+- daysStore.validateNoOverlap делегирует repeat.validateNoOverlap: те же коды (OVERLAP_WEEKDAYS / OVERLAP_MONTHDAYS) и тот же conflictingTemplateIds, что у сервиса, без второго экземпляра алгоритма.
+
 - tasksStore.archiveTask → активный placement переведён в skipped.
 
 - updateTask меняет дело, но не снимки размещений: `Placement.durationMin` и `Placement.taskSnapshot` прежние; после переименования дела новое размещение берёт новое title, а «Заменить на другое дело» обновляет снимок существующего (FR-T-2, FR-B-7).
@@ -1023,7 +1030,4 @@ notify оборачивает Quasar Notify.
 - settingsStore.importAll с падающей записью в localStorage → `STORAGE_ERROR` / `details.reason = 'SETTINGS_AFTER_IMPORT'`, таблицы Dexie уже содержат данные файла, повторная запись settings проходит без второй очистки (FR-SET-5).
 Мок БД: fake-indexeddb + тестовый Dexie-instance.
 
-
-
-
-Журнал правок (приложения А–Ж) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–З) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
