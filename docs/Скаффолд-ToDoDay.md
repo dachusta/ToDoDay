@@ -117,8 +117,8 @@ ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `-
 | useCycleStore | dayProgress, подписка liveQuery. `resetCurrentDay` в MVP нет. `replacePlacement` и `changePlacementDuration` реализованы в ревизии 1.3 | Вторая вкладка видит изменения активного дня; dayProgress совпадает с размещениями текущего дня | ✅ закрыто в 1.10.0 |
 | useStatsStore | initialize, subscribe, unsubscribe, setSort, sortBy, sortOrder, history, taskStatsById. `topTasks` и `worstTasks` в MVP нет | StatsPage сортирует по любой колонке; TaskStatsPage берёт историю из кэша без повторного запроса | ✅ закрыто в 1.10.0 |
 | useSettingsStore | exportAll, importAll, clearAll, lastBackupAt и сами экраны настроек. `toggleAskOnNewDay`, `toggleAutoShift`, `toggleShowConflicts`, `setFirstDayOfWeek` и `setLanguage` в сторе уже есть | FR-SET-4/5/10 проходят критерии приёмки ТЗ §9: экспорт даёт JSON с version «1.0», импорт отклоняет мусор без изменения данных, очистка чистит Dexie и localStorage | ✅ API закрыто в 1.10.0 (экран «Настройки» — этап 8) |
-| Страницы и компоненты | MainLayout, TasksPage, DaysPage, DayBoardPage, StatsPage, TaskStatsPage, SettingsPage, DayGrid, PlacementCard, CompleteDayDialog, PWA-манифест. Заглушки `pages/**` и `layouts/**` мастер создаёт, их нужно переписать (см. §11) | Все маршруты ТЗ §5.1 открываются, состояния экранов совпадают с вайрфреймами, приложение устанавливается как PWA | ⏳ этапы 2–8 |
-| i18n | Разделы settings.*, placement.*, nav.tab.*, day.templateDeleted добавлены в ревизии 1.2, но компоненты их ещё не используют | Переключение ru/en меняет все видимые строки; в консоли нет предупреждений о missing key | ⏳ этапы 2–8 (нужны компоненты) |
+| Страницы и компоненты | MainLayout, TasksPage, DaysPage, DayBoardPage, StatsPage, TaskStatsPage, SettingsPage, DayGrid, PlacementCard, CompleteDayDialog, PWA-манифест. Заглушки `pages/**` и `layouts/**` мастер создаёт, их нужно переписать (см. §11) | Все маршруты ТЗ §5.1 открываются, состояния экранов совпадают с вайрфреймами, приложение устанавливается как PWA | 🟡 MainLayout, маршруты §5.1 и PWA-манифест закрыты в 1.11.0; страницы экранов — этапы 3–8 |
+| i18n | Разделы settings.*, placement.*, nav.tab.*, day.templateDeleted добавлены в ревизии 1.2, но компоненты их ещё не используют | Переключение ru/en меняет все видимые строки; в консоли нет предупреждений о missing key | ⏳ этапы 3–8 (каркас использует nav.*, more.*, settings.theme*, common.*; в 1.11.0 добавлены nav.menu, nav.overflow, app.offline — 133 ключа) |
 | Валидатор дня | `src/services/validators/day.ts` (ТЗ §4.2) не написан: проверки шаблона живут в `daysStore.validate` и `repeat.validateRule`/`repeat.validateNoOverlap` | Валидация шаблона не дублируется: либо сервис появляется, либо файл убирается из дерева ТЗ §4.2 | ⏳ решение на этапе 4 |
 
 Реализовано и гэпом не является (раньше эти строки стояли в таблице с пометкой «(готово)»):
@@ -187,10 +187,10 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 Сборка словарей `{ ru, en }`.
 
 ### 9.3 [src/i18n/ru/index.ts](scaffold/src/i18n/ru/index.ts)
-130 листовых ключей в 12 разделах: `app`, `nav` (включая короткие подписи таб-панели), `more`, `tasks`, `priorities`, `day`, `placement`, `completion`, `days`, `stats`, `settings`, `common`.
+130 листовых ключей в 12 разделах: `app`, `nav` (включая короткие подписи таб-панели), `more`, `tasks`, `priorities`, `day`, `placement`, `completion`, `days`, `stats`, `settings`, `common`. Ревизия 1.11.0 добавила к ним `nav.menu`, `nav.overflow` и `app.offline` (133 ключа) — каркас навигации, см. приложение П журнала.
 
 ### 9.4 [src/i18n/en/index.ts](scaffold/src/i18n/en/index.ts)
-Зеркало тех же 130 ключей на английском (те же 12 разделов и тот же порядок; переключение ru/en должно менять все видимые строки).
+Зеркало тех же ключей на английском (те же 12 разделов и тот же порядок; у скаффолда 130, после ревизии 1.11.0 — 133; переключение ru/en должно менять все видимые строки).
 
 ## 10. [src/App.vue](scaffold/src/App.vue)
 
@@ -204,15 +204,17 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 
 > **Этап 1 (слой данных и сторов) закрыт в ревизии 1.10.0:** строки таблицы ниже «Доделать остаток API сторов», «Подписки liveQuery (subscribe / unsubscribe) в tasks, days, stats» и «Экспорт/импорт/очистка данных» выполнены — см. приложение О [журнала](Журнал-правок-ToDoDay.md). Строка про тесты сервисов и сторов закрыта частично: тесты сторов по новому API написаны (`test/stores/**`), юнит-тесты сервисов остаются этапу 9.
 
+> **Этап 2 (каркас UI и PWA) закрыт в ревизии 1.11.0:** строка ниже «Создать MainLayout.vue» и «Настроить PWA-манифест и иконки» выполнены — см. приложение П [журнала](Журнал-правок-ToDoDay.md). Модель навигации вынесена в `src/layouts/navigation.ts` (в дереве ТЗ §4.2 не значится, как и другие служебные модули), маршруты §5.1 получили `meta.titleKey`/`meta.navKey`/`meta.back`, манифест и иконки `public/icons/**` описаны в `src-pwa/manifest.json`. Строка «Написать страницы» открыта до этапов 3–8, «Реализовать компоненты» — до этапов 3–7 (`components/common/ConfirmDialog.vue` написан на этапе 2), «Написать юнит-тесты сервисов и интеграционные тесты сторов» — этап 9.
+
 | Шаг | Файлы | Критерий готовности |
 | --- | --- | --- |
 | Доделать остаток API сторов из таблицы §6 (tasks: refresh / subscribe; days: moveToPosition / liveQuery; cycle: dayProgress / liveQuery; stats: setSort / history; settings: exportAll / importAll / clearAll / lastBackupAt). `isTitleTaken`, `topTasks`, `worstTasks` и `resetCurrentDay` в MVP не входят | src/stores/*.ts | Таблица §6 не содержит открытых строк, кроме явно вынесенных за MVP; контракты §8 покрыты тестами |
 | Подписки liveQuery (subscribe / unsubscribe) в tasks, days, stats | src/stores/*.ts | Изменения в одной вкладке видны в другой без перезагрузки |
 | Экспорт/импорт/очистка данных (§5.4 контрактов) + UI в настройках | src/stores/settings.ts, src/pages/SettingsPage.vue | FR-SET-4/5/10 проходят критерии приёмки ТЗ §9 |
-| Создать MainLayout.vue (AppBar + drawer с 1024 px, bottom tab bar с табом «Ещё» уже до 1024 px) | src/layouts/MainLayout.vue | Навигация совпадает с ТЗ §5.1 и вайрфреймами §1.1/§9.2/§11 |
+| Создать MainLayout.vue (AppBar + drawer с 1024 px, bottom tab bar с табом «Ещё» уже до 1024 px) | src/layouts/MainLayout.vue | Навигация совпадает с ТЗ §5.1 и вайрфреймами §1.1/§9.2/§11 | ✅ закрыто в 1.11.0 |
 | Написать страницы: DayBoardPage, TasksPage, DaysPage, StatsPage, TaskStatsPage, SettingsPage; `ErrorNotFound.vue` — заглушку даёт мастер, её достаточно оставить | src/pages/* | Экраны и пустые состояния совпадают с вайрфреймами; DaysPage вызывает resolveCurrentDay({ force: true }) после сохранения шаблона |
 | Реализовать компоненты: DayGrid, PlacementCard, TaskForm, DayTemplateForm, CompleteDayDialog, PlacementActions | src/components/** | Действия FR-B-7 доступны мышью и с клавиатуры; DnD имеет aria-атрибуты (НФТ ТЗ §7) |
-| Настроить PWA-манифест и иконки | quasar mode add pwa → src-pwa/ | Приложение устанавливается и работает офлайн |
+| Настроить PWA-манифест и иконки | quasar mode add pwa → src-pwa/ | Приложение устанавливается и работает офлайн | ✅ закрыто в 1.11.0 |
 | Проверить flat-конфиг ESLint/Prettier на реальном коде (включая no-restricted-syntax для дат) | eslint.config.js (см. §3.5), .prettierrc (см. §3.6) | pnpm lint проходит; `new Date('2025-01-01')` в коде падает на линтере |
 | Написать юнит-тесты сервисов и интеграционные тесты сторов (список — контракты §9) | src/**/*.spec.ts | Тесты §9 контрактов зелёные, покрытие ≥ 70% на services/* и stores/* |
 
@@ -250,4 +252,4 @@ pnpm lint
 - **Порядок шагов.** Мастер `create quasar` очищает целевой каталог, поэтому проект создаётся в пустом каталоге и уже потом переносится; `quasar prepare` (это `postinstall` из `package.json`) генерирует `.quasar/**`, без него не работает ни `vue-tsc`, ни `quasar dev`.
 - **PWA-режим.** `quasar mode add pwa` дополнительно ставит зависимости в `src-pwa/`; если команда недоступна, состав файлов — `src-pwa/{manifest.json,register-sw.ts,sw/**}` + `public/icons/**` + `src-pwa/package.json`.
 
-Журнал правок (приложения А–О) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–П) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

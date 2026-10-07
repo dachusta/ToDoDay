@@ -1,11 +1,14 @@
 export default {
-  app: { name: 'ToDoDay' },
+  app: { name: 'ToDoDay', offline: 'Приложение работает офлайн' },
   nav: {
     today: 'Сегодня',
     tasks: 'Дела',
     days: 'Дни',
     stats: 'Статистика',
     settings: 'Настройки',
+    // доступность AppBar (вайрфреймы §9.1): ☰ и overflow ⋮
+    menu: 'Меню навигации',
+    overflow: 'Дополнительно',
     // короткие подписи таб-панели (вайрфреймы §9.2)
     tab: {
       today: 'Сегодня',

@@ -1,11 +1,13 @@
 export default {
-  app: { name: 'ToDoDay' },
+  app: { name: 'ToDoDay', offline: 'The app is running offline' },
   nav: {
     today: 'Today',
     tasks: 'Tasks',
     days: 'Days',
     stats: 'Stats',
     settings: 'Settings',
+    menu: 'Navigation menu',
+    overflow: 'More options',
     tab: {
       today: 'Today',
       tasks: 'Tasks',

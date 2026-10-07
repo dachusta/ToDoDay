@@ -4,10 +4,12 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from 'src/stores/settings'
 import { useUiStore } from 'src/stores/ui'
 import { useCycleStore } from 'src/stores/cycle'
 
+const { t } = useI18n()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const cycle = useCycleStore()
@@ -49,7 +51,7 @@ onMounted(async () => {
 
   // Тост, если офлайн
   if (!ui.isOnline) {
-    ui.notify('Приложение работает офлайн', 'info')
+    ui.notify(t('app.offline'), 'info')
   }
 
   // Тему применил settings.setTheme() выше (он вызывает Dark.set), поэтому

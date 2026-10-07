@@ -8,6 +8,17 @@ export default defineConfig({
     alias: {
       src: fileURLToPath(new URL('./src', import.meta.url)),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // Квазар-конвенция из quasar.config.ts и tsconfig.json: маршруты
+      // (`src/router/routes.ts`) ссылаются на страницы и layout через 'pages/...',
+      // 'layouts/...' и 'components/...'. Без этих алиасов тест, который читает
+      // дерево маршрутов, падает на разрешении динамических импортов.
+      pages: fileURLToPath(new URL('./src/pages', import.meta.url)),
+      layouts: fileURLToPath(new URL('./src/layouts', import.meta.url)),
+      components: fileURLToPath(new URL('./src/components', import.meta.url)),
+      // Плагин Quasar в vitest берётся из SSR-сборки пакета и падает с «installed
+      // without an ssrContext». Клиентская сборка — то, что подставляет
+      // @quasar/vite-plugin в dev/build (это же советует само сообщение Quasar).
+      quasar: fileURLToPath(new URL('./node_modules/quasar/dist/quasar.client.js', import.meta.url)),
       // Quasar CLI подставляет '#q-app' в dev/build; в vitest его нет, а от него
       // зависит src/boot/i18n.ts — заглушка отдаёт defineBoot без побочных эффектов.
       '#q-app': fileURLToPath(new URL('./test/vitest/q-app.ts', import.meta.url)),

@@ -51,6 +51,15 @@ export default configure((/* ctx */) => {
 
     ssr: { pwa: false, prodPort: 3000, middlewares: ['render'] },
 
+    // PWA (ТЗ §7: офлайн — 100% функционала; НФТ §7). Манифест и иконки —
+    // src-pwa/manifest.json + public/icons/**; id, start_url и description
+    // Quasar добавляет сам (имя пакета, publicPath, package.json).
+    //
+    // Offline собирается режимом GenerateSW: дефолты @quasar/app-vite 3.10.1
+    // уже дают cleanupOutdatedCaches, clientsClaim, skipWaiting, precache всего
+    // dist (`globPatterns: ['**/*']` — включая шрифты roboto и material-icons)
+    // и navigateFallback 'index.html' в prod. Дополнительные опции не нужны;
+    // extendPWAGenerateSWOptions появится только если понадобится runtimeCaching.
     pwa: {
       workboxMode: 'GenerateSW',
       injectPwaMetaTags: true,

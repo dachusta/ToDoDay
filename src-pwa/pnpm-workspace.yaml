@@ -1,2 +1,13 @@
 # This file exists to force pnpm install deps here, regardless of upper workspaces
 # https://pnpm.io/settings
+
+# Окружение этапа 0/2: изолированный линкер pnpm строит виртуальный стор
+# `node_modules/.pnpm/**` с junction'ами, а `@quasar/app-vite` грузит
+# `workbox-build` по пути src-pwa/node_modules/workbox-build (pwa-utils.js →
+# getPackage) — при изолированной раскладке транзитивные зависимости
+# workbox-build (`upath`, `fast-glob`, `rollup`, ...) по этому пути не
+# находятся, и `pnpm build:pwa` падает на `generateSW of undefined`.
+# Плоский node_modules решает и это, и запрет на симлинки без elevation
+# (та же причина, что у корневого pnpm-workspace.yaml).
+# В обычном окружении строку можно убрать, если `pnpm build:pwa` проходит.
+nodeLinker: hoisted
