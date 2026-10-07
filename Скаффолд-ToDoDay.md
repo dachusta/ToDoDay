@@ -1,6 +1,6 @@
 # Стартовый скаффолд
 
-> **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Скаффолд](Скаффолд-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [README](README.md)
+> **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Скаффолд](Скаффолд-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [README документации](README-Docs.md) · [README приложения](README.md)
 
 Скаффолд — это готовый код, вынесенный в каталог [`scaffold/`](scaffold): 34 файла, которые копируются поверх проекта, созданного мастером Quasar CLI (§0). Разделы ниже сохраняют нумерацию (на неё ссылаются ТЗ и журнал) и описывают, что лежит в каждом файле, что важно в нём и чего в скаффолде ещё нет.
 
@@ -126,6 +126,10 @@ ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `-
 
 Всё перечисленное нужно добавить при переработке соответствующего модуля; имена и типы берутся из контрактов (раздел «Контракты сторов Pinia» — источник истины).
 
+> **Дефекты, найденные первым прогоном (ревизия 1.8.0).** Таблица выше перечисляет запланированные гэпы. Первый фактический прогон `pnpm typecheck` / `pnpm lint` / `pnpm dev` (этап 0 ТЗ §8.2) нашёл в коде ещё и дефекты: алиасы `src/`/`pages/`/`layouts/` не были объявлены ни в `tsconfig.json`, ни в `quasar.config.ts`, оба boot-файла импортировали несуществующий подпуть `#q-app/wrappers`, `cycleState` был объявлен как `Table` вместо `EntityTable`, а также `strict`-ошибки на `noUncheckedIndexedAccess`/`exactOptionalPropertyTypes`. Полный список с файлами и правками — приложение М [журнала](Журнал-правок-ToDoDay.md). Код `scaffold/**` при этом не менялся: правки сделаны в файлах проекта, а `scaffold/**` исключён из линтера как снимок документации.
+
+> **Второй заход (там же, ревизия 1.8.0).** После первого прогона браузер падал на CSS: `postcss.config.js` мастера импортирует `autoprefixer`, которого не было в `package.json` оверлея (добавлен), а Sass-препроцессор Vite в песочнице автора правок не загружается — поэтому подключён `app.css` вместо `app.scss` (§3.1; файл `src/css/app.scss` оставлен). Подробности — приложение М [журнала](Журнал-правок-ToDoDay.md), пункты C14–C16.
+
 ### 6.1 [src/stores/tasks.ts](scaffold/src/stores/tasks.ts)
 CRUD дел (`loadAll`, `createTask`, `updateTask`, `archiveTask`, `unarchiveTask`, `deleteTask`, `duplicateTask`), фильтры, поиск и сортировка в `visibleTasks`, мини-emitter `onTaskArchived` (на него подписывается cycleStore, циклического импорта нет).
 
@@ -194,6 +198,8 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 
 Пункты, закрытые в ревизии 1.2–1.3 (реализованы прямо в скаффолде): placeTask / movePlacement / removePlacement / replacePlacement / changePlacementDuration / setPlacementStatus, detectConflicts, isValidStartMin + fitInDay, виртуальный пустой день (FR-D-6), нормализация и валидация правил шаблона, сдвиг дня с режимами early/overdue/midnight, авто-сдвиг с lastAutoShiftDate и сохранением done, dayChangeInFlight на всех ветках checkDayChange, statsStore.recompute() после completeDay, setLanguage через i18n, строки i18n для настроек. Плюс: файлы, которые создаёт мастер Quasar (см. §1), — они не входят в `scaffold/` и гэпами не являются. Осталось:
 
+> **Этап 0 (сборка) закрыт в ревизии 1.8.0:** проект создан, оверлей скопирован, `pnpm install` и PWA-режим выполнены, `pnpm typecheck` и `pnpm lint` проходят, dev-сервер стартует. Ограничения окружения и полный список правок — приложение М [журнала](Журнал-правок-ToDoDay.md). Строка таблицы про линтер (ниже) закрыта: `pnpm lint` проходит, правило `no-restricted-syntax` для `new Date('YYYY-MM-DD')` на месте.
+
 | Шаг | Файлы | Критерий готовности |
 | --- | --- | --- |
 | Доделать остаток API сторов из таблицы §6 (tasks: refresh / subscribe; days: moveToPosition / liveQuery; cycle: dayProgress / liveQuery; stats: setSort / history; settings: exportAll / importAll / clearAll / lastBackupAt). `isTitleTaken`, `topTasks`, `worstTasks` и `resetCurrentDay` в MVP не входят | src/stores/*.ts | Таблица §6 не содержит открытых строк, кроме явно вынесенных за MVP; контракты §8 покрыты тестами |
@@ -233,4 +239,11 @@ pnpm typecheck
 pnpm lint
 ```
 
-Журнал правок (приложения А–Л) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Как это выглядело на первом прогоне (ревизия 1.8.0, подробности — приложение М [журнала](Журнал-правок-ToDoDay.md)):
+
+- **Node и pnpm.** Нужны Node LTS 22.22+/24 (Node 25 вне `engines` у `@quasar/app-vite` 3.10.1) и pnpm 11+ (`engines.pnpm`); прогон сделан на портативных Node 24.21.0 и pnpm 11.28.5.
+- **Симлинки.** Изолированный линкер pnpm требует создания симлинков, а на Windows без прав администратора и без режима разработчика это `EPERM`; для такого окружения в `pnpm-workspace.yaml` задан `nodeLinker: hoisted`. Там же `ignoredBuiltDependencies: ['@parcel/watcher']` — его install-скрипт запускает вложенный процесс с pipe.
+- **Порядок шагов.** Мастер `create quasar` очищает целевой каталог, поэтому проект создаётся в пустом каталоге и уже потом переносится; `quasar prepare` (это `postinstall` из `package.json`) генерирует `.quasar/**`, без него не работает ни `vue-tsc`, ни `quasar dev`.
+- **PWA-режим.** `quasar mode add pwa` дополнительно ставит зависимости в `src-pwa/`; если команда недоступна, состав файлов — `src-pwa/{manifest.json,register-sw.ts,sw/**}` + `public/icons/**` + `src-pwa/package.json`.
+
+Журнал правок (приложения А–М) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

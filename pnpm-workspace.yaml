@@ -1,0 +1,23 @@
+# https://pnpm.io/settings
+
+# Окружение этапа 0: создание симлинков на этой машине требует прав администратора или
+# включённого режима разработчика Windows (текущий токен без прав, режим выключен),
+# поэтому изолированный линкер pnpm падал с EPERM на symlink. hoisted-линкер собирает
+# плоский node_modules через хардлинки и копирование и не требует elevation.
+nodeLinker: hoisted
+
+allowBuilds:
+  core-js: true
+  electron-winstaller: true
+  esbuild: true
+  lightningcss: true
+  rolldown: true
+  unrs-resolver: true
+  # vue-demi выполняет postinstall при установке (этап 0)
+  vue-demi: true
+
+# '@parcel/watcher' не собирается: его install-скрипт запускает вложенный spawn с pipe,
+# что в песочнице DSH даёт spawn EPERM. Watch-режим Vite/Quasar работает без нативного
+# вотчера (chokidar). В обычном окружении строку можно убрать.
+ignoredBuiltDependencies:
+  - '@parcel/watcher'
