@@ -69,6 +69,9 @@ export function aggregateStats(
     // Сравниваем строки 'YYYY-MM-DD' в локальной дате: new Date('2025-09-23')
     // парсится как UTC-полночь и на границе периода даёт сдвиг на сутки.
     if (startISO && inst.date < startISO) continue
+    // Период — [startISO, today]: завершённый экземпляр с будущей датой (возможен
+    // только после импорта без проверки семантики, FR-SET-5) в статистику не входит.
+    if (inst.date > today) continue
     for (const p of inst.placements) {
       placed++
       const cur = perTask.get(p.taskId) ?? {

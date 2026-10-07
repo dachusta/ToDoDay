@@ -468,6 +468,9 @@ export const useCycleStore = defineStore('cycle', () => {
     }
 
     if (skippedAutoPromptDate.value === today) return
+    // Контракты §3.4: открытый диалог не сбрасываем и не запускаем авто-сдвиг
+    // (повторный вход — полночь и visibilitychange в одну секунду).
+    if (completing.value) return
 
     const settings = useSettingsStore()
     if (settings.autoShiftAtMidnight) {
@@ -478,7 +481,6 @@ export const useCycleStore = defineStore('cycle', () => {
       return
     }
     if (!settings.askToCompleteOnNewDay) return
-    if (completing.value) return
     completionSource.value = 'auto'
     completing.value = true
   }

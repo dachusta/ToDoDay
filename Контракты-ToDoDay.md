@@ -447,7 +447,7 @@ function endDrag(): void;
 ```
 date = сегодняшняя локальная дата (todayISO)
 cur = currentInstance
-Выйти с ok(cur), если cur.date === date и не (opts.force && cur виртуальный).
+Выйти с ok(cur), если cur.date >= date и не (opts.force && cur виртуальный).
 1. template = repeat.resolveDayForDate(date, templates, lastCyclicTemplateId)
 2. Собрать DayInstance { id: uuid, date, templateId: template?.id ?? null, status: 'active',
    placements: [], timeStart: template?.timeStart ?? '08:00', timeEnd: template?.timeEnd ?? '22:00',
@@ -461,6 +461,7 @@ cur = currentInstance
 Пояснения:
 
 - `force: true` пересчитывает только виртуальный день (например, после создания шаблона на сегодня, ТЗ §2.9 правило 7а). Сохранённый экземпляр с размещениями force не пересоздаёт — защита от потери размещений.
+- Условие `cur.date >= date`, а не `===`: экземпляр, датированный будущим (следствие раннего сдвига), остаётся текущим и после перезапуска до полуночи — второй экземпляр на сегодня не создаётся (ТЗ §2.9, §2.10 сценарий 9).
 - Шаги выбора шаблона — чистая функция repeat.resolveDayForDate (ТЗ §4.4, тесты в §9). Числа 29–31 в коротком месяце не совпадают с monthday и проваливаются дальше по приоритету FR-C-1.
 
 #### shiftToNextDay() — FR-C-3
@@ -716,7 +717,7 @@ const instances = await db.dayInstances
   .toArray();
 ```
 
-Агрегация — чистая функция aggregateStats(instances, period, today) в services/stats.ts. `today` передаёт вызывающий (`todayISO()`), внутри функции `new Date()` нет. Границы периода сравниваются по локальной дате 'YYYY-MM-DD'; отдельный хелпер isInPeriod не вводится.
+Агрегация — чистая функция aggregateStats(instances, period, today) в services/stats.ts. `today` передаёт вызывающий (`todayISO()`), внутри функции `new Date()` нет. Границы периода сравниваются по локальной дате 'YYYY-MM-DD'; отдельный хелпер isInPeriod не вводится. В период входят только экземпляры с `date <= today` (и `date >= startISO` для 7d/30d); завершённый экземпляр с будущей датой — возможен только после импорта без проверки семантики (FR-SET-5) — в статистику не попадает.
 Правила:
 
 - pending не учитывается в rate. Для выборки только completed-экземпляров pending всегда 0 (completeDay переводит все размещения в done/skipped) — в MVP поле не используется и в UI не показывается; ненулевым оно станет, если в агрегацию попадут активные экземпляры.
@@ -1030,4 +1031,4 @@ notify оборачивает Quasar Notify.
 - settingsStore.importAll с падающей записью в localStorage → `STORAGE_ERROR` / `details.reason = 'SETTINGS_AFTER_IMPORT'`, таблицы Dexie уже содержат данные файла, повторная запись settings проходит без второй очистки (FR-SET-5).
 Мок БД: fake-indexeddb + тестовый Dexie-instance.
 
-Журнал правок (приложения А–З) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–К) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

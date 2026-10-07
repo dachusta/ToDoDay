@@ -13,24 +13,25 @@ export function resolveDayForDate(
   templates: DayTemplate[],
   lastCyclicTemplateId: string | null = null,
 ): DayTemplate | null {
+  // FR-SET-5 / контракты §4.4: «первый по order» — сортируем локально, чтобы
+  // выбор не зависел от порядка, в котором вызывающий передал массив.
+  const sorted = [...templates].sort((a, b) => a.order - b.order)
   const [year, month, day] = date.split('-').map(Number)
   const local = new Date(year, month - 1, day)
   const dayOfMonth = local.getDate()
   const weekday0 = (local.getDay() + 6) % 7
 
-  const byMonthday = templates.find(
+  const byMonthday = sorted.find(
     t => t.repeatRule.type === 'monthdays' && t.repeatRule.monthdays?.includes(dayOfMonth),
   )
   if (byMonthday) return byMonthday
 
-  const byWeekday = templates.find(
+  const byWeekday = sorted.find(
     t => t.repeatRule.type === 'weekdays' && t.repeatRule.weekdays?.includes(weekday0),
   )
   if (byWeekday) return byWeekday
 
-  const cyclic = templates
-    .filter(t => t.repeatRule.type === 'none')
-    .sort((a, b) => a.order - b.order)
+  const cyclic = sorted.filter(t => t.repeatRule.type === 'none')
   if (!cyclic.length) return null
 
   const idx = lastCyclicTemplateId ? cyclic.findIndex(t => t.id === lastCyclicTemplateId) : -1
