@@ -1031,4 +1031,4 @@ notify оборачивает Quasar Notify.
 - settingsStore.importAll с падающей записью в localStorage → `STORAGE_ERROR` / `details.reason = 'SETTINGS_AFTER_IMPORT'`, таблицы Dexie уже содержат данные файла, повторная запись settings проходит без второй очистки (FR-SET-5).
 Мок БД: fake-indexeddb + тестовый Dexie-instance.
 
-Журнал правок (приложения А–К) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–Л) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
