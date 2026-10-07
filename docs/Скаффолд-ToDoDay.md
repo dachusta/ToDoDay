@@ -1,10 +1,12 @@
 # Стартовый скаффолд
 
-> **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Скаффолд](Скаффолд-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [README документации](README-Docs.md) · [README приложения](README.md)
+> **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Скаффолд](Скаффолд-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Скаффолд — это готовый код, вынесенный в каталог [`scaffold/`](scaffold): 34 файла, которые копируются поверх проекта, созданного мастером Quasar CLI (§0). Разделы ниже сохраняют нумерацию (на неё ссылаются ТЗ и журнал) и описывают, что лежит в каждом файле, что важно в нём и чего в скаффолде ещё нет.
+Скаффолд — это готовый код, вынесенный в каталог [`scaffold/`](scaffold) (в репозитории — `docs/scaffold/`, ревизия 1.9.0): 34 файла, которые копируются поверх проекта, созданного мастером Quasar CLI (§0). Разделы ниже сохраняют нумерацию (на неё ссылаются ТЗ и журнал) и описывают, что лежит в каждом файле, что важно в нём и чего в скаффолде ещё нет.
 
 `scaffold/` — **оверлей, а не самостоятельное приложение**. Часть файлов проекта создаёт мастер Quasar, часть ещё не написана (таблица гэпов §6 и §11): без них `scaffold/` сам по себе не запустится. В ревизии 1.6 код перенесён из документа без правок; в ревизии 1.6.1 исправлены три файла (приложение И), в ревизии 1.6.2 — ещё три (приложение К).
+
+> **Как читать пути.** Ревизия 1.9.0 вынесла документацию и скаффолд в `docs/`, поэтому все записи вида `scaffold/src/...` отсчитываются от каталога `docs/`: сам каталог скаффолда — `docs/scaffold/`. Приложения [журнала](Журнал-правок-ToDoDay.md) сохраняют прежнее имя `scaffold/`: они фиксируют состояние на момент своей ревизии и не переписываются.
 
 ## 0. Создание проекта
 
@@ -43,7 +45,7 @@ pnpm add -D vitest @vitest/coverage-v8 @vue/test-utils jsdom fake-indexeddb \
 
 | Группа | Что это | Файлы |
 | --- | --- | --- |
-| В `scaffold/` (34 файла) | код, который копируется поверх проекта | `package.json`, `quasar.config.ts`, `tsconfig.json`, `vitest.config.ts`, `eslint.config.js`, `.prettierrc`, `test/vitest/setup.ts`, `src/models/*` (6), `src/services/**` (6, включая `validators/task.ts`), `src/stores/*` (7), `src/boot/*` (2), `src/router/*` (2), `src/i18n/**` (3), `src/App.vue` |
+| В `scaffold/` — `docs/scaffold/` (34 файла) | код, который копируется поверх проекта | `package.json`, `quasar.config.ts`, `tsconfig.json`, `vitest.config.ts`, `eslint.config.js`, `.prettierrc`, `test/vitest/setup.ts`, `src/models/*` (6), `src/services/**` (6, включая `validators/task.ts`), `src/stores/*` (7), `src/boot/*` (2), `src/router/*` (2), `src/i18n/**` (3), `src/App.vue` |
 | Создаёт мастер Quasar | файлы, которых в `scaffold/` нет намеренно: их генерирует `quasar create` / `quasar mode add pwa` | `index.html`, `.gitignore`, css-файлы (`src/css/app.scss`, `src/css/quasar.variables.scss`), `src-pwa/**`, корневой `/env.d.ts`, шим `*.vue` (генерируется опцией `build.typescript.vueShim`, см. §3.1), заглушечные `src/pages/**` и `src/layouts/MainLayout.vue` |
 | Осталось написать | гэпы скаффолда, см. §6 и §11 | `src/layouts/MainLayout.vue` (переписать), все `src/pages/**`, `src/components/**`, `src/services/validators/day.ts`, подписки liveQuery, экспорт/импорт |
 
@@ -246,4 +248,4 @@ pnpm lint
 - **Порядок шагов.** Мастер `create quasar` очищает целевой каталог, поэтому проект создаётся в пустом каталоге и уже потом переносится; `quasar prepare` (это `postinstall` из `package.json`) генерирует `.quasar/**`, без него не работает ни `vue-tsc`, ни `quasar dev`.
 - **PWA-режим.** `quasar mode add pwa` дополнительно ставит зависимости в `src-pwa/`; если команда недоступна, состав файлов — `src-pwa/{manifest.json,register-sw.ts,sw/**}` + `public/icons/**` + `src-pwa/package.json`.
 
-Журнал правок (приложения А–М) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–Н) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

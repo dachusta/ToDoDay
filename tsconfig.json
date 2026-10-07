@@ -2,7 +2,7 @@
   "extends": "./.quasar/tsconfig.json",
   "compilerOptions": {
     // Скаффолд импортирует модули как 'src/...', а роуты — как 'pages/...' и
-    // 'layouts/...' (runtime-алиасы Quasar/Vite; в scaffold/vitest.config.ts объявлен
+    // 'layouts/...' (runtime-алиасы Quasar/Vite; в docs/scaffold/vitest.config.ts объявлен
     // только 'src'). Сгенерированный .quasar/tsconfig.json знает лишь про '@',
     // поэтому typecheck не находил модули — дополняем карту алиасов.
     // '#q-app/wrappers' в app-vite 3 объявлен типами '@quasar/app-vite'

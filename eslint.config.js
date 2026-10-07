@@ -10,9 +10,9 @@ export default tseslint.config(
       '.quasar/**',
       'src-pwa/**',
       'node_modules/**',
-      // scaffold/ — снимок-оверлей из документации (Скаффолд §1), а не код приложения:
+      // docs/scaffold/ — снимок-оверлей из документации (Скаффолд §1), а не код приложения:
       // те же файлы скопированы в src/ и линцуются там.
-      'scaffold/**',
+      'docs/scaffold/**',
     ],
   },
   js.configs.recommended,
