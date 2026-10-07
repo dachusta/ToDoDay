@@ -4,6 +4,9 @@ import type { PlacementStatus, Priority } from 'src/models/enums'
 
 export type StatsPeriod = '7d' | '30d' | 'all'
 
+/** Колонки сортировки таблицы статистики (контракты §4.1). */
+export type StatsSortField = 'title' | 'rate' | 'done' | 'skipped' | 'placed'
+
 export interface TaskStats {
   taskId: string
   title: string

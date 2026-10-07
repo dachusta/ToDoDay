@@ -502,3 +502,63 @@
 
 Заголовок и футер раздела дополнены версией 1.9.0 и приложением Н; подвалы ТЗ, вайрфреймов, контрактов и скаффолда и строка README документации переведены с «приложения А–М» на «приложения А–Н».
 
+## Приложение О. Ревизия 1.10.0 (этап 1: слой данных и сторов)
+
+Версия документа поднята до 1.10.0. Требования, вайрфреймы и контракты не менялись: закрыт этап 1 плана (ТЗ §8.2) — таблица гэпов [скаффолда §6](Скаффолд-ToDoDay.md) по пяти сторам, подписки liveQuery и экспорт/импорт/очистка данных. Источник истины по именам и алгоритмам — контракты; ниже — что сделано в коде `src/`, какие дефекты нашлись и чем это проверено.
+
+### 1. Закрытые гэпы (скаффолд §6)
+
+| Модуль | Что добавлено |
+| --- | --- |
+| useTasksStore | `subscribe` / `unsubscribe` / `refresh` (liveQuery на `tasks`), `tasksByPriority`, счётчики `totalCount` / `activeCount` / `archivedCount`; `TaskSortField` вынесен из инлайн-сигнатуры в `src/models/task.ts` и реэкспортируется стором. `loadAll()` = чтение + подписка (контракты §1.1: `initialized` включает активную подписку) |
+| useDaysStore | `moveToPosition(id, newOrder)`, `subscribe` / `unsubscribe` (liveQuery на `dayTemplates`), `refresh`, `hasConflicts`, `templatesCount`, `calendarTemplates`, `lastValidationErrors`, `sortMode` (+ `setSortMode` и `sortedTemplates` для UI). `reorder` и `moveToPosition` пишут порядок через общий `persistOrder` с откатом `order` при ошибке БД (контракты §2.6) |
+| useCycleStore | `dayProgress` (done / skipped / pending / total) и liveQuery на `cycleState` + активный `DayInstance`: правки из другой вкладки видны без перезагрузки, виртуальный пустой день не затирается (FR-D-6). `dispose()` снимает и подписку; `resetSessionState()` сбрасывает сессию (нужен FR-SET-10) |
+| useStatsStore | `initialize()` (recompute + подписка), `subscribe` / `unsubscribe` (liveQuery на завершённых `dayInstances`), `setSort` / `sortBy` / `sortOrder` (пустой рейт «—» остаётся в конце в обоих направлениях), `history` и кэш `loadTaskHistory`, `taskStatsById`, `resetCache`; `StatsSortField` объявлен в `src/services/stats.ts` рядом с `StatsPeriod` |
+| useSettingsStore | `lastBackupAt`, `exportAll`, `importAll`, `clearAll`, флаг `busy`. Блок settings пишется сырыми значениями в localStorage и проверяется чтением, поэтому сбой хранилища отличается по коду (`STORAGE_ERROR` против `DB_ERROR`, контракты §0.2); `retrySettingsWrite()` повторяет только запись настроек. Импорт и очистка не перезагружают страницу, а переинициализируют сторы (`rehydrateAll`) — ветка «reload или полный rehydrate» контрактов §5.4/§5.5 |
+
+### 2. Дополнения к контрактам (только добавления, целевой API не менялся)
+
+| Что | Зачем |
+| --- | --- |
+| `retrySettingsWrite()`, `busy`, `pendingSettings` | FR-SET-5/§5.4: UI различает «повторить запись настроек» и «повторить импорт», очистка блокирует повторный вызов |
+| `resetSessionState()` (cycle), `resetCache()` (stats) | FR-SET-10/§5.4: «сброс сессионного состояния сторов» требовал явного действия; `dispose()` + `initialize()` его не покрывали |
+| `sortedTemplates`, `setSortMode()`, `refresh()` (days) | `sortMode` из §2.1 без потребителя: список для UI сортируется геттером, порядок цикла (`orderedTemplates`) остаётся по `order`; `refresh()` симметричен `loadAll()` без подписки |
+| `toPlain()` в `src/services/db.ts` | защита от записи реактивных Proxy в Dexie (дефект D2) |
+| `export default createPinia` в `src/stores/index.ts` | требование точки входа app-vite (дефект D1) |
+
+### 3. Дефекты, найденные прогоном этапа 1
+
+| № | Файл | Находка | Правка |
+| --- | --- | --- | --- |
+| D1 | `src/stores/index.ts` | сгенерированный вход `.quasar/<mode>/app.js` делает `import createStore from '@/../src/stores/index'`, а оверлей экспортировал из этого файла только реэкспорты сторов → сборка и запуск приложения падали на `MISSING_EXPORT "default"` (на этапе 0 не проверялось: dev-сервер отдавал отдельные модули, но приложение не открывалось) | файл экспортирует фабрику `createPinia()` по умолчанию, реэкспорты сохранены (§6.7) |
+| D2 | `src/stores/{cycle,days,tasks,settings}.ts`, `src/services/db.ts` | записи в Dexie уходили реактивные Proxy из Vue, а `structuredClone` на Proxy падает `DataCloneError` («#<Object> could not be cloned»): не работали `placeTask` / `completeDay` / `movePlacement`, `reorder` / `moveToPosition` / `deleteTemplate`, импорт данных | добавлен `toPlain()` (глубокое разворачивание в обычные объекты/массивы), все `add` / `put` / `bulkPut` / `bulkAdd` проходят через него |
+| D3 | `src/stores/settings.ts` | `File.text()` есть не во всех окружениях (в jsdom нет) | `readFileText()`: `Blob.text()` с запасным путём через `FileReader` |
+| D4 | `eslint.config.js` | после появления в `.tools/` шима песочницы локальный тулчейн начал линцоваться как код приложения | `.tools/**`, `.cache/**`, `.pnpm-store/**` добавлены в `ignores` (не код приложения, в git не попадают) |
+
+### 4. Окружение: как прогнать тесты в песочнице
+
+- `pnpm test` (vitest 5) в песочнице DSH не стартует: forks-worker форкает процесс с pipe → `spawn EPERM`, а до него Vite падает в `optimizeSafeRealPathSync` → `exec('net use')`. Обход (не коммитится, каталог `.tools/` из `.gitignore`): `pnpm exec vitest run --pool=threads` с `NODE_OPTIONS="--require .tools/no-net-use.cjs"` — шим отвечает Vite, что сетевых дисков нет.
+- `vitest.config.ts`: алиас `#q-app` → `test/vitest/q-app.ts` (заглушка `defineBoot`). Плагина Quasar в прогоне тестов нет, а `src/boot/i18n.ts` без него не резолвится, хотя сам инстанс i18n в тестах нужен сторам.
+- В обычном окружении ни то, ни другое не требуется: конфиг тестов остаётся стандартным, `pnpm test` запускается на дефолтном пуле.
+
+### 5. Проверено
+
+| Проверка | Команда | Результат |
+| --- | --- | --- |
+| Типы | `pnpm typecheck` | код 0 |
+| Линтер | `pnpm lint` | код 0 |
+| Тесты | `pnpm exec vitest run --pool=threads` | 27 тестов в 5 файлах, все зелёные |
+| Сборка | `pnpm build` (SPA) | Build succeeded (до правки D1 падала на `MISSING_EXPORT`) |
+
+Файлы тестов — `test/stores/`: `tasks.spec.ts` (счётчики, группировка, сортировка, `refresh`, liveQuery и `unsubscribe`), `days.spec.ts` (`moveToPosition` с проверкой порядка в БД, конфликты, счётчики, `lastValidationErrors`, `sortMode`, liveQuery), `cycle.spec.ts` (`dayProgress`, liveQuery на активный день, виртуальный день, `resetSessionState`), `stats.spec.ts` (агрегаты, сортировки колонок, кэш истории, периоды, liveQuery), `settings.spec.ts` (FR-SET-4/5/10: формат файла с `version: "1.0"`, отклонение мусора и чужой версии без изменения данных, `STORAGE_ERROR` / `SETTINGS_AFTER_IMPORT` и повтор записи настроек, полная очистка с переинициализацией сторов).
+
+### 6. Осталось за рамками этапа 1
+
+- Строки таблицы §6 «Страницы и компоненты» и «i18n» закрываются этапами 2–8: критерий обеих строк — поведение экранов и использование ключей в разметке.
+- Строка «Валидатор дня»: решение по `src/services/validators/day.ts` принимается на этапе 4 (ТЗ §8.2).
+- `docs/scaffold/**` остаётся снимком ревизии: дефекты D1–D3 в нём не правятся (прецедент — приложение М), но переносить оверлей поверх нового проекта без этих правок нельзя.
+- Тесты этапа 9 продолжаются: юнит-тесты сервисов (`dates`, `repeat`, `scheduler`, `services/stats`) и сценарии ТЗ §2.10 ещё не написаны.
+- Браузерный прогон (`pnpm dev`) в песочнице недоступен (приложение М §5); работоспособность сборки проверена `pnpm build`.
+
+Заголовок и футер раздела дополнены версией 1.10.0 и приложением О; подвалы ТЗ, вайрфреймов, контрактов и скаффолда и строка README документации переведены с «приложения А–Н» на «приложения А–О».
+

@@ -1,31 +1,75 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { liveQuery, type Subscription } from 'dexie'
 import { db } from 'src/services/db'
 import { todayISO } from 'src/services/dates'
 import { aggregateStats } from 'src/services/stats'
 import type {
   PlacementHistoryEntry,
+  StatsPeriod,
+  StatsSortField,
   TaskStats,
   OverallStats,
-  StatsPeriod,
 } from 'src/services/stats'
+import type { DayInstance } from 'src/models/dayInstance'
 import { ok, err, type Result } from 'src/models/common'
 
-// Тип объявлен один раз — в src/services/stats.ts; здесь только реэкспорт
-export type { StatsPeriod }
+// Типы объявлены один раз — в src/services/stats.ts; здесь только реэкспорт
+export type { StatsPeriod, StatsSortField }
+
+/** Сравнение строк таблицы по колонке (контракты §4.1/§4.2). */
+function compareStats(a: TaskStats, b: TaskStats, field: StatsSortField): number {
+  switch (field) {
+    case 'rate': {
+      // «—» (rate === null) не переворачивается порядком: пустой рейт всегда в конце
+      if (a.rate === null && b.rate === null) return 0
+      if (a.rate === null) return 1
+      if (b.rate === null) return -1
+      return a.rate - b.rate
+    }
+    case 'done': return a.done - b.done
+    case 'skipped': return a.skipped - b.skipped
+    case 'placed': return a.placed - b.placed
+    default: return a.title.localeCompare(b.title)
+  }
+}
 
 export const useStatsStore = defineStore('stats', () => {
   const taskStats = ref<Map<string, TaskStats>>(new Map())
   const overallStats = ref<OverallStats | null>(null)
+  // Кэш истории размещений (контракты §4.1). TaskStatsPage читает его без
+  // повторного запроса; заполняется loadTaskHistory и сбрасывается recompute.
+  const history = ref<Map<string, PlacementHistoryEntry[]>>(new Map())
   const period = ref<StatsPeriod>('all')
+  const sortBy = ref<StatsSortField>('title')
+  const sortOrder = ref<'asc' | 'desc'>('asc')
   const loading = ref(false)
   const initialized = ref(false)
 
-  const visibleTaskStats = computed(() =>
-    Array.from(taskStats.value.values()).sort((a, b) =>
-      a.title.localeCompare(b.title),
-    ),
-  )
+  const visibleTaskStats = computed(() => {
+    const dir = sortOrder.value === 'asc' ? 1 : -1
+    const field = sortBy.value
+    return [...taskStats.value.values()].sort((a, b) => {
+      const byField = compareStats(a, b, field)
+      if (byField !== 0) {
+        // Пустой рейт остаётся в конце в обоих направлениях
+        const nullRate = field === 'rate' && (a.rate === null || b.rate === null)
+        return nullRate ? byField : byField * dir
+      }
+      return a.title.localeCompare(b.title)
+    })
+  })
+
+  const taskStatsById = (id: string) => taskStats.value.get(id)
+
+  /** Применение уже прочитанных завершённых экземпляров (общий путь recompute и liveQuery). */
+  function applyInstances(instances: DayInstance[], target: StatsPeriod): void {
+    const { perTask, overall } = aggregateStats(instances, target, todayISO())
+    taskStats.value = perTask
+    overallStats.value = overall
+    history.value = new Map() // агрегаты изменились — кэш истории недействителен
+    initialized.value = true
+  }
 
   async function recompute(p?: StatsPeriod): Promise<Result<void>> {
     loading.value = true
@@ -37,10 +81,7 @@ export const useStatsStore = defineStore('stats', () => {
       const instances = await db.dayInstances
         .where('status').equals('completed')
         .toArray()
-      const { perTask, overall } = aggregateStats(instances, target, todayISO())
-      taskStats.value = perTask
-      overallStats.value = overall
-      initialized.value = true
+      applyInstances(instances, target)
       return ok(undefined)
     } catch (e) {
       return err('DB_ERROR', 'Не удалось пересчитать статистику', e)
@@ -49,7 +90,44 @@ export const useStatsStore = defineStore('stats', () => {
     }
   }
 
+  // --- liveQuery (контракты §4.3/§4.5) -------------------------------------
+  // Изменения завершённых дней (в том числе из другой вкладки) пересчитывают
+  // агрегаты без ручного обновления. Ошибка подписки не логируется (НФТ ТЗ §7),
+  // подписка снимается — следующий initialize/subscribe повторит попытку.
+  let subscription: Subscription | null = null
+
+  function subscribe(): void {
+    if (subscription) return
+    const sub = liveQuery(() =>
+      db.dayInstances.where('status').equals('completed').toArray(),
+    ).subscribe({
+      next: instances => {
+        applyInstances(instances, period.value)
+      },
+      error: () => {
+        sub.unsubscribe()
+        if (subscription === sub) subscription = null
+      },
+    })
+    subscription = sub
+  }
+
+  function unsubscribe(): void {
+    subscription?.unsubscribe()
+    subscription = null
+  }
+
+  /** Инициализация экрана статистики: пересчёт + подписка (контракты §4.3). */
+  async function initialize(): Promise<Result<void>> {
+    const result = await recompute()
+    if (result.ok) subscribe()
+    return result
+  }
+
   async function loadTaskHistory(taskId: string): Promise<Result<PlacementHistoryEntry[]>> {
+    // Кэш: TaskStatsPage берёт историю без повторного запроса (контракты §4.2)
+    const cached = history.value.get(taskId)
+    if (cached) return ok(cached)
     try {
       const instances = await db.dayInstances
         .where('status').equals('completed')
@@ -71,6 +149,7 @@ export const useStatsStore = defineStore('stats', () => {
         }
       }
       out.sort((a, b) => b.date.localeCompare(a.date))
+      history.value.set(taskId, out)
       return ok(out)
     } catch (e) {
       return err('DB_ERROR', 'Не удалось загрузить историю', e)
@@ -82,9 +161,26 @@ export const useStatsStore = defineStore('stats', () => {
     void recompute(p)
   }
 
+  function setSort(field: StatsSortField, order?: 'asc' | 'desc') {
+    sortBy.value = field
+    if (order) sortOrder.value = order
+  }
+
+  /**
+   * Сброс кэшей перед переинициализацией (FR-SET-10, контракты §5.4).
+   * Подписку снимает unsubscribe(), БД не трогается.
+   */
+  function resetCache() {
+    taskStats.value = new Map()
+    overallStats.value = null
+    history.value = new Map()
+    initialized.value = false
+  }
+
   return {
-    taskStats, overallStats, period, loading, initialized,
-    visibleTaskStats,
-    recompute, loadTaskHistory, setPeriod,
+    taskStats, overallStats, history, period, sortBy, sortOrder, loading, initialized,
+    visibleTaskStats, taskStatsById,
+    initialize, recompute, loadTaskHistory, setPeriod, setSort,
+    subscribe, unsubscribe, resetCache,
   }
 })

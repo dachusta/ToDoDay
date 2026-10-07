@@ -25,6 +25,28 @@ class ToDoDayDB extends Dexie {
 
 export const db = new ToDoDayDB()
 
+/**
+ * Снимок значения для записи в Dexie.
+ *
+ * Значения сторов — реактивные Proxy из Vue (ref/reactive), а Dexie клонирует
+ * записываемые объекты структурным клонированием: `structuredClone` на Proxy
+ * падает DataCloneError («#<Object> could not be cloned»), поэтому put/bulkPut
+ * реактивного объекта не доходит до IndexedDB. Перед записью состояние
+ * разворачивается в обычные объекты и массивы (вложенные значения тоже: спред
+ * реактивного массива даёт массив прокси).
+ */
+export function toPlain<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => toPlain(item)) as unknown as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = toPlain(item)
+    }
+    return out as T
+  }
+  return value
+}
+
 // Синглтон состояния цикла. Дополняет отсутствующие поля дефолтами: ревизия 1.2
 // добавила lastAutoShiftDate, а база могла быть создана раньше. Отдельная
 // Dexie-миграция для этого не нужна (меняется не схема, а набор полей записи) —

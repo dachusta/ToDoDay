@@ -8,6 +8,9 @@ export default defineConfig({
     alias: {
       src: fileURLToPath(new URL('./src', import.meta.url)),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // Quasar CLI подставляет '#q-app' в dev/build; в vitest его нет, а от него
+      // зависит src/boot/i18n.ts — заглушка отдаёт defineBoot без побочных эффектов.
+      '#q-app': fileURLToPath(new URL('./test/vitest/q-app.ts', import.meta.url)),
     },
   },
   test: {

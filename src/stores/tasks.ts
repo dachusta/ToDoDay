@@ -1,11 +1,15 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { db } from 'src/services/db'
-import type { Task, TaskInput } from 'src/models/task'
+import { liveQuery, type Subscription } from 'dexie'
+import { db, toPlain } from 'src/services/db'
+import type { Task, TaskInput, TaskSortField } from 'src/models/task'
 import type { Priority } from 'src/models/enums'
 import { ok, err, type Result } from 'src/models/common'
 import { validateTaskInput } from 'src/services/validators/task'
 import { i18n } from 'src/boot/i18n'
+
+// Тип колонок сортировки объявлен один раз — в модели (контракты §1.1)
+export type { TaskSortField }
 
 // Мини-emitter для побочного эффекта архивации (контракт §1.5: «через emitter/событие»).
 // Так useCycleStore подписывается на архивацию, не создавая циклический импорт.
@@ -18,6 +22,8 @@ export function onTaskArchived(handler: TaskArchivedHandler): () => void {
   return () => archivedHandlers.delete(handler)
 }
 
+const PRIORITY_RANK: Record<Priority, number> = { low: 0, medium: 1, high: 2, critical: 3 }
+
 export const useTasksStore = defineStore('tasks', () => {
   const tasks = ref<Task[]>([])
   const loading = ref(false)
@@ -27,7 +33,7 @@ export const useTasksStore = defineStore('tasks', () => {
   const filterPriority = ref<Priority | null>(null)
   const filterColor = ref<string | null>(null)
   const showArchived = ref(false)
-  const sortBy = ref<'title' | 'priority' | 'duration' | 'createdAt'>('createdAt')
+  const sortBy = ref<TaskSortField>('createdAt')
   const sortOrder = ref<'asc' | 'desc'>('desc')
 
   const activeTasks = computed(() => tasks.value.filter(t => !t.archived))
@@ -44,10 +50,7 @@ export const useTasksStore = defineStore('tasks', () => {
     return [...list].sort((a, b) => {
       switch (sortBy.value) {
         case 'title': return a.title.localeCompare(b.title) * dir
-        case 'priority': {
-          const rank: Record<Priority, number> = { low: 0, medium: 1, high: 2, critical: 3 }
-          return (rank[a.priority] - rank[b.priority]) * dir
-        }
+        case 'priority': return (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) * dir
         case 'duration': return (a.durationMin - b.durationMin) * dir
         default: return (a.createdAt - b.createdAt) * dir
       }
@@ -56,7 +59,51 @@ export const useTasksStore = defineStore('tasks', () => {
 
   const taskById = (id: string) => tasks.value.find(t => t.id === id)
 
-  async function loadAll(): Promise<Result<void>> {
+  /** Счётчики для шапки «Дел» (контракты §1.2). */
+  const totalCount = computed(() => tasks.value.length)
+  const activeCount = computed(() => activeTasks.value.length)
+  const archivedCount = computed(() => archivedTasks.value.length)
+
+  /**
+   * Группировка для списка с заголовками приоритетов (контракты §1.2).
+   * Источник — visibleTasks, поэтому поиск, фильтры, «архив» и порядок
+   * сортировки внутри групп учитываются так же, как в плоском списке.
+   */
+  const tasksByPriority = computed<Record<Priority, Task[]>>(() => {
+    const groups: Record<Priority, Task[]> = { critical: [], high: [], medium: [], low: [] }
+    for (const t of visibleTasks.value) groups[t.priority].push(t)
+    return groups
+  })
+
+  // --- liveQuery (контракты §0.1/§1.3) -------------------------------------
+  // Подписка синхронизирует стор с БД, в том числе с правками из другой вкладки
+  // (правило 11 ТЗ §6). Ошибка подписки не логируется: НФТ ТЗ §7 разрешает
+  // console.warn только по закрытому списку из четырёх пунктов. Вместо этого
+  // подписка снимается — следующий loadAll/subscribe повторит попытку.
+  let subscription: Subscription | null = null
+
+  function subscribe(): void {
+    if (subscription) return
+    const sub = liveQuery(() => db.tasks.toArray()).subscribe({
+      next: rows => {
+        tasks.value = rows
+        initialized.value = true
+      },
+      error: () => {
+        sub.unsubscribe()
+        if (subscription === sub) subscription = null
+      },
+    })
+    subscription = sub
+  }
+
+  function unsubscribe(): void {
+    subscription?.unsubscribe()
+    subscription = null
+  }
+
+  /** Ручное перечитывание таблицы (контракты §1.3). */
+  async function refresh(): Promise<Result<void>> {
     loading.value = true
     try {
       tasks.value = await db.tasks.toArray()
@@ -67,6 +114,13 @@ export const useTasksStore = defineStore('tasks', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  /** Первичная загрузка: чтение + подписка liveQuery. */
+  async function loadAll(): Promise<Result<void>> {
+    const loaded = await refresh()
+    if (loaded.ok) subscribe()
+    return loaded
   }
 
   async function createTask(input: TaskInput): Promise<Result<Task>> {
@@ -83,7 +137,7 @@ export const useTasksStore = defineStore('tasks', () => {
       updatedAt: now,
     }
     try {
-      await db.tasks.add(task)
+      await db.tasks.add(toPlain(task))
       tasks.value.push(task)
       return ok(task)
     } catch (e) {
@@ -100,7 +154,7 @@ export const useTasksStore = defineStore('tasks', () => {
     if (!v.ok) return v
 
     try {
-      await db.tasks.put(merged)
+      await db.tasks.put(toPlain(merged))
       const idx = tasks.value.findIndex(t => t.id === id)
       if (idx >= 0) tasks.value[idx] = merged
       return ok(merged)
@@ -187,10 +241,7 @@ export const useTasksStore = defineStore('tasks', () => {
   function setFilterPriority(p: Priority | null) { filterPriority.value = p }
   function setFilterColor(c: string | null) { filterColor.value = c }
   function setShowArchived(v: boolean) { showArchived.value = v }
-  function setSort(
-    field: 'title' | 'priority' | 'duration' | 'createdAt',
-    order?: 'asc' | 'desc',
-  ) {
+  function setSort(field: TaskSortField, order?: 'asc' | 'desc') {
     sortBy.value = field
     if (order) sortOrder.value = order
   }
@@ -206,9 +257,11 @@ export const useTasksStore = defineStore('tasks', () => {
     tasks, loading, initialized,
     searchQuery, filterPriority, filterColor, showArchived, sortBy, sortOrder,
     // getters
-    activeTasks, archivedTasks, visibleTasks, taskById,
+    activeTasks, archivedTasks, visibleTasks, taskById, tasksByPriority,
+    totalCount, activeCount, archivedCount,
     // actions
-    loadAll, createTask, updateTask, archiveTask, unarchiveTask, deleteTask, duplicateTask,
+    loadAll, refresh, subscribe, unsubscribe,
+    createTask, updateTask, archiveTask, unarchiveTask, deleteTask, duplicateTask,
     setSearch, setFilterPriority, setFilterColor, setShowArchived, setSort, resetFilters,
   }
 })

@@ -24,6 +24,13 @@ export interface TaskSnapshot {
   priority: Priority
 }
 
+/**
+ * Колонки сортировки списка дел (контракты §1.1). Раньше тип был объявлен
+ * инлайн в сторе (скаффолд §6, строка useTasksStore) — теперь это именованный
+ * экспортируемый тип модели, общий для стора и страницы «Дела».
+ */
+export type TaskSortField = 'title' | 'priority' | 'duration' | 'createdAt'
+
 /** FR-T-1: десять фиксированных цветов. Дефолт нового дела — случайный элемент. */
 export const TASK_PALETTE = [
   '#F44336',

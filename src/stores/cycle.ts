@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { liveQuery, type Subscription } from 'dexie'
 import { useNow } from '@vueuse/core'
 import { format } from 'date-fns'
-import { db, ensureCycleState } from 'src/services/db'
+import { db, ensureCycleState, toPlain } from 'src/services/db'
 import { resolveDayForDate, resolveShiftTargets } from 'src/services/repeat'
 import { detectConflicts, fitInDay, isValidStartMin } from 'src/services/scheduler'
 import { minutesOfDay, todayISO } from 'src/services/dates'
@@ -40,6 +41,7 @@ export const useCycleStore = defineStore('cycle', () => {
 
   let unsubscribeArchived: (() => void) | null = null
   let unsubscribePointer: (() => void) | null = null
+  let liveSubscription: Subscription | null = null
 
   // Подписи UI. Проверка смены даты — в checkDayChange через todayISO(),
   // плюс watch ниже: когда минутный тик наконец сменит строку даты.
@@ -109,6 +111,23 @@ export const useCycleStore = defineStore('cycle', () => {
     (currentInstance.value?.placements ?? []).filter(p => p.startMin === null),
   )
 
+  /**
+   * Прогресс текущего дня (контракты §3.2). Считается по placements
+   * экземпляра: total — все размещения, включая нераспределённые и skipped.
+   */
+  const dayProgress = computed(() => {
+    const list = currentInstance.value?.placements ?? []
+    let done = 0
+    let skipped = 0
+    let pending = 0
+    for (const p of list) {
+      if (p.status === 'done') done++
+      else if (p.status === 'skipped') skipped++
+      else pending++
+    }
+    return { done, skipped, pending, total: list.length }
+  })
+
   const canShiftNext = computed(() => {
     void now.value // пересчёт раз в минуту; сама дата — из todayISO(), не из кэша подписи
     return currentInstance.value?.status === 'active' &&
@@ -116,6 +135,42 @@ export const useCycleStore = defineStore('cycle', () => {
   })
 
   const canComplete = computed(() => currentInstance.value?.status === 'active')
+
+  /**
+   * liveQuery на текущий день (контракты §3.4 — шаг initialize, §3.5).
+   * Вторая вкладка видит изменения активного экземпляра и cycleState без
+   * перезагрузки (правило 11 ТЗ §6). Виртуальный пустой день в Dexie не лежит
+   * (activeInstanceId === null), поэтому подписка его не затирает (FR-D-6).
+   * Ошибка подписки не логируется (НФТ ТЗ §7 — закрытый список warn):
+   * подписка снимается, следующий initialize повторит попытку.
+   */
+  function subscribeLiveQuery(): void {
+    if (liveSubscription) return
+    const sub = liveQuery(async () => {
+      const cs = await db.cycleState.get('current')
+      const id = cs?.activeInstanceId ?? null
+      const inst = id ? ((await db.dayInstances.get(id)) ?? null) : null
+      return { cs: cs ?? null, inst }
+    }).subscribe({
+      next: ({ cs, inst }) => {
+        if (cs) cycleState.value = cs
+        if (!cs?.activeInstanceId) return // виртуальный день живёт только в памяти
+        // Экземпляр удалён из БД (импорт/очистка в другой вкладке) — сбрасываем
+        // текущий день: его заново разрешат initialize/checkDayChange.
+        currentInstance.value = inst
+      },
+      error: () => {
+        sub.unsubscribe()
+        if (liveSubscription === sub) liveSubscription = null
+      },
+    })
+    liveSubscription = sub
+  }
+
+  function unsubscribeLiveQuery(): void {
+    liveSubscription?.unsubscribe()
+    liveSubscription = null
+  }
 
   async function initialize(): Promise<Result<void>> {
     loading.value = true
@@ -161,6 +216,9 @@ export const useCycleStore = defineStore('cycle', () => {
         }
       }
       await reconcileArchivedPlacements()
+      // Синхронизация с другими вкладками: изменения активного дня и cycleState
+      // подхватываются без перезагрузки (контракты §3.4/§3.5, правило 11 ТЗ §6).
+      subscribeLiveQuery()
       checkDayChange()
       initialized.value = true
       return ok(undefined)
@@ -209,7 +267,7 @@ export const useCycleStore = defineStore('cycle', () => {
       if (tpl) {
         // День по шаблону материализуется сразу
         await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
-          await db.dayInstances.add(inst)
+          await db.dayInstances.add(toPlain(inst))
           await db.cycleState.update('current', { activeInstanceId: inst.id })
         })
       } else {
@@ -297,7 +355,7 @@ export const useCycleStore = defineStore('cycle', () => {
     try {
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
         // put() работает и для виртуального пустого дня: он вставляется (FR-D-6)
-        await db.dayInstances.put(inst)
+        await db.dayInstances.put(toPlain(inst))
         const patch: Partial<CycleStateDto> = {}
         if (nextLast !== prevLast && nextLast) patch.lastCyclicTemplateId = nextLast
         if (wasVirtual) patch.activeInstanceId = inst.id
@@ -305,7 +363,7 @@ export const useCycleStore = defineStore('cycle', () => {
           if (shiftedIsEmpty) {
             patch.activeInstanceId = null // пустой день виртуален
           } else {
-            await db.dayInstances.add(shifted)
+            await db.dayInstances.add(toPlain(shifted))
             patch.activeInstanceId = shifted.id
           }
           if (mode === 'midnight') patch.lastAutoShiftDate = today
@@ -389,7 +447,7 @@ export const useCycleStore = defineStore('cycle', () => {
 
       const createdId = nextInstanceId.value
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
-        await db.dayInstances.put(inst)
+        await db.dayInstances.put(toPlain(inst))
         // Экземпляр, созданный этим завершением (сдвиг или переход на сегодня), удаляем
         if (createdId) await db.dayInstances.delete(createdId)
         // lastAutoShiftDate не восстанавливаем: авто-сдвиг в эти сутки уже был (FR-E-3)
@@ -520,7 +578,7 @@ export const useCycleStore = defineStore('cycle', () => {
     if (!affected.length) return
 
     for (const p of affected) p.status = 'skipped'
-    await db.dayInstances.put(inst)
+    await db.dayInstances.put(toPlain(inst))
   }
 
   async function shiftToNextDay(): Promise<Result<void>> {
@@ -546,7 +604,7 @@ export const useCycleStore = defineStore('cycle', () => {
   ): Promise<Result<void>> {
     try {
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
-        await db.dayInstances.put(inst)
+        await db.dayInstances.put(toPlain(inst))
         // FR-D-6: первое размещение в пустом дне сохраняет экземпляр и активный id
         if (wasVirtual) await db.cycleState.update('current', { activeInstanceId: inst.id })
       })
@@ -654,7 +712,7 @@ export const useCycleStore = defineStore('cycle', () => {
     const affected = inst.placements.filter(p => archivedIds.has(p.taskId) && p.status === 'pending')
     if (!affected.length) return
     for (const p of affected) p.status = 'skipped'
-    if (!isVirtualInstance.value) await db.dayInstances.put(inst)
+    if (!isVirtualInstance.value) await db.dayInstances.put(toPlain(inst))
   }
 
   async function replacePlacement(placementId: string, newTaskId: string): Promise<Result<void>> {
@@ -758,6 +816,32 @@ export const useCycleStore = defineStore('cycle', () => {
     unsubscribeArchived = null
     unsubscribePointer?.()
     unsubscribePointer = null
+    unsubscribeLiveQuery()
+  }
+
+  /**
+   * Сброс сессионного состояния перед переинициализацией (FR-SET-10, контракты
+   * §5.4: «сброс сессионного состояния сторов» после импорта и очистки).
+   * Подписки снимает dispose(), БД не трогается: следующий initialize разрешит
+   * день заново по текущему содержимому таблиц.
+   */
+  function resetSessionState() {
+    currentInstance.value = null
+    cycleState.value = null
+    lastCompletedInstanceId.value = null
+    placementsSnapshot.value = null
+    lastCyclicTemplateIdSnapshot.value = null
+    manualShiftDateSnapshot.value = null
+    nextInstanceId.value = null
+    shiftPending.value = false
+    shiftMode.value = null
+    completionSource.value = null
+    skippedAutoPromptDate.value = null
+    completing.value = false
+    dayChangeInFlight.value = false
+    loading.value = false
+    initialized.value = false
+    endDrag()
   }
 
   watch(currentDate, () => {
@@ -772,10 +856,10 @@ export const useCycleStore = defineStore('cycle', () => {
     draggingTaskId, dragSource, hoveredSlot,
     currentDate, currentTemplate, isTemplateless, isCurrentDayEmpty, isVirtualInstance,
     slots, placementsBySlot,
-    conflicts, hasConflicts, unallocatedPlacements, canShiftNext, canComplete,
+    conflicts, hasConflicts, unallocatedPlacements, dayProgress, canShiftNext, canComplete,
     initialize, resolveCurrentDay, completeDay, cancelCompletion, checkDayChange,
     startCompletion, dismissCompletion,
-    skipPendingPlacementsForTask, shiftToNextDay, dispose,
+    skipPendingPlacementsForTask, shiftToNextDay, dispose, resetSessionState,
     placeTask, movePlacement, removePlacement, replacePlacement, changePlacementDuration, setPlacementStatus,
     startDrag, setHoveredSlot, endDrag,
   }

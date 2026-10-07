@@ -108,18 +108,18 @@ ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `-
 
 ## 6. Стор: что реализовано и чего нет
 
-Код сторов — в [`scaffold/src/stores/`](scaffold/src/stores). Полный целевой API — в контрактах; таблица ниже перечисляет оставшиеся гэпы (это не баги, а запланированная работа) и для каждого — критерий, по которому видно, что гэп закрыт:
+Код сторов — в [`scaffold/src/stores/`](scaffold/src/stores). Полный целевой API — в контрактах; таблица ниже перечисляет гэпы на момент скаффолда (это не баги, а запланированная работа) и для каждого — критерий, по которому видно, что гэп закрыт. Колонка «Статус» — на ревизию 1.10.0 (этап 1 плана, ТЗ §8.2): пять строк по сторам закрыты, что именно сделано — в приложении О [журнала](Журнал-правок-ToDoDay.md).
 
-| Модуль | Чего нет в скаффолде | Критерий закрытия |
-| --- | --- | --- |
-| useTasksStore | subscribe, unsubscribe, refresh, tasksByPriority, totalCount / activeCount / archivedCount; TaskSortField объявлен инлайн. `isTitleTaken` в MVP не нужен | На TasksPage работают поиск, фильтры, сортировка и счётчики; изменения в другой вкладке видны без перезагрузки (liveQuery) |
-| useDaysStore | moveToPosition, subscribe, unsubscribe (liveQuery), hasConflicts, templatesCount, calendarTemplates, lastValidationErrors, sortMode. `deleteTemplate` и `reorder` уже в try/catch, удаление уплотняет order, reorder откатывает его | Вторая вкладка видит правки шаблонов; экран «Дни» показывает счётчики и режим сортировки |
-| useCycleStore | dayProgress, подписка liveQuery. `resetCurrentDay` в MVP нет. `replacePlacement` и `changePlacementDuration` реализованы в ревизии 1.3 | Вторая вкладка видит изменения активного дня; dayProgress совпадает с размещениями текущего дня |
-| useStatsStore | initialize, subscribe, unsubscribe, setSort, sortBy, sortOrder, history, taskStatsById. `topTasks` и `worstTasks` в MVP нет | StatsPage сортирует по любой колонке; TaskStatsPage берёт историю из кэша без повторного запроса |
-| useSettingsStore | exportAll, importAll, clearAll, lastBackupAt и сами экраны настроек. `toggleAskOnNewDay`, `toggleAutoShift`, `toggleShowConflicts`, `setFirstDayOfWeek` и `setLanguage` в сторе уже есть | FR-SET-4/5/10 проходят критерии приёмки ТЗ §9: экспорт даёт JSON с version «1.0», импорт отклоняет мусор без изменения данных, очистка чистит Dexie и localStorage |
-| Страницы и компоненты | MainLayout, TasksPage, DaysPage, DayBoardPage, StatsPage, TaskStatsPage, SettingsPage, DayGrid, PlacementCard, CompleteDayDialog, PWA-манифест. Заглушки `pages/**` и `layouts/**` мастер создаёт, их нужно переписать (см. §11) | Все маршруты ТЗ §5.1 открываются, состояния экранов совпадают с вайрфреймами, приложение устанавливается как PWA |
-| i18n | Разделы settings.*, placement.*, nav.tab.*, day.templateDeleted добавлены в ревизии 1.2, но компоненты их ещё не используют | Переключение ru/en меняет все видимые строки; в консоли нет предупреждений о missing key |
-| Валидатор дня | `src/services/validators/day.ts` (ТЗ §4.2) не написан: проверки шаблона живут в `daysStore.validate` и `repeat.validateRule`/`repeat.validateNoOverlap` | Валидация шаблона не дублируется: либо сервис появляется, либо файл убирается из дерева ТЗ §4.2 |
+| Модуль | Чего нет в скаффолде | Критерий закрытия | Статус |
+| --- | --- | --- | --- |
+| useTasksStore | subscribe, unsubscribe, refresh, tasksByPriority, totalCount / activeCount / archivedCount; TaskSortField объявлен инлайн. `isTitleTaken` в MVP не нужен | На TasksPage работают поиск, фильтры, сортировка и счётчики; изменения в другой вкладке видны без перезагрузки (liveQuery) | ✅ закрыто в 1.10.0 |
+| useDaysStore | moveToPosition, subscribe, unsubscribe (liveQuery), hasConflicts, templatesCount, calendarTemplates, lastValidationErrors, sortMode. `deleteTemplate` и `reorder` уже в try/catch, удаление уплотняет order, reorder откатывает его | Вторая вкладка видит правки шаблонов; экран «Дни» показывает счётчики и режим сортировки | ✅ закрыто в 1.10.0 |
+| useCycleStore | dayProgress, подписка liveQuery. `resetCurrentDay` в MVP нет. `replacePlacement` и `changePlacementDuration` реализованы в ревизии 1.3 | Вторая вкладка видит изменения активного дня; dayProgress совпадает с размещениями текущего дня | ✅ закрыто в 1.10.0 |
+| useStatsStore | initialize, subscribe, unsubscribe, setSort, sortBy, sortOrder, history, taskStatsById. `topTasks` и `worstTasks` в MVP нет | StatsPage сортирует по любой колонке; TaskStatsPage берёт историю из кэша без повторного запроса | ✅ закрыто в 1.10.0 |
+| useSettingsStore | exportAll, importAll, clearAll, lastBackupAt и сами экраны настроек. `toggleAskOnNewDay`, `toggleAutoShift`, `toggleShowConflicts`, `setFirstDayOfWeek` и `setLanguage` в сторе уже есть | FR-SET-4/5/10 проходят критерии приёмки ТЗ §9: экспорт даёт JSON с version «1.0», импорт отклоняет мусор без изменения данных, очистка чистит Dexie и localStorage | ✅ API закрыто в 1.10.0 (экран «Настройки» — этап 8) |
+| Страницы и компоненты | MainLayout, TasksPage, DaysPage, DayBoardPage, StatsPage, TaskStatsPage, SettingsPage, DayGrid, PlacementCard, CompleteDayDialog, PWA-манифест. Заглушки `pages/**` и `layouts/**` мастер создаёт, их нужно переписать (см. §11) | Все маршруты ТЗ §5.1 открываются, состояния экранов совпадают с вайрфреймами, приложение устанавливается как PWA | ⏳ этапы 2–8 |
+| i18n | Разделы settings.*, placement.*, nav.tab.*, day.templateDeleted добавлены в ревизии 1.2, но компоненты их ещё не используют | Переключение ru/en меняет все видимые строки; в консоли нет предупреждений о missing key | ⏳ этапы 2–8 (нужны компоненты) |
+| Валидатор дня | `src/services/validators/day.ts` (ТЗ §4.2) не написан: проверки шаблона живут в `daysStore.validate` и `repeat.validateRule`/`repeat.validateNoOverlap` | Валидация шаблона не дублируется: либо сервис появляется, либо файл убирается из дерева ТЗ §4.2 | ⏳ решение на этапе 4 |
 
 Реализовано и гэпом не является (раньше эти строки стояли в таблице с пометкой «(готово)»):
 
@@ -133,19 +133,19 @@ ESLint 9 больше не поддерживает .eslintrc.cjs и флаг `-
 > **Второй заход (там же, ревизия 1.8.0).** После первого прогона браузер падал на CSS: `postcss.config.js` мастера импортирует `autoprefixer`, которого не было в `package.json` оверлея (добавлен), а Sass-препроцессор Vite в песочнице автора правок не загружается — поэтому подключён `app.css` вместо `app.scss` (§3.1; файл `src/css/app.scss` оставлен). Подробности — приложение М [журнала](Журнал-правок-ToDoDay.md), пункты C14–C16.
 
 ### 6.1 [src/stores/tasks.ts](scaffold/src/stores/tasks.ts)
-CRUD дел (`loadAll`, `createTask`, `updateTask`, `archiveTask`, `unarchiveTask`, `deleteTask`, `duplicateTask`), фильтры, поиск и сортировка в `visibleTasks`, мини-emitter `onTaskArchived` (на него подписывается cycleStore, циклического импорта нет).
+CRUD дел (`loadAll`, `createTask`, `updateTask`, `archiveTask`, `unarchiveTask`, `deleteTask`, `duplicateTask`), фильтры, поиск и сортировка в `visibleTasks`, мини-emitter `onTaskArchived` (на него подписывается cycleStore, циклического импорта нет). В ревизии 1.10.0 добавлены `refresh` / `subscribe` / `unsubscribe` (liveQuery), `tasksByPriority` и счётчики `totalCount` / `activeCount` / `archivedCount`.
 
 ### 6.2 [src/stores/days.ts](scaffold/src/stores/days.ts)
-CRUD шаблонов (`createTemplate`, `updateTemplate`, `deleteTemplate`, `reorder`), `validate`, `validateNoOverlap` (тонкая обёртка над `repeat.validateNoOverlap`, добавлена в ревизии 1.6.1 — контракты §2.3 и трассируемость FR-D-5), emitter `onCyclicPointerRewritten` (удаление циклического шаблона-указателя не сбрасывает цикл в начало).
+CRUD шаблонов (`createTemplate`, `updateTemplate`, `deleteTemplate`, `reorder`), `validate`, `validateNoOverlap` (тонкая обёртка над `repeat.validateNoOverlap`, добавлена в ревизии 1.6.1 — контракты §2.3 и трассируемость FR-D-5), emitter `onCyclicPointerRewritten` (удаление циклического шаблона-указателя не сбрасывает цикл в начало). В ревизии 1.10.0 добавлены `moveToPosition`, `refresh` / `subscribe` / `unsubscribe` (liveQuery), `hasConflicts`, `templatesCount`, `calendarTemplates`, `lastValidationErrors` и `sortMode`; запись порядка у `reorder` и `moveToPosition` общая (`persistOrder` с откатом).
 
 ### 6.3 [src/stores/cycle.ts](scaffold/src/stores/cycle.ts)
-Ядро приложения: `initialize`, `resolveCurrentDay` (в т.ч. `{ force: true }`), `completeDay` / `cancelCompletion` / `startCompletion` / `dismissCompletion`, `checkDayChange` / `autoShift` / `shiftToNextDay` с режимами `ShiftMode`, `placeTask` / `movePlacement` / `removePlacement` / `replacePlacement` / `changePlacementDuration` / `setPlacementStatus`, `skipPendingPlacementsForTask`, `dispose`. Алгоритм дня целиком описан в контрактах §3.4 — код реализует его, а не наоборот.
+Ядро приложения: `initialize`, `resolveCurrentDay` (в т.ч. `{ force: true }`), `completeDay` / `cancelCompletion` / `startCompletion` / `dismissCompletion`, `checkDayChange` / `autoShift` / `shiftToNextDay` с режимами `ShiftMode`, `placeTask` / `movePlacement` / `removePlacement` / `replacePlacement` / `changePlacementDuration` / `setPlacementStatus`, `skipPendingPlacementsForTask`, `dispose`. Алгоритм дня целиком описан в контрактах §3.4 — код реализует его, а не наоборот. В ревизии 1.10.0 добавлены `dayProgress`, подписка liveQuery на `cycleState` и активный экземпляр, а также `resetSessionState`.
 
 ### 6.4 [src/stores/stats.ts](scaffold/src/stores/stats.ts)
-`recompute(period)`, `loadTaskHistory(taskId)`, `setPeriod`; `completeDay` и `cancelCompletion` вызывают пересчёт (ошибка пересчёта не отменяет завершение дня).
+`recompute(period)`, `loadTaskHistory(taskId)`, `setPeriod`; `completeDay` и `cancelCompletion` вызывают пересчёт (ошибка пересчёта не отменяет завершение дня). В ревизии 1.10.0 добавлены `initialize`, `subscribe` / `unsubscribe` (liveQuery на завершённых экземплярах), `sortBy` / `sortOrder` с `setSort`, `history` как кэш истории и `taskStatsById`.
 
 ### 6.5 [src/stores/settings.ts](scaffold/src/stores/settings.ts)
-Настройки через `useStorage` с ключами `tododay:<key>` (`theme`, `language`, `timeFormat`, `askOnNewDay`, `autoShift`, `showConflicts`, `firstDayOfWeek`); `setLanguage` переключает локаль i18n, а не только сохраняет настройку. Экспорт/импорт/очистка — гэп (см. таблицу выше).
+Настройки через `useStorage` с ключами `tododay:<key>` (`theme`, `language`, `timeFormat`, `askOnNewDay`, `autoShift`, `showConflicts`, `firstDayOfWeek`, `lastBackupAt`); `setLanguage` переключает локаль i18n, а не только сохраняет настройку. В ревизии 1.10.0 добавлены `exportAll`, `importAll`, `clearAll`, `lastBackupAt`, `busy` и `retrySettingsWrite` — гэп экспорта/импорта/очистки закрыт.
 
 ### 6.6 [src/stores/ui.ts](scaffold/src/stores/ui.ts)
 Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isOnline`.
@@ -202,6 +202,8 @@ Drawer, `openConfirm` (промис-диалог), `notify`, `globalError`, `isO
 
 > **Этап 0 (сборка) закрыт в ревизии 1.8.0:** проект создан, оверлей скопирован, `pnpm install` и PWA-режим выполнены, `pnpm typecheck` и `pnpm lint` проходят, dev-сервер стартует. Ограничения окружения и полный список правок — приложение М [журнала](Журнал-правок-ToDoDay.md). Строка таблицы про линтер (ниже) закрыта: `pnpm lint` проходит, правило `no-restricted-syntax` для `new Date('YYYY-MM-DD')` на месте.
 
+> **Этап 1 (слой данных и сторов) закрыт в ревизии 1.10.0:** строки таблицы ниже «Доделать остаток API сторов», «Подписки liveQuery (subscribe / unsubscribe) в tasks, days, stats» и «Экспорт/импорт/очистка данных» выполнены — см. приложение О [журнала](Журнал-правок-ToDoDay.md). Строка про тесты сервисов и сторов закрыта частично: тесты сторов по новому API написаны (`test/stores/**`), юнит-тесты сервисов остаются этапу 9.
+
 | Шаг | Файлы | Критерий готовности |
 | --- | --- | --- |
 | Доделать остаток API сторов из таблицы §6 (tasks: refresh / subscribe; days: moveToPosition / liveQuery; cycle: dayProgress / liveQuery; stats: setSort / history; settings: exportAll / importAll / clearAll / lastBackupAt). `isTitleTaken`, `topTasks`, `worstTasks` и `resetCurrentDay` в MVP не входят | src/stores/*.ts | Таблица §6 не содержит открытых строк, кроме явно вынесенных за MVP; контракты §8 покрыты тестами |
@@ -248,4 +250,4 @@ pnpm lint
 - **Порядок шагов.** Мастер `create quasar` очищает целевой каталог, поэтому проект создаётся в пустом каталоге и уже потом переносится; `quasar prepare` (это `postinstall` из `package.json`) генерирует `.quasar/**`, без него не работает ни `vue-tsc`, ни `quasar dev`.
 - **PWA-режим.** `quasar mode add pwa` дополнительно ставит зависимости в `src-pwa/`; если команда недоступна, состав файлов — `src-pwa/{manifest.json,register-sw.ts,sw/**}` + `public/icons/**` + `src-pwa/package.json`.
 
-Журнал правок (приложения А–Н) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–О) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
