@@ -5,12 +5,11 @@ import { db, toPlain } from 'src/services/db'
 import type { DayTemplate, DayTemplateInput, RepeatRule, ValidationIssue } from 'src/models/day'
 import { ok, err, type Result } from 'src/models/common'
 import { normalizeRule, validateNoOverlap as repeatValidateNoOverlap } from 'src/services/repeat'
-import { parseClock } from 'src/services/dates'
-
-const OVERLAP_CODES = ['OVERLAP_WEEKDAYS', 'OVERLAP_MONTHDAYS'] as const
-
-const isOverlap = (issue: ValidationIssue) =>
-  (OVERLAP_CODES as readonly string[]).includes(issue.code)
+import {
+  isOverlapIssue as isOverlap,
+  overlapTemplateIds,
+  validateDayTemplate,
+} from 'src/services/validators/day'
 
 // Как onTaskArchived: daysStore не импортирует cycleStore.
 type CyclicPointerHandler = (nextId: string | null) => void
@@ -151,36 +150,15 @@ export const useDaysStore = defineStore('days', () => {
     return loaded
   }
 
-  // Валидация как в контрактах §2.5: сначала правило, затем пересечения, затем имя и время.
+  /**
+   * Валидация шаблона (контракты §2.3/§2.5). Сами проверки живут в
+   * `services/validators/day.ts`, а правила — в `repeat.validateRule` /
+   * `repeat.validateNoOverlap` (ТЗ §4.4): стор ничего не дублирует, а только
+   * подставляет текущий список шаблонов. Решение по «валидатору дня»
+   * (скаффолд §6) — файл оставлен и задействован.
+   */
   function validate(input: DayTemplateInput, excludeId?: string): ValidationIssue[] {
-    const issues = repeatValidateNoOverlap(input.repeatRule, templates.value, excludeId)
-
-    const name = input.name.trim()
-    if (name.length < 1 || name.length > 50) {
-      issues.push({
-        code: 'INVALID_NAME',
-        message: 'Название: 1–50 символов',
-        conflictingTemplateIds: [],
-      })
-    }
-    if (!/^#[0-9A-F]{6}$/i.test(input.accentColor ?? '')) {
-      issues.push({
-        code: 'INVALID_COLOR',
-        message: 'Цвет: HEX #RRGGBB',
-        conflictingTemplateIds: [],
-      })
-    }
-    const start = parseClock(input.timeStart)
-    const end = parseClock(input.timeEnd)
-    const span = start !== null && end !== null ? end - start : NaN
-    if (start === null || end === null || span < 60 || span > 1425) {
-      issues.push({
-        code: 'INVALID_TIME',
-        message: 'Время: HH:mm, минуты кратны 15, конец позже начала минимум на час',
-        conflictingTemplateIds: [],
-      })
-    }
-    return issues
+    return validateDayTemplate(input, templates.value, excludeId)
   }
 
   /**
@@ -197,7 +175,7 @@ export const useDaysStore = defineStore('days', () => {
     const conflicts = issues.filter(isOverlap)
     if (conflicts.length) {
       return err('CONFLICT', 'Конфликт правил повторения', {
-        conflictingTemplateIds: [...new Set(conflicts.flatMap(i => i.conflictingTemplateIds))],
+        conflictingTemplateIds: overlapTemplateIds(issues),
       })
     }
     const first = issues[0]

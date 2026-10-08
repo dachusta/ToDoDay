@@ -20,6 +20,19 @@ export default configure((/* ctx */) => {
     build: {
       target: { browser: ['es2022', 'firefox115', 'chrome115', 'safari14'] },
       typescript: { strict: true, vueShim: true },
+      /**
+       * Options API нужен сторонним компонентам на ней. Quasar app-vite сам
+       * задаёт __VUE_OPTIONS_API__ из этого флага, и по умолчанию он выключен:
+       * тогда Vue не вызывает applyOptions, у Options-API компонентов пропадают
+       * computed/data/methods (props и render продолжают работать).
+       *
+       * Именно это ломало экран «Дни»: vuedraggable объявлен через Options API,
+       * его render читает computed realList/getKey, получал undefined и рисовал
+       * пустой список — созданный шаблон не появлялся (журнал, приложение С,
+       * дефект D15). Все собственные компоненты проекта — <script setup>; флаг
+       * включён ради библиотек.
+       */
+      vueOptionsAPI: true,
       // Алиасы скаффолда: 'src/...' (boot, stores, services) и Quasar-конвенция
       // 'pages/...' / 'layouts/...' в router/routes.ts. Мастер Quasar задаёт этот
       // блок в своём quasar.config.ts; в оверлее его не было, и Vite падал с

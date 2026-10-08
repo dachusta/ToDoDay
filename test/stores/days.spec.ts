@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useDaysStore } from 'src/stores/days'
 import { db } from 'src/services/db'
+import { validateDayTemplate } from 'src/services/validators/day'
 import type { DayTemplate, DayTemplateInput } from 'src/models/day'
 import { freshPinia, flush, resetDatabase, resetStorage } from './helpers'
 
@@ -202,5 +203,65 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
     expect(store.templates).toHaveLength(1)
     expect(store.templates.map(t => t.id)).toEqual([created.ok ? created.data.id : ''])
     expect(await db.dayTemplates.count()).toBe(1)
+  })
+
+  it('нормализует лишние для type поля правила при сохранении (FR-D-1)', async () => {
+    const store = useDaysStore()
+    // Форма присылает оба набора сразу: лишний для type должен отпасть
+    const created = await store.createTemplate(
+      input({
+        name: 'Пн',
+        repeatRule: { type: 'weekdays', weekdays: [4, 0, 0], monthdays: [1, 15] },
+      }),
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    expect(created.data.repeatRule).toEqual({ type: 'weekdays', weekdays: [0, 4] })
+    expect('monthdays' in created.data.repeatRule).toBe(false)
+    const stored = await db.dayTemplates.get(created.data.id)
+    expect(stored?.repeatRule).toEqual({ type: 'weekdays', weekdays: [0, 4] })
+
+    // Правка правила нормализует его так же, а значения вне диапазона отклоняет
+    const bad = await store.updateTemplate(created.data.id, {
+      repeatRule: { type: 'monthdays', weekdays: [0], monthdays: [0, 32] },
+    })
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.error.code).toBe('VALIDATION_ERROR')
+    expect(store.lastValidationErrors.map(i => i.code)).toEqual(['INVALID_RULE'])
+
+    const good = await store.updateTemplate(created.data.id, {
+      repeatRule: { type: 'monthdays', weekdays: [0], monthdays: [31, 1] },
+    })
+    expect(good.ok).toBe(true)
+    if (!good.ok) return
+    expect(good.data.repeatRule).toEqual({ type: 'monthdays', monthdays: [1, 31] })
+    expect('weekdays' in good.data.repeatRule).toBe(false)
+  })
+
+  it('validate делегирует валидатору дня, не повторяя алгоритм правила', async () => {
+    const store = useDaysStore()
+    const first = await store.createTemplate(
+      input({ name: 'Пн', repeatRule: { type: 'weekdays', weekdays: [0, 1] } }),
+    )
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    // Тот же результат, что у чистого валидатора: коды, виновники и значения
+    const rule = { type: 'weekdays' as const, weekdays: [1] }
+    expect(store.validate(input({ name: 'Второй', repeatRule: rule }))).toEqual(
+      validateDayTemplate(input({ name: 'Второй', repeatRule: rule }), store.templates),
+    )
+    expect(store.validate(input({ name: 'Второй', repeatRule: rule })).map(i => i.code)).toEqual([
+      'OVERLAP_WEEKDAYS',
+    ])
+    // excludeId исключает сам шаблон — правка не конфликтует с собой (FR-D-3)
+    expect(store.validate(input({ repeatRule: rule }), first.data.id)).toEqual([])
+    // Проверки полей шаблона тоже здесь: имя, цвет и время (FR-D-1)
+    expect(
+      store
+        .validate(input({ name: '', accentColor: 'red', timeStart: 'abc', timeEnd: '22:00' }))
+        .map(i => i.code),
+    ).toEqual(['INVALID_NAME', 'INVALID_COLOR', 'INVALID_TIME'])
   })
 })
