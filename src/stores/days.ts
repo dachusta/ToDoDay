@@ -228,7 +228,10 @@ export const useDaysStore = defineStore('days', () => {
     }
     try {
       await db.dayTemplates.add(toPlain(tpl))
-      templates.value.push(tpl)
+      // Та же гонка, что в useTasksStore.createTask: активная подписка liveQuery
+      // приносит шаблон из БД и может сработать раньше push — проверка по id
+      // не даёт шаблону задвоиться в списке.
+      if (!templates.value.some(t => t.id === tpl.id)) templates.value.push(tpl)
       return ok(tpl)
     } catch (e) {
       return err('DB_ERROR', 'Не удалось создать шаблон', e)

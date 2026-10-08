@@ -188,4 +188,19 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
     await flush()
     expect(store.orderedTemplates.map(t => t.name)).toEqual(['A', 'B'])
   })
+
+  it('createTemplate при активной подписке не дублирует шаблон (гонка с liveQuery)', async () => {
+    const store = useDaysStore()
+    await store.loadAll()
+
+    const created = await store.createTemplate(input({ name: 'Утро' }))
+    expect(created.ok).toBe(true)
+    await flush()
+
+    // Оптимистичный push не должен добавлять второй экземпляр поверх строки,
+    // которую уже принесла подписка (та же гонка, что у createTask)
+    expect(store.templates).toHaveLength(1)
+    expect(store.templates.map(t => t.id)).toEqual([created.ok ? created.data.id : ''])
+    expect(await db.dayTemplates.count()).toBe(1)
+  })
 })

@@ -237,4 +237,27 @@ describe('useTasksStore: приёмки ТЗ §9 «По делам»', () => {
     expect(store.activeTasks.map(t => t.id)).toEqual([created.data.id])
     expect(await db.dayInstances.count()).toBe(0)
   })
+
+  it('createTask при активной подписке не дублирует дело', async () => {
+    const store = useTasksStore()
+    await store.loadAll()
+    // Даём подписке доставить первый снимок: иначе push уходит раньше её next()
+    await flush()
+
+    const created = await store.createTask({
+      title: 'Зарядка',
+      priority: 'high',
+      color: '#4CAF50',
+      durationMin: 30,
+    })
+    expect(created.ok).toBe(true)
+    await flush()
+
+    // Оптимистичный push не должен добавлять второй экземпляр поверх строки,
+    // которую уже принесла подписка liveQuery (иначе карточка видна дважды)
+    expect(store.tasks).toHaveLength(1)
+    expect(store.tasks.map(t => t.title)).toEqual(['Зарядка'])
+    expect(store.visibleTasks).toHaveLength(1)
+    expect(await db.tasks.count()).toBe(1)
+  })
 })

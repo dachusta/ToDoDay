@@ -500,6 +500,35 @@ describe('TasksPage: действия строки (FR-T-3, FR-T-5, FR-T-6)', ()
   })
 })
 
+describe('TasksPage: создание дела через форму', () => {
+  it('создаёт ровно одно дело: одна запись в БД и одна карточка', async () => {
+    await resetDatabase()
+    const { wrapper } = await mountPage(375)
+    const store = useTasksStore()
+
+    expect(wrapper.findAll('.task-card')).toHaveLength(0)
+
+    await wrapper.find('[data-test="new-task"]').trigger('click')
+    await flush()
+
+    const input = document.body.querySelector<HTMLInputElement>(
+      '.task-form .q-field input[type="text"]',
+    )
+    if (input === null) throw new Error('поле названия не найдено')
+    input.value = 'Новое дело'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+
+    document.body.querySelector<HTMLButtonElement>('[data-test="save"]')?.click()
+    await flush()
+
+    expect(await db.tasks.count()).toBe(1)
+    expect(store.tasks).toHaveLength(1)
+    expect(wrapper.findAll('.task-card')).toHaveLength(1)
+    expect(cardTitles(wrapper)).toEqual(['Новое дело'])
+  })
+})
+
 describe('TasksPage: перенос дела на доску (FR-T-4)', () => {
   it('с 1024 px строка таблицы — drag-source, id уходит в dataTransfer', async () => {
     const { wrapper } = await mountPage(1280)

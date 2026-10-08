@@ -138,7 +138,11 @@ export const useTasksStore = defineStore('tasks', () => {
     }
     try {
       await db.tasks.add(toPlain(task))
-      tasks.value.push(task)
+      // Запись идёт в state только если её там ещё нет. Активная подписка
+      // liveQuery приносит эту же строку из БД и может сработать раньше этого
+      // push: тогда одно дело оказывалось в списке дважды (одинаковый id).
+      // Проверка по id закрывает гонку в обе стороны — и до, и после next().
+      if (!tasks.value.some(t => t.id === task.id)) tasks.value.push(task)
       return ok(task)
     } catch (e) {
       return err('DB_ERROR', 'Не удалось создать дело', e)
