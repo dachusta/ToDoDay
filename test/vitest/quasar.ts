@@ -1,27 +1,34 @@
 import {
   ClosePopup,
+  QBanner,
   QBtn,
   QCard,
   QCardActions,
   QCardSection,
+  QCheckbox,
   QDialog,
   QDrawer,
   QFooter,
   QHeader,
   QIcon,
+  QInput,
   QItem,
   QItemLabel,
   QItemSection,
   QLayout,
   QList,
   QMenu,
+  QPage,
   QPageContainer,
+  QPageSticky,
+  QSelect,
   QSeparator,
   QTab,
   QTabs,
   QToolbar,
   QToolbarTitle,
   QTooltip,
+  Notify,
   Ripple,
 } from 'quasar'
 
@@ -34,22 +41,28 @@ import {
  * Список пополняется по мере появления новых компонентов в тестируемых SFC.
  */
 export const quasarComponents = {
+  QBanner,
   QBtn,
   QCard,
   QCardActions,
   QCardSection,
+  QCheckbox,
   QDialog,
   QDrawer,
   QFooter,
   QHeader,
   QIcon,
+  QInput,
   QItem,
   QItemLabel,
   QItemSection,
   QLayout,
   QList,
   QMenu,
+  QPage,
   QPageContainer,
+  QPageSticky,
+  QSelect,
   QSeparator,
   QTab,
   QTabs,
@@ -60,3 +73,11 @@ export const quasarComponents = {
 
 /** Директивы Quasar, которые встречаются в разметке каркаса. */
 export const quasarDirectives = { ClosePopup, Ripple }
+
+/**
+ * Опции установки Quasar для компонентных тестов. Notify ставится явно:
+ * Quasar подключает его только если он передан в `plugins`, а `uiStore.notify`
+ * (снэкбары, вайрфреймы §9.3) без установленного плагина падает на
+ * `Notify.create is not a function`.
+ */
+export const quasarPluginOptions = { plugins: { Notify } }

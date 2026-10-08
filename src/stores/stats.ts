@@ -37,6 +37,10 @@ function compareStats(a: TaskStats, b: TaskStats, field: StatsSortField): number
 export const useStatsStore = defineStore('stats', () => {
   const taskStats = ref<Map<string, TaskStats>>(new Map())
   const overallStats = ref<OverallStats | null>(null)
+  // Мини-сводка экрана «Дела» (FR-T-4): агрегаты за «всё время», не зависящие от
+  // выбранного на экране статистики периода. Живут рядом с taskStats, но своей
+  // жизни: переключение периода на StatsPage их не пересчитывает и не портит.
+  const allTimeStats = ref<Map<string, TaskStats>>(new Map())
   // Кэш истории размещений (контракты §4.1). TaskStatsPage читает его без
   // повторного запроса; заполняется loadTaskHistory и сбрасывается recompute.
   const history = ref<Map<string, PlacementHistoryEntry[]>>(new Map())
@@ -62,11 +66,24 @@ export const useStatsStore = defineStore('stats', () => {
 
   const taskStatsById = (id: string) => taskStats.value.get(id)
 
+  /**
+   * Агрегаты «всё время» для строки дела (FR-T-4). Экран «Дела» показывает по ним
+   * «выполнено / пропущено» и рейт; `undefined` — дело ещё не размещалось, и это
+   * не то же самое, что 0% (FR-S-2).
+   */
+  const allTimeStatsById = (id: string) => allTimeStats.value.get(id)
+
   /** Применение уже прочитанных завершённых экземпляров (общий путь recompute и liveQuery). */
   function applyInstances(instances: DayInstance[], target: StatsPeriod): void {
-    const { perTask, overall } = aggregateStats(instances, target, todayISO())
+    const today = todayISO()
+    const { perTask, overall } = aggregateStats(instances, target, today)
     taskStats.value = perTask
     overallStats.value = overall
+    // Сводка «всё время» считается из того же набора экземпляров: recompute и
+    // liveQuery читают завершённые дни целиком, а период — фильтр внутри
+    // aggregateStats. Второго запроса к БД поэтому не нужно.
+    allTimeStats.value =
+      target === 'all' ? perTask : aggregateStats(instances, 'all', today).perTask
     history.value = new Map() // агрегаты изменились — кэш истории недействителен
     initialized.value = true
   }
@@ -173,13 +190,14 @@ export const useStatsStore = defineStore('stats', () => {
   function resetCache() {
     taskStats.value = new Map()
     overallStats.value = null
+    allTimeStats.value = new Map()
     history.value = new Map()
     initialized.value = false
   }
 
   return {
-    taskStats, overallStats, history, period, sortBy, sortOrder, loading, initialized,
-    visibleTaskStats, taskStatsById,
+    taskStats, overallStats, allTimeStats, history, period, sortBy, sortOrder, loading, initialized,
+    visibleTaskStats, taskStatsById, allTimeStatsById,
     initialize, recompute, loadTaskHistory, setPeriod, setSort,
     subscribe, unsubscribe, resetCache,
   }

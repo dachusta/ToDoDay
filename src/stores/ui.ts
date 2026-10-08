@@ -30,14 +30,18 @@ export const useUiStore = defineStore('ui', () => {
     message: string,
     type: 'info' | 'success' | 'warning' | 'error' = 'info',
     action?: { label: string; handler: () => void },
+    // Длительность показа в мс (вайрфреймы §9.3: 2 c у создания дела, 5 c у
+    // архивации). undefined — дефолт Quasar Notify.
+    timeout?: number,
   ) {
     Notify.create({
       message,
       type,
-      // exactOptionalPropertyTypes: actions не принимает явный undefined
+      // exactOptionalPropertyTypes: необязательные поля не принимают явный undefined
       ...(action
         ? { actions: [{ label: action.label, color: 'white', handler: action.handler }] }
         : {}),
+      ...(timeout === undefined ? {} : { timeout }),
     })
   }
 

@@ -167,7 +167,7 @@ interface TaskInput {
 
 - Использует: только db.tasks. Обратная связь с циклом — через emitter: archiveTask публикует onTaskArchived(taskId), а useCycleStore подписывается на него и снимает активные (pending) размещения. Прямой зависимости useTasksStore → useCycleStore нет (иначе получился бы цикл импортов).
 
-- Используется: TasksPage, TaskForm, TaskCard, панель дел в DayBoard, StatsPage (для заголовков).
+- Используется: TasksPage, TaskForm, TaskCard, TaskList, панель дел в DayBoard, StatsPage (для заголовков).
 
 ## 2. useDaysStore
 Ответственность: CRUD шаблонов дней, порядок в цикле, валидация конфликтов правил.
@@ -641,6 +641,10 @@ interface StatsState {
   // Кэш агрегатов
   taskStats: Ref<Map<string /*taskId*/, TaskStats>>;
   overallStats: Ref<OverallStats | null>;
+  // Агрегаты за «всё время» для мини-сводки экрана «Дела» (FR-T-4): считаются из
+  // того же набора завершённых экземпляров, что и taskStats, но не зависят от
+  // period — переключение периода на StatsPage сводку «Дел» не меняет
+  allTimeStats: Ref<Map<string /*taskId*/, TaskStats>>;
   history: Ref<Map<string /*taskId*/, PlacementHistoryEntry[]>>;
 
   // UI-фильтр
@@ -695,6 +699,7 @@ interface PlacementHistoryEntry {
 | topTasks | ComputedRef<TaskStats[]> | Не входит в MVP. Не реализовывать, пока нет отдельного FR |
 | worstTasks | ComputedRef<TaskStats[]> | Не входит в MVP |
 | taskStatsById | (id: string) => TaskStats \| undefined | — |
+| allTimeStatsById | (id: string) => TaskStats \| undefined | Агрегаты за «всё время» для мини-сводки строки дела (FR-T-4). `undefined` — дело не размещалось, и это не то же самое, что 0% (FR-S-2) |
 
 ### 4.3 Actions
 
@@ -855,11 +860,11 @@ interface ConfirmDialogState {
 ```
 function toggleDrawer(): void;
 function openConfirm(opts: Omit<ConfirmDialogState, 'resolve'>): Promise<boolean>;
-function notify(message: string, type?: 'info'|'success'|'warning'|'error', action?: { label: string; handler: () => void }): void;
+function notify(message: string, type?: 'info'|'success'|'warning'|'error', action?: { label: string; handler: () => void }, timeout?: number): void;
 function setGlobalError(err: AppError | null): void;
 ```
 
-notify оборачивает Quasar Notify.
+notify оборачивает Quasar Notify. `timeout` — длительность показа в миллисекундах (вайрфреймы §9.3: 2 c у создания и дублирования дела, 5 c у архивации); при `undefined` действует дефолт Notify.
 
 ## 7. Взаимодействие сторов — карта зависимостей
 
@@ -1041,4 +1046,20 @@ notify оборачивает Quasar Notify.
 
 - `test/components/confirmDialog.spec.ts` — хост `uiStore.openConfirm` (контракты §6.2): диалог появляется по запросу, показывает заголовок и текст, кнопки по умолчанию берутся из i18n, подтверждение резолвит промис в `true`, отмена — в `false`, в обоих случаях `confirmDialog` сбрасывается в null.
 
-Журнал правок (приложения А–П) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Тесты модуля «Дела» (этап 3, ревизия 1.12.0, приложение Р журнала) — критерий готовности этапа ТЗ §8.2 (приёмки ТЗ §9 «По делам», FR-T-1…FR-T-6, состояния вайрфреймов §2):
+
+- `test/components/tasksPage.spec.ts` — экран «Дела» целиком, смонтированный в `QLayout` + `QPageContainer` (вне layout `QPage` и `QPageSticky` не рендерятся). Проверяет: раскладку карточки/таблица на границе 1024 px, счётчики `activeCount` / `archivedCount`, мини-сводку из `allTimeStatsById` («не размещалось» против «выполнено / пропущено» и рейта, FR-T-4/FR-S-2), пустое состояние и состояние «ничего не найдено» (§9.4), баннер `DB_ERROR` с повтором, поиск после trim без учёта регистра, фильтры по приоритету и цвету, «Показать архивные», сортировку и её направление, архивацию со снэкбаром «Вернуть из архива» (§9.3), дублирование (FR-T-5), видимость «Удалить» только у архивной строки и подтверждение удаления с отказом и согласием (FR-T-6), переход на `/stats/task/:id`, открытие формы по FAB и по «Редактировать», перенос дела на доску с 1024 px и его отсутствие до 1024 px (FR-T-4), независимость сводки от `period` экрана статистики.
+
+- `test/components/taskForm.spec.ts` — форма дела (вайрфреймы §5): дефолты FR-T-1 (приоритет medium, 30 мин, цвет из палитры), отказ сохранить дело без названия с текстом из i18n, создание с выбранными полями, шаг 15 и зажим в границах 15…1425, живое превью и смена цвета по свотчу, произвольный `#RRGGBB` (незаконченный ввод не уходит в модель), предзаполнение и правка без создания нового дела, правка архивного дела (FR-T-2/FR-T-3).
+
+- `test/components/taskActions.spec.ts` — правило разделения действий FR-T-3/FR-T-6 для меню карточки и колонки «Действия» таблицы: у живого дела нет удаления, у архивного архивация заменяется возвратом, удаление отделено разделителем и помечено опасным.
+
+- `test/services/taskValidator.spec.ts` — `validateTaskInput` по приёмкам ТЗ §9: пустое имя, 1425 принимается, 1440 и некратные 15 отклоняются, границы названия 1–100, формат цвета, неизвестный приоритет; форматтеры длительности, рейта (`null` → «—», 0 → «0%») и мини-сводки.
+
+- `test/services/taskDrag.spec.ts` — протокол переноса «список → доска»: id в кастомном и запасном MIME-типах, `effectAllowed = 'copy'`, чтение payload, `null` для чужого переноса и при отсутствии `dataTransfer`.
+
+- `test/stores/tasks.spec.ts` (дополнен) — приёмки ТЗ §9 «По делам» на сторе: правка названия, цвета, приоритета и длительности не меняет `durationMin` и `taskSnapshot` существующего размещения (FR-T-2, правило 9); дубликат 100-символьного названия укладывается в 100 символов вместе с суффиксом текущей локали (FR-T-5); `deleteTask` неархивного дела → `CONSTRAINT_VIOLATION`, архивного → удаление (FR-T-6); возврат из архива не восстанавливает размещения (FR-T-3).
+
+- `test/i18n/keys.spec.ts` — полнота словарей (НФТ ТЗ §7, критерий строки «i18n» скаффолда §6): наборы ключей ru и en совпадают, пустых строк нет, а все литеральные ключи из вызовов `t('...')` по `src/**` присутствуют в обоих словарях. Пропущенный перевод ловится тестом, а не предупреждением vue-i18n в консоли.
+
+Журнал правок (приложения А–Р) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
