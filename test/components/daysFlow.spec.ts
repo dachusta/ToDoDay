@@ -71,6 +71,15 @@ async function mountApp(pinia = createPinia()): Promise<{ wrapper: VueWrapper; r
 const cardNames = (): string[] =>
   $$('.day-template-card__name').map(node => node.textContent ?? '')
 
+/**
+ * Материализация дня и запись шаблона идут транзакциями Dexie: под нагрузкой
+ * полного прогона фиксированной паузы не хватает, поэтому ждём условие.
+ */
+async function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
+  const start = Date.now()
+  while (!check() && Date.now() - start < timeoutMs) await flush(20)
+}
+
 const click = async (selector: string): Promise<void> => {
   const element = $(selector)
   if (element === null) throw new Error(`элемент ${selector} не найден`)
@@ -97,7 +106,7 @@ describe('Модуль «Дни» в реальном каркасе прило�
     if (name === null) throw new Error('поле названия не найдено')
     await new DOMWrapper(name).setValue('Рабочий день')
     await click('[data-test="save"]')
-    await flush(120)
+    await waitUntil(() => cardNames().length === 1)
 
     expect(await db.dayTemplates.count()).toBe(1)
     expect(cardNames()).toEqual(['Рабочий день'])
@@ -113,7 +122,7 @@ describe('Модуль «Дни» в реальном каркасе прило�
     if (name === null) throw new Error('поле названия не найдено')
     await new DOMWrapper(name).setValue('Спорт-день')
     await click('[data-test="save"]')
-    await flush(120)
+    await waitUntil(() => cardNames().length === 1)
     expect(cardNames()).toEqual(['Спорт-день'])
 
     // Перезаход: снимаем каркас, поднимаем приложение заново (как F5)
@@ -131,6 +140,9 @@ describe('Модуль «Дни» в реальном каркасе прило�
   it('шаблон, созданный на пустом дне, заменяет виртуальный день (FR-D-6)', async () => {
     await mountApp()
     const cycle = useCycleStore()
+    // App.vue инициализирует цикл асинхронно: под нагрузкой прогона фиксированной
+    // паузы не хватает, поэтому ждём условие
+    await waitUntil(() => cycle.initialized)
     expect(cycle.initialized).toBe(true)
     expect(cycle.isVirtualInstance).toBe(true)
 
@@ -140,7 +152,7 @@ describe('Модуль «Дни» в реальном каркасе прило�
     if (name === null) throw new Error('поле названия не найдено')
     await new DOMWrapper(name).setValue('Рабочий день')
     await click('[data-test="save"]')
-    await flush(120)
+    await waitUntil(() => cardNames().length === 1 && cycle.currentInstance?.templateId !== null)
 
     const stored = await db.dayTemplates.toArray()
     expect(stored).toHaveLength(1)

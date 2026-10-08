@@ -125,6 +125,13 @@ function buildPage(pinia: ReturnType<typeof createPinia>): VueWrapper {
 async function mountPage(pinia = createPinia()): Promise<VueWrapper> {
   setActivePinia(pinia)
   const wrapper = buildPage(pinia)
+  // `daysStore.loadAll()` читает таблицу и подписывает liveQuery асинхронно:
+  // под нагрузкой полного прогона фиксированной паузы не хватает, и список
+  // приходит пустым. Ждём данные стора или баннер ошибки загрузки.
+  await waitUntil(
+    () => useDaysStore().initialized || wrapper.find('[data-test="load-error"]').exists(),
+    3000,
+  )
   await flush()
   return wrapper
 }

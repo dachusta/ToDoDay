@@ -1,4 +1,5 @@
 import { format } from 'date-fns'
+import type { TimeFormat } from 'src/models/enums'
 
 /** ТЗ §2.8: единственный источник локальной календарной даты 'YYYY-MM-DD'. */
 export function todayISO(): string {
@@ -36,4 +37,27 @@ export function minutesOfDay(hhmm: string): number {
 export function parseClock(hhmm: string): number | null {
   if (!/^([01]\d|2[0-3]):(00|15|30|45)$/.test(hhmm)) return null
   return minutesOfDay(hhmm)
+}
+
+/**
+ * FR-SET-3: минуты от начала суток → подпись на экране. Данные (слоты, карточки,
+ * шапка дня) всегда хранят минуты и сырое 'HH:mm'; 12-часовой вид рисуется здесь
+ * и только здесь, поэтому шаг сетки 15 мин и хранение формат не меняет.
+ * Суффиксы AM/PM не переводятся: это часть записи времени, а не текст интерфейса.
+ */
+export function formatMinutesOfDay(minutes: number, format12h: TimeFormat): string {
+  const total = ((Math.round(minutes) % 1440) + 1440) % 1440
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  const mm = String(m).padStart(2, '0')
+  if (format12h === '12h') {
+    const h12 = h % 12 === 0 ? 12 : h % 12
+    return `${h12}:${mm} ${h < 12 ? 'AM' : 'PM'}`
+  }
+  return `${String(h).padStart(2, '0')}:${mm}`
+}
+
+/** FR-SET-3: сырое 'HH:mm' из данных → подпись на экране ('08:15' | '8:15 AM'). */
+export function formatClock(hhmm: string, format12h: TimeFormat): string {
+  return formatMinutesOfDay(minutesOfDay(hhmm), format12h)
 }

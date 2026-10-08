@@ -42,6 +42,8 @@ export const useCycleStore = defineStore('cycle', () => {
   let unsubscribeArchived: (() => void) | null = null
   let unsubscribePointer: (() => void) | null = null
   let liveSubscription: Subscription | null = null
+  /** Идущая инициализация: повторный initialize присоединяется к ней (дефект D17). */
+  let initializePromise: Promise<Result<void>> | null = null
 
   // Подписи UI. Проверка смены даты — в checkDayChange через todayISO(),
   // плюс watch ниже: когда минутный тик наконец сменит строку даты.
@@ -173,6 +175,19 @@ export const useCycleStore = defineStore('cycle', () => {
   }
 
   async function initialize(): Promise<Result<void>> {
+    // App.vue и страница дня стартуют одновременно, поэтому повторный вызов
+    // присоединяется к уже идущей инициализации: два параллельных разрешения дня
+    // создали бы два экземпляра, и currentInstance мог бы остаться на проигравшем
+    // (журнал, дефект D17). Гвардия не заменяет Result: наружу уходит тот же ответ.
+    initializePromise ??= runInitialize()
+    try {
+      return await initializePromise
+    } finally {
+      initializePromise = null
+    }
+  }
+
+  async function runInitialize(): Promise<Result<void>> {
     loading.value = true
     try {
       const tasksLoaded = await useTasksStore().loadAll()
@@ -828,6 +843,9 @@ export const useCycleStore = defineStore('cycle', () => {
   function resetSessionState() {
     currentInstance.value = null
     cycleState.value = null
+    // Идущую инициализацию не «подхватываем» после сброса: следующий initialize
+    // должен перечитать уже новое содержимое таблиц (FR-SET-5/FR-SET-10)
+    initializePromise = null
     lastCompletedInstanceId.value = null
     placementsSnapshot.value = null
     lastCyclicTemplateIdSnapshot.value = null

@@ -115,4 +115,32 @@ describe('useCycleStore: dayProgress и liveQuery (гэпы скаффолд §6
     expect((await cycle.initialize()).ok).toBe(true)
     expect(cycle.currentInstance).not.toBeNull()
   })
+
+  it('невалидный startMin — VALIDATION_ERROR, размещение не меняется (FR-B-4, приёмка «По доске»)', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const task = await newTask('A')
+
+    // Не целое, не кратно 15 и отрицательное — ошибка валидации, а не snap и не null
+    for (const bad of [7, 15.5, -15]) {
+      const result = await cycle.placeTask(task.id, bad)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR')
+    }
+    expect(cycle.currentInstance?.placements).toHaveLength(0)
+
+    // Перенос: невалидный слот отклоняется, прежний startMin остаётся
+    const placed = await cycle.placeTask(task.id, 60)
+    expect(placed.ok).toBe(true)
+    if (!placed.ok) return
+    const moved = await cycle.movePlacement(placed.data.id, 7)
+    expect(moved.ok).toBe(false)
+    if (!moved.ok) expect(moved.error.code).toBe('VALIDATION_ERROR')
+    expect(cycle.currentInstance?.placements[0]?.startMin).toBe(60)
+
+    // Валидный, но не помещающийся слот — не ошибка, а нераспределённое (FR-B-4)
+    const late = await cycle.placeTask(task.id, 840)
+    expect(late.ok).toBe(true)
+    if (late.ok) expect(late.data.startMin).toBeNull()
+  })
 })
