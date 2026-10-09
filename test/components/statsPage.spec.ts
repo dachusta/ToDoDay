@@ -121,6 +121,17 @@ async function mountTaskStats(width = 1280): Promise<{ wrapper: VueWrapper; rout
   await router.isReady()
 
   const wrapper = buildHarness(TaskHarness, pinia, router)
+  // Экран грузит данные цепочкой recompute → loadTaskHistory → subscribe, и кэш
+  // истории заполняется её последним шагом (пустой массив — тоже запись в кэш).
+  // Ждём готовности кэша, а не паузы: под параллельной прогонкой чтение Dexie
+  // выходит за фиксированный flush, и строки истории не успевали отрисоваться
+  // (журнал, приложение Х, дефект D29).
+  await vi.waitFor(
+    () => {
+      expect(useStatsStore().history.has('a')).toBe(true)
+    },
+    { timeout: 10_000 },
+  )
   await flush()
   return { wrapper, router }
 }

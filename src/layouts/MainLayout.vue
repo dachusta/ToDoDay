@@ -186,9 +186,9 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import ConfirmDialog from 'src/components/common/ConfirmDialog.vue'
+import { useDataActions } from 'src/components/settings/dataActions'
 import { useUiStore } from 'src/stores/ui'
 import { useSettingsStore } from 'src/stores/settings'
-import { downloadBlob, exportFileName, pickJsonFile } from 'src/services/dataTransfer'
 import type { ThemeMode } from 'src/models/enums'
 import {
   APPBAR_MENU_ITEMS,
@@ -208,6 +208,9 @@ const router = useRouter()
 const { t } = useI18n()
 const ui = useUiStore()
 const settings = useSettingsStore()
+// Экспорт/импорт — те же сценарии, что и в блоке «Данные» экрана настроек
+// (вайрфреймы §8 и §9.1): общий код живёт в components/settings/dataActions.ts.
+const data = useDataActions()
 
 /**
  * Заголовок AppBar выводится из маршрута: ключ i18n раздела или имя дела у
@@ -274,59 +277,7 @@ function goBack() {
 
 /** Файловые пункты меню; маршрутные обрабатывает сам `to` (вайрфреймы §9.1). */
 function onMenuAction(item: MenuItem) {
-  if (item.id === 'export') void runExport()
-  else if (item.id === 'import') void runImport()
-}
-
-/** Экспорт (FR-SET-4): Blob из стора → скачивание → тост. */
-async function runExport() {
-  const result = await settings.exportAll()
-  if (result.ok) {
-    downloadBlob(result.data, exportFileName())
-    ui.notify(t('settings.exported'), 'success')
-    return
-  }
-  ui.notify(result.error.message, 'error', {
-    label: t('common.retry'),
-    handler: () => void runExport(),
-  })
-}
-
-/**
- * Импорт (FR-SET-5): выбор файла → подтверждение перезаписи → запись.
- * Коды ошибок разводят повторы: DB_ERROR — импорт целиком, STORAGE_ERROR
- * (SETTINGS_AFTER_IMPORT) — только запись настроек (контракты §0.2, §5.4).
- */
-async function runImport() {
-  const file = await pickJsonFile()
-  if (file === null) return
-
-  const confirmed = await ui.openConfirm({
-    title: t('settings.import'),
-    message: t('settings.importConfirm'),
-    confirmLabel: t('common.confirm'),
-    cancelLabel: t('common.cancel'),
-  })
-  if (!confirmed) return
-
-  const result = await settings.importAll(file)
-  if (result.ok) {
-    ui.notify(t('settings.imported'), 'success')
-    return
-  }
-
-  const reason = (result.error.details as { reason?: unknown } | undefined)?.reason
-  if (result.error.code === 'STORAGE_ERROR' && reason === 'SETTINGS_AFTER_IMPORT') {
-    ui.notify(t('settings.settingsNotSaved'), 'error', {
-      label: t('settings.retrySettings'),
-      handler: () => void settings.retrySettingsWrite(),
-    })
-    return
-  }
-
-  ui.notify(result.error.code === 'VALIDATION_ERROR' ? t('settings.importInvalid') : result.error.message, 'error', {
-    label: t('common.retry'),
-    handler: () => void runImport(),
-  })
+  if (item.id === 'export') void data.exportData()
+  else if (item.id === 'import') void data.importData()
 }
 </script>
