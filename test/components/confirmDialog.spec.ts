@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { Quasar } from 'quasar'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
@@ -15,14 +15,20 @@ import { flush } from '../stores/helpers'
  * QDialog телепортируется в body, поэтому текст и кнопки ищем в документе.
  */
 
-async function mountDialog() {
+/** Смонтированные хосты: снимаем их до чистки body, иначе живут их порталы. */
+const mounted: VueWrapper[] = []
+
+type UiStore = ReturnType<typeof useUiStore>
+
+async function mountDialog(): Promise<UiStore> {
   const pinia = createPinia()
   setActivePinia(pinia)
 
-  mount(ConfirmDialog, {
+  const wrapper = mount(ConfirmDialog, {
     global: { plugins: [Quasar, pinia, i18n], components: quasarComponents },
     attachTo: document.body,
   })
+  mounted.push(wrapper)
 
   await flush(0)
   return useUiStore()
@@ -34,9 +40,39 @@ const buttons = (): HTMLButtonElement[] => [
 
 const bodyText = (): string => document.body.textContent ?? ''
 
-afterEach(() => {
+/**
+ * Закрыть диалог и дать порталу Quasar доиграть анимацию до конца.
+ *
+ * QDialog прячется через `setTimeout` transition-хука Quasar. Если оставить
+ * таймер висеть, он срабатывает уже после закрытия окружения jsdom, и прогон
+ * падает на «Unhandled Errors: document is not defined» (в отчёте — строка
+ * removeFocusWaitFlag из quasar.client.js). Поэтому снимаем хост и ждём, пока
+ * портал действительно исчезнет из документа.
+ */
+async function teardown(): Promise<void> {
+  const ui = useUiStore()
+  ui.confirmDialog?.resolve(false)
+  ui.confirmDialog = null
+
+  for (const wrapper of mounted.splice(0)) {
+    try {
+      wrapper.unmount()
+    } catch {
+      // Хост мог быть снят тестом — для очистки это неважно
+    }
+  }
+  await nextTick()
+
+  const deadline = Date.now() + 1000
+  while (document.body.querySelector('.q-dialog') !== null && Date.now() < deadline) {
+    await flush(20)
+  }
+
   document.body.innerHTML = ''
-})
+  await flush(100)
+}
+
+afterEach(teardown)
 
 describe('ConfirmDialog', () => {
   it('не показывает диалог, пока подтверждение не запрошено', async () => {

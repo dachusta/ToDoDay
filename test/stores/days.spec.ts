@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDaysStore } from 'src/stores/days'
 import { db } from 'src/services/db'
 import { validateDayTemplate } from 'src/services/validators/day'
+import { validateNoOverlap as repeatValidateNoOverlap } from 'src/services/repeat'
 import type { DayTemplate, DayTemplateInput } from 'src/models/day'
+import type { DayInstance } from 'src/models/dayInstance'
 import { freshPinia, flush, resetDatabase, resetStorage } from './helpers'
 
 const input = (over: Partial<DayTemplateInput> = {}): DayTemplateInput => ({
@@ -263,5 +265,155 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
         .validate(input({ name: '', accentColor: 'red', timeStart: 'abc', timeEnd: '22:00' }))
         .map(i => i.code),
     ).toEqual(['INVALID_NAME', 'INVALID_COLOR', 'INVALID_TIME'])
+  })
+
+  it('validateNoOverlap делегирует повторам: без второго экземпляра алгоритма (FR-D-5)', async () => {
+    const store = useDaysStore()
+    const created = await store.createTemplate(
+      input({ name: 'Спорт', repeatRule: { type: 'weekdays', weekdays: [0, 1] } }),
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const rule = { type: 'weekdays' as const, weekdays: [1, 4] }
+
+    // Ровно то, что вернул бы repeat.validateNoOverlap на том же снимке шаблонов
+    expect(store.validateNoOverlap(rule)).toEqual(
+      repeatValidateNoOverlap(rule, store.templates),
+    )
+    expect(store.validateNoOverlap(rule).map(i => i.code)).toEqual(['OVERLAP_WEEKDAYS'])
+    expect(store.validateNoOverlap(rule)[0]?.conflictingTemplateIds).toEqual([created.data.id])
+    // excludeId пробрасывается: правка шаблона не конфликтует с собой (FR-D-3)
+    expect(store.validateNoOverlap(rule, created.data.id)).toEqual([])
+  })
+
+  it('удаление шаблона уплотняет order до 0..n-1 (FR-D-4)', async () => {
+    const store = useDaysStore()
+    const a = await store.createTemplate(input({ name: 'A' }))
+    const b = await store.createTemplate(input({ name: 'B' }))
+    const c = await store.createTemplate(input({ name: 'C' }))
+    if (!a.ok || !b.ok || !c.ok) return
+
+    expect((await store.deleteTemplate(b.data.id)).ok).toBe(true)
+
+    expect(store.orderedTemplates.map(t => t.name)).toEqual(['A', 'C'])
+    expect(store.orderedTemplates.map(t => t.order)).toEqual([0, 1])
+    const stored = await db.dayTemplates.toArray()
+    expect(stored.map(t => [t.name, t.order]).sort()).toEqual([
+      ['A', 0],
+      ['C', 1],
+    ])
+    expect(await db.dayTemplates.count()).toBe(2)
+  })
+
+  it('удаление шаблона-указателя цикла переводит указатель назад (FR-C-2)', async () => {
+    const store = useDaysStore()
+    const first = await store.createTemplate(input({ name: 'Первый' }))
+    const second = await store.createTemplate(input({ name: 'Второй' }))
+    const third = await store.createTemplate(input({ name: 'Третий' }))
+    if (!first.ok || !second.ok || !third.ok) return
+
+    // Указатель стоит на последнем циклическом — станет предыдущим
+    await db.cycleState.update('current', { lastCyclicTemplateId: third.data.id })
+    expect((await store.deleteTemplate(third.data.id)).ok).toBe(true)
+    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBe(second.data.id)
+
+    // Если предыдущего циклического нет — указатель обнуляется
+    expect((await store.deleteTemplate(second.data.id)).ok).toBe(true)
+    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBe(first.data.id)
+    expect((await store.deleteTemplate(first.data.id)).ok).toBe(true)
+    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBeNull()
+    expect(await db.dayTemplates.count()).toBe(0)
+  })
+
+  it('удаление чужого шаблона указатель цикла не трогает (FR-C-2)', async () => {
+    const store = useDaysStore()
+    const cyclic = await store.createTemplate(input({ name: 'Цикл' }))
+    const calendar = await store.createTemplate(
+      input({ name: 'Пн', repeatRule: { type: 'weekdays', weekdays: [0] } }),
+    )
+    if (!cyclic.ok || !calendar.ok) return
+
+    await db.cycleState.update('current', { lastCyclicTemplateId: cyclic.data.id })
+    expect((await store.deleteTemplate(calendar.data.id)).ok).toBe(true)
+    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBe(cyclic.data.id)
+  })
+
+  it('удаление шаблона активного дня запрещено, завершённый день не мешает (FR-D-4)', async () => {
+    const store = useDaysStore()
+    const created = await store.createTemplate(input({ name: 'Рабочий' }))
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    const instance = (status: 'active' | 'completed'): DayInstance => ({
+      id: `inst-${status}`,
+      templateId: created.ok ? created.data.id : null,
+      date: '2025-09-23',
+      status,
+      placements: [],
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      createdAt: 1,
+    })
+    await db.dayInstances.add(instance('active'))
+
+    const refused = await store.deleteTemplate(created.data.id)
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) {
+      expect(refused.error.code).toBe('CONSTRAINT_VIOLATION')
+      expect((refused.error.details as { instanceId?: string }).instanceId).toBe('inst-active')
+    }
+    expect(await db.dayTemplates.get(created.data.id)).toBeDefined()
+
+    // Завершённый экземпляр удалению не мешает (FR-D-4)
+    await db.dayInstances.update('inst-active', { status: 'completed' })
+    expect((await store.deleteTemplate(created.data.id)).ok).toBe(true)
+    expect(await db.dayTemplates.get(created.data.id)).toBeUndefined()
+    // История завершённого дня остаётся на месте
+    expect((await db.dayInstances.get('inst-active'))?.templateId).toBe(created.data.id)
+  })
+
+  it('reorder при ошибке БД возвращает прежние order и не теряет список', async () => {
+    const store = useDaysStore()
+    const a = await store.createTemplate(input({ name: 'A' }))
+    const b = await store.createTemplate(input({ name: 'B' }))
+    if (!a.ok || !b.ok) return
+    expect(store.orderedTemplates.map(t => t.order)).toEqual([0, 1])
+
+    const bulkPut = vi
+      .spyOn(db.dayTemplates, 'bulkPut')
+      .mockRejectedValueOnce(new Error('Blocked by another tab'))
+    const failed = await store.reorder(0, 1)
+    bulkPut.mockRestore()
+
+    expect(failed.ok).toBe(false)
+    if (!failed.ok) expect(failed.error.code).toBe('DB_ERROR')
+    // Порядок в памяти и в БД остался прежним: транзакция не прошла
+    expect(store.orderedTemplates.map(t => t.name)).toEqual(['A', 'B'])
+    expect(store.orderedTemplates.map(t => t.order)).toEqual([0, 1])
+    const stored = await db.dayTemplates.toArray()
+    expect(stored.map(t => [t.name, t.order]).sort()).toEqual([
+      ['A', 0],
+      ['B', 1],
+    ])
+
+    // После снятия сбоя то же перемещение проходит
+    expect((await store.reorder(0, 1)).ok).toBe(true)
+    expect(store.orderedTemplates.map(t => t.name)).toEqual(['B', 'A'])
+    expect(store.orderedTemplates.map(t => t.order)).toEqual([0, 1])
+  })
+
+  it('reorder с индексом вне списка не трогает порядок', async () => {
+    const store = useDaysStore()
+    const a = await store.createTemplate(input({ name: 'A' }))
+    const b = await store.createTemplate(input({ name: 'B' }))
+    if (!a.ok || !b.ok) return
+
+    // Из списка нечего извлекать: VALIDATION_ERROR, а не молчаливый no-op
+    const missing = await store.reorder(5, 0)
+    expect(missing.ok).toBe(false)
+    if (!missing.ok) expect(missing.error.code).toBe('VALIDATION_ERROR')
+
+    expect(store.orderedTemplates.map(t => t.name)).toEqual(['A', 'B'])
+    expect(store.orderedTemplates.map(t => t.order)).toEqual([0, 1])
   })
 })

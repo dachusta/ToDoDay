@@ -12,9 +12,9 @@
     "build:pwa": "quasar build -m pwa",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{js,ts,vue,scss,json,md}\"",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "vitest run --pool=threads",
+    "test:watch": "vitest --pool=threads",
+    "test:coverage": "vitest run --pool=threads --coverage",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {

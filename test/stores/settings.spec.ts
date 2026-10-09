@@ -322,4 +322,78 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     expect(cycle.cycleState?.activeInstanceId).toBeNull()
     expect(cycle.isCurrentDayEmpty).toBe(true)
   })
+
+  it('FR-SET-10: сбой очистки localStorage даёт STORAGE_ERROR и не откатывает очистку Dexie', async () => {
+    const store = useSettingsStore()
+    store.setTheme('dark')
+    store.setLanguage('en')
+    expect(locale()).toBe('en')
+
+    const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    const result = await store.clearAll()
+    remove.mockRestore()
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('STORAGE_ERROR')
+      expect((result.error.details as { reason?: string }).reason).toBe('SETTINGS_CLEAR')
+    }
+    // Таблицы всё равно пусты: очистка Dexie идёт до настроек (FR-SET-10)
+    expect(await db.tasks.count()).toBe(0)
+    expect(await db.dayInstances.count()).toBe(0)
+    // Сбой произошёл до приведения значений к дефолтам: сессия осталась прежней,
+    // но код ошибки отличает этот случай от сбоя БД (контракты §5.4)
+    expect(store.theme).toBe('dark')
+  })
+
+  it('FR-SET-5: сбой хранилища при повторной записи настроек возвращает STORAGE_ERROR', async () => {
+    const store = useSettingsStore()
+
+    const broken = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    await store.importAll(asFile(payload()))
+    broken.mockRestore()
+    expect(store.pendingSettings).not.toBeNull()
+
+    const again = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    const retry = await store.retrySettingsWrite()
+    again.mockRestore()
+
+    expect(retry.ok).toBe(false)
+    if (!retry.ok) {
+      expect(retry.error.code).toBe('STORAGE_ERROR')
+      expect((retry.error.details as { reason?: string }).reason).toBe('SETTINGS_WRITE')
+    }
+    // Блок остаётся в ожидании: запись настроек так и не прошла
+    expect(store.pendingSettings).not.toBeNull()
+    expect(store.theme).toBe('auto')
+  })
+
+  it('FR-SET-4/5/10: повторный вход в операцию при busy отклоняется (CONSTRAINT_VIOLATION)', async () => {
+    const store = useSettingsStore()
+    const busy = store.busy
+    expect(busy).toBe(false)
+
+    // Импорт держит busy, пока идёт чтение файла и запись таблиц:
+    // второй вызов в это же время не должен запускать вторую очистку
+    const slow = new File([JSON.stringify(payload())], 'dump.json', { type: 'application/json' })
+    Object.defineProperty(slow, 'text', {
+      configurable: true,
+      value: async () => {
+        const parallel = await store.exportAll()
+        expect(parallel.ok).toBe(false)
+        if (!parallel.ok) expect(parallel.error.code).toBe('CONSTRAINT_VIOLATION')
+        return JSON.stringify(payload())
+      },
+    })
+
+    const result = await store.importAll(slow)
+    expect(result.ok).toBe(true)
+    expect(store.busy).toBe(false)
+  })
 })

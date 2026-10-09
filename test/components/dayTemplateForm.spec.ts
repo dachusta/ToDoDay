@@ -70,9 +70,22 @@ const click = async (selector: string): Promise<void> => {
   await new DOMWrapper(element).trigger('click')
 }
 
-/** Сохранение пишет в Dexie асинхронно — после клика ждём запись, а не тик. */
+/**
+ * Сохранение пишет в Dexie асинхронно. Фиксированная пауза здесь ненадёжна:
+ * под полной прогонкой и с покрытием запись и событие `saved` выходят за один
+ * `flush()`. Ждём либо рост числа шаблонов в БД (успешное сохранение), либо
+ * разбор ошибки формой (неуспешное) — что наступит раньше.
+ */
 const save = async (): Promise<void> => {
+  const before = await db.dayTemplates.count()
   await click('[data-test="save"]')
+
+  for (let i = 0; i < 100; i++) {
+    await flush(20)
+    if ((await db.dayTemplates.count()) > before) break
+    const errors = $$('[data-test^="error-"], [data-test="conflicts"]')
+    if (errors.length > 0) break
+  }
   await flush()
 }
 

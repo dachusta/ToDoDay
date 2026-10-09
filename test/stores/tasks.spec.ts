@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useTasksStore } from 'src/stores/tasks'
+import { useCycleStore } from 'src/stores/cycle'
 import { db } from 'src/services/db'
 import type { Task } from 'src/models/task'
 import type { DayInstance, Placement } from 'src/models/dayInstance'
@@ -259,5 +260,68 @@ describe('useTasksStore: приёмки ТЗ §9 «По делам»', () => {
     expect(store.tasks.map(t => t.title)).toEqual(['Зарядка'])
     expect(store.visibleTasks).toHaveLength(1)
     expect(await db.tasks.count()).toBe(1)
+  })
+
+  it('после переименования дела новое размещение берёт новое title, а снимок старого — прежний (FR-T-2, FR-B-7)', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const store = useTasksStore()
+    const created = await store.createTask({
+      title: 'Старое имя',
+      priority: 'medium',
+      color: '#2196F3',
+      durationMin: 30,
+    })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    const before = await cycle.placeTask(created.data.id, 60)
+    expect(before.ok).toBe(true)
+    if (!before.ok) return
+
+    const renamed = await store.updateTask(created.data.id, { title: 'Новое имя' })
+    expect(renamed.ok).toBe(true)
+
+    const after = await cycle.placeTask(created.data.id, 120)
+    expect(after.ok).toBe(true)
+    if (!after.ok) return
+
+    // Старое размещение показывает прежний снимок, новое — новое имя
+    expect(before.data.taskSnapshot.title).toBe('Старое имя')
+    expect(after.data.taskSnapshot.title).toBe('Новое имя')
+  })
+
+  it('«Заменить на другое дело» обновляет снимок существующего размещения (FR-B-7)', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const store = useTasksStore()
+    const first = await store.createTask({
+      title: 'Первое',
+      priority: 'low',
+      color: '#2196F3',
+      durationMin: 30,
+    })
+    const second = await store.createTask({
+      title: 'Второе',
+      priority: 'critical',
+      color: '#F44336',
+      durationMin: 60,
+    })
+    expect([first.ok, second.ok]).toEqual([true, true])
+    if (!first.ok || !second.ok) return
+
+    const placed = await cycle.placeTask(first.data.id, 60)
+    expect(placed.ok).toBe(true)
+    if (!placed.ok) return
+
+    expect((await cycle.replacePlacement(placed.data.id, second.data.id)).ok).toBe(true)
+
+    expect(placed.data.taskId).toBe(second.data.id)
+    expect(placed.data.durationMin).toBe(60)
+    expect(placed.data.taskSnapshot).toEqual({
+      title: 'Второе',
+      color: '#F44336',
+      priority: 'critical',
+    })
   })
 })

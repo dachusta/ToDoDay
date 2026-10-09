@@ -168,6 +168,19 @@ async function seedDay(placements: Placement[] = [], over: Partial<DayInstance> 
 
 const cycleState = () => db.cycleState.get('current')
 
+/**
+ * Ожидание асинхронного условия (запись в Dexie + реакция стора).
+ * Фиксированная пауза здесь ненадёжна: под полной прогонкой с покрытием
+ * транзакция отката завершения не укладывается в один `flush()`.
+ */
+async function waitForState(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 3000,
+): Promise<void> {
+  const start = Date.now()
+  while (!(await check()) && Date.now() - start < timeoutMs) await flush(20)
+}
+
 const activeInstance = async (): Promise<DayInstance | undefined> => {
   const state = await cycleState()
   return state?.activeInstanceId ? db.dayInstances.get(state.activeInstanceId) : undefined
@@ -537,7 +550,7 @@ describe('Отмена завершения (FR-E-3)', () => {
     expect((await dbInstance(createdId))?.placements).toHaveLength(1)
 
     await wrapper.find('[data-test="cancel-completion"]').trigger('click')
-    await flush()
+    await waitForState(async () => (await cycleState())?.activeInstanceId === 'inst-1')
 
     expect(await dbInstance(createdId)).toBeUndefined()
     const restored = await dbInstance('inst-1')
@@ -564,7 +577,7 @@ describe('Отмена завершения (FR-E-3)', () => {
     expect((await cycleState())?.manualShiftDate).toBe(todayISO())
 
     await wrapper.find('[data-test="cancel-completion"]').trigger('click')
-    await flush()
+    await waitForState(async () => (await cycleState())?.manualShiftDate === null)
 
     expect((await cycleState())?.manualShiftDate).toBeNull()
     expect(cycle.canShiftNext).toBe(true)
