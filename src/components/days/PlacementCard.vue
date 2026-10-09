@@ -12,6 +12,7 @@
     `touch-action: pan-y` оставляет прокрутку доски жестом на тач-экране.
   -->
   <div
+    ref="rootEl"
     class="placement-card"
     :class="classes"
     :style="cardStyle"
@@ -23,7 +24,6 @@
     :data-status="placement.status"
     @keydown.enter.prevent="openMenu"
     @keydown.space.prevent="openMenu"
-    @contextmenu.prevent="openMenu"
     @pointerdown="onPointerDown"
   >
     <span
@@ -67,46 +67,31 @@
       @click.stop="toggleMenu"
     />
 
-    <!-- no-parent-event: меню открывают кнопка, Enter/Space и правый клик, а не любой клик по карточке -->
-    <q-menu
-      v-model="menuOpen"
-      no-parent-event
-      anchor="bottom right"
-      self="top right"
-    >
-      <q-list style="min-width: 240px">
-        <template
-          v-for="item in actions"
-          :key="item.id"
-        >
-          <q-separator v-if="item.dividerBefore" />
-          <q-item
-            v-close-popup
-            clickable
-            :data-action="item.id"
-            @click="onActionClick(item.id)"
-          >
-            <q-item-section avatar>
-              <q-icon :name="item.icon" />
-            </q-item-section>
-            <q-item-section>{{ t(item.labelKey) }}</q-item-section>
-          </q-item>
-        </template>
-      </q-list>
-    </q-menu>
+    <!--
+      Действия FR-B-7 живут в PlacementActions: меню, правый клик, долгий тап,
+      свайп и клавиатурный вход — один список на всё приложение (ТЗ §5.3).
+      Якорь — корень карточки: к нему же привязано меню.
+    -->
+    <PlacementActions
+      ref="actionsRef"
+      :placement="placement"
+      :read-only="readOnly"
+      :target="rootEl"
+      @action="(id, target) => emit('action', id, target)"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import PlacementActions from './PlacementActions.vue'
 import PriorityBadge from 'src/components/common/PriorityBadge.vue'
 import { durationDescriptor } from 'src/components/tasks/taskFormat'
 import {
   placementRange,
   placementStatusIcon,
   placementStatusKey,
-  visiblePlacementActions,
   type PlacementActionId,
 } from './placementActions'
 import type { Placement } from 'src/models/dayInstance'
@@ -155,9 +140,10 @@ const { t } = useI18n()
 /** Порог, после которого нажатие считается переносом, а не кликом (px). */
 const DRAG_THRESHOLD = 4
 
-const menuOpen = ref(false)
+/** Корень карточки: на нём слушаются жесты, к нему привязано меню действий. */
+const rootEl = ref<HTMLElement | null>(null)
+const actionsRef = ref<InstanceType<typeof PlacementActions> | null>(null)
 const statusIcon = computed(() => placementStatusIcon(props.placement.status))
-const actions = computed(() => visiblePlacementActions(props.placement, props.readOnly))
 
 const range = computed(() =>
   placementRange(props.placement, props.dayStartMin, props.timeFormat),
@@ -212,25 +198,13 @@ const cardStyle = computed(() => {
 })
 
 function openMenu() {
-  if (props.readOnly || actions.value.length === 0) return
-  menuOpen.value = true
+  if (props.readOnly) return
+  actionsRef.value?.openMenu()
 }
 
 function toggleMenu() {
-  if (props.readOnly || actions.value.length === 0) return
-  menuOpen.value = !menuOpen.value
-}
-
-/**
- * Выбор действия. Меню закрывается здесь, не полагаясь на отложенный
- * `v-close-popup`: состав меню зависит от статуса, и выбранный пункт («Отметить
- * выполненным») из списка исчезает — отложенный обработчик ClosePopup ищет
- * контейнер по уже отсоединённому узлу и меню остаётся открытым по состоянию
- * модели (журнал, дефект D16).
- */
-function onActionClick(id: PlacementActionId) {
-  menuOpen.value = false
-  emit('action', id, props.placement)
+  if (props.readOnly) return
+  actionsRef.value?.toggleMenu()
 }
 
 // --- Перенос по сетке (FR-B-2) -------------------------------------------
@@ -239,19 +213,27 @@ let pressed: { x: number; y: number } | null = null
 function onPointerDown(event: PointerEvent) {
   if (props.readOnly || event.button !== 0) return
   const target = event.target as HTMLElement | null
+  // Жесты обрабатываются только внутри карточки: слушатели живут на её корне,
+  // а событие может прийти из портала меню (PlacementActions)
+  if (target === null || rootEl.value?.contains(target) !== true) return
   // Кнопка «⋮» — не ручка переноса: её нажатие открывает меню
-  if (target !== null && target.closest('.placement-card__menu-button') !== null) return
+  if (target.closest('.placement-card__menu-button') !== null) return
   pressed = { x: event.clientX, y: event.clientY }
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
   window.addEventListener('pointercancel', onPointerUp)
 }
 
+/**
+ * Порог переноса. Движение вниз/вверх уводит карточку по сетке, горизонталь
+ * остаётся свайпу действий (PlacementActions): так жест не превращается в
+ * перенос, когда пользователь ведёт карточку вбок, чтобы открыть меню.
+ */
 function onPointerMove(event: PointerEvent) {
   if (pressed === null) return
-  const far =
-    Math.abs(event.clientX - pressed.x) >= DRAG_THRESHOLD ||
-    Math.abs(event.clientY - pressed.y) >= DRAG_THRESHOLD
+  const dx = event.clientX - pressed.x
+  const dy = event.clientY - pressed.y
+  const far = Math.abs(dy) >= DRAG_THRESHOLD && Math.abs(dy) >= Math.abs(dx)
   if (!far) return
   pressed = null
   stopLocalListeners()

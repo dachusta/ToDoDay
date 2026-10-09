@@ -124,6 +124,13 @@ export default {
     now: 'Current time',
     shiftBlockedToday: 'Already shifted today',
     shiftNotActive: 'Day is already completed',
+    // day completion: cancel button, toasts and the FR-E-2 prompt (wireframes §9.3)
+    cancelCompletion: 'Undo completion',
+    completed: 'Day completed',
+    completeError: 'Could not complete the day',
+    cancelError: 'Could not undo the completion',
+    resolveAfterComplete: 'The day is completed, but today did not open',
+    openToday: 'Open today',
   },
   placement: {
     markDone: 'Mark as done',
@@ -164,6 +171,9 @@ export default {
     skipOnce: 'Skip this prompt once',
     shiftHint: 'A new day will start after confirmation',
     nothingToMark: 'No placements in this day',
+    // dialog accessibility (NFR §7): the checkbox has no text label, so it carries aria-label
+    closeAria: 'Close the completion dialog',
+    checkAria: 'Mark "{title}" as done',
   },
   days: {
     title: 'Days',

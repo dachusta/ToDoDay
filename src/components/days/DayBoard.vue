@@ -49,10 +49,44 @@
         <span class="day-board__range">{{ timeRange }}</span>
       </div>
       <!--
-        Этап 6 добавит сюда «Следующий день →», «Завершить день» и «Отменить
-        завершение» (FR-C-3, FR-E-1…FR-E-3): они открывают CompleteDayDialog,
-        которого на этапе 5 ещё нет, поэтому кнопок здесь пока нет.
+        FR-C-3 / FR-E-1 / FR-E-3: сдвиг на следующий день, завершение дня и
+        отмена завершения. «Следующий день →» показывается, только пока день
+        active и сдвиг в эти сутки ещё не делался (canShiftNext), «Завершить
+        день» — пока день active, «Отменить завершение» — пока в памяти сессии
+        живёт снапшот завершённого дня (FR-E-3), поэтому она остаётся и после
+        того, как тост «День завершён» исчез.
       -->
+      <div class="day-board__actions q-mt-sm q-gutter-sm">
+        <q-btn
+          v-if="cycle.canShiftNext"
+          outline
+          no-caps
+          color="primary"
+          icon-right="arrow_forward"
+          :label="t('day.next')"
+          data-test="shift-next"
+          @click="onShiftNext"
+        />
+        <q-btn
+          v-if="cycle.canComplete"
+          unelevated
+          no-caps
+          color="primary"
+          :label="t('day.complete')"
+          data-test="complete-day"
+          @click="cycle.startCompletion()"
+        />
+        <q-btn
+          v-if="cycle.lastCompletedInstanceId"
+          outline
+          no-caps
+          color="primary"
+          icon="undo"
+          :label="t('day.cancelCompletion')"
+          data-test="cancel-completion"
+          @click="onCancelCompletion"
+        />
+      </div>
     </header>
 
     <!-- Счётчик пересечений — число пар, а не карточек (FR-B-3) -->
@@ -301,6 +335,23 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!--
+      FR-E-1: диалог завершения дня. Открытием управляет `completing` в сторе —
+      его ставят кнопка «Завершить день», сдвиг (FR-C-3) и авто-переход при смене
+      суток (FR-C-4), поэтому диалог один на все три триггера.
+    -->
+    <CompleteDayDialog
+      v-model="completionOpen"
+      :placements="placements"
+      :date-label="dateLabel"
+      :template-label="templateLabel"
+      :source="cycle.completionSource"
+      :shift-pending="cycle.shiftPending"
+      :day-start-min="dayStartMin"
+      :time-format="timeFormat"
+      @submit="onCompleteDay"
+    />
   </section>
 </template>
 
@@ -313,6 +364,7 @@ import { format } from 'date-fns'
 import { enUS, ru } from 'date-fns/locale'
 import DayGrid from './DayGrid.vue'
 import UnallocatedZone from './UnallocatedZone.vue'
+import CompleteDayDialog from 'src/components/completion/CompleteDayDialog.vue'
 import PriorityBadge from 'src/components/common/PriorityBadge.vue'
 import { durationDescriptor } from 'src/components/tasks/taskFormat'
 import type { PlacementActionId } from './placementActions'
@@ -406,6 +458,27 @@ const timeRange = computed(() => {
 
 const template = computed(() => cycle.currentTemplate)
 
+/**
+ * Имя шаблона для диалога завершения: живой шаблон, иначе заглушки FR-D-4/FR-D-6
+ * — те же два признака, что и в шапке, и они не смешиваются.
+ */
+const templateLabel = computed(() => {
+  if (template.value) return template.value.name
+  return cycle.isTemplateless ? t('day.noTemplate') : t('day.templateDeleted')
+})
+
+/**
+ * Диалог завершения живёт по состоянию стора (`completing`), а не по своему
+ * ref: открыть его могут три триггера (FR-E-1). Закрытие без фиксации — всегда
+ * `dismissCompletion`, потому что у авто-триггера это ещё и разовый пропуск.
+ */
+const completionOpen = computed({
+  get: () => cycle.completing,
+  set: (value: boolean) => {
+    if (!value) cycle.dismissCompletion()
+  },
+})
+
 const activePlacement = computed(
   () => placements.value.find(p => p.id === activePlacementId.value) ?? null,
 )
@@ -443,6 +516,76 @@ function goSetup() {
 
 function goTasks() {
   void router.push({ name: 'tasks' })
+}
+
+// --- Завершение дня (FR-E-1…FR-E-3) ---------------------------------------
+
+/**
+ * FR-C-3: «Следующий день →» ставит shiftPending и открывает диалог завершения;
+ * отказы показываются текстом по коду (вайрфреймы §9.3).
+ */
+async function onShiftNext() {
+  const result = await cycle.shiftToNextDay()
+  if (result.ok) return
+  const message =
+    result.error.code === 'SHIFT_ALREADY_DONE_TODAY'
+      ? t('day.shiftBlockedToday')
+      : t('day.shiftNotActive')
+  ui.notify(message, 'warning', undefined, 5000)
+}
+
+/**
+ * FR-S-1/FR-E-3: после завершения тост «День завершён» (5 с, вайрфреймы §9.3)
+ * даёт ярлык «Отменить», а кнопка в шапке остаётся всю сессию — тост её не
+ * заменяет. Отдельная ветка — FR-E-2: фиксация записалась, но сегодняшний день
+ * не открылся; повторять completeDay бессмысленно (день уже completed), поэтому
+ * предлагается повторный resolveCurrentDay().
+ */
+async function onCompleteDay(marks: Record<string, 'done' | 'skipped'>) {
+  const result = await cycle.completeDay(marks)
+  if (result.ok) {
+    ui.notify(
+      t('day.completed'),
+      'success',
+      { label: t('common.undo'), handler: () => void onCancelCompletion() },
+      5000,
+    )
+    return
+  }
+
+  if (result.error.code === 'DB_ERROR' && isResolveAfterComplete(result.error.details)) {
+    ui.notify(
+      t('day.resolveAfterComplete'),
+      'error',
+      { label: t('day.openToday'), handler: () => void cycle.resolveCurrentDay() },
+      5000,
+    )
+    return
+  }
+
+  ui.notify(t('day.completeError'), 'error', {
+    label: t('common.retry'),
+    handler: () => void onCompleteDay(marks),
+  })
+}
+
+/** FR-E-2: `details.reason = 'RESOLVE_AFTER_COMPLETE'` — свой путь обработки. */
+function isResolveAfterComplete(details: unknown): boolean {
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    (details as { reason?: unknown }).reason === 'RESOLVE_AFTER_COMPLETE'
+  )
+}
+
+/** FR-E-3: отмена возвращает день, снимок и удаляет экземпляр, созданный завершением. */
+async function onCancelCompletion() {
+  const result = await cycle.cancelCompletion()
+  if (result.ok) return
+  ui.notify(t('day.cancelError'), 'error', {
+    label: t('common.retry'),
+    handler: () => void onCancelCompletion(),
+  })
 }
 
 /** Слот ещё не начался: отметка `done` сохраняется, но с предупреждением (FR-B-7). */
@@ -684,6 +827,13 @@ onUnmounted(onDragEnd)
   width: 10px;
   height: 10px;
   border-radius: 50%;
+}
+
+/* Действия шапки: сдвиг, завершение и отмена завершения (FR-C-3, FR-E-1…FR-E-3) */
+.day-board__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .day-board__empty {
