@@ -246,6 +246,7 @@ export default {
   },
   stats: {
     title: 'Stats',
+    period: 'Period:',
     period7: '7 days',
     period30: '30 days',
     periodAll: 'All time',
@@ -253,8 +254,35 @@ export default {
     done: 'done',
     skipped: 'skipped',
     rate: 'rate',
+    // breakdown by task (wireframes §7.1/§7.2)
+    byTask: 'By task',
+    sort: 'Sort',
+    columns: {
+      task: 'Task',
+      priority: 'Priority',
+      placed: 'Placed',
+      done: 'Done',
+      skipped: 'Skip.',
+      rate: 'Rate',
+      progress: 'Progress',
+    },
+    // narrow-screen card (wireframes §7.1)
+    counters: 'done {done} · skipped {skipped}',
+    taskStats: 'Stats for task "{title}"',
+    // single task screen (FR-S-4, wireframes §7.3)
     history: 'History',
+    historyEmpty: 'No placements in completed days yet.',
+    createdAt: 'created {date}',
+    // history rows: date, duration and time. A separate key per duration form
+    // keeps the dictionary free of unfilled placeholders
+    historyRowN: '{day} {month}, {weekday} · {n} min · {time}',
+    historyRowH: '{day} {month}, {weekday} · {n} h · {time}',
+    historyRowHM: '{day} {month}, {weekday} · {h} h {m} min · {time}',
+    historyRowNoTimeN: '{day} {month}, {weekday} · {n} min · no time',
+    historyRowNoTimeH: '{day} {month}, {weekday} · {n} h · no time',
+    historyRowNoTimeHM: '{day} {month}, {weekday} · {h} h {m} min · no time',
     empty: 'No data yet. Complete your first day.',
+    loadError: 'Could not load the stats',
   },
   settings: {
     title: 'Settings',

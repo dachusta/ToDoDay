@@ -30,7 +30,7 @@
         />
 
         <q-toolbar-title class="text-subtitle1 text-weight-medium">
-          {{ t(titleKey) }}
+          {{ title.literal ? title.value : t(title.value) }}
         </q-toolbar-title>
 
         <q-btn
@@ -199,7 +199,7 @@ import {
   NAV_ITEMS,
   activeNavName,
   isBackRoute,
-  navTitleKey,
+  navTitle,
   type MenuItem,
 } from './navigation'
 
@@ -209,8 +209,11 @@ const { t } = useI18n()
 const ui = useUiStore()
 const settings = useSettingsStore()
 
-/** Заголовок AppBar и активный пункт навигации выводятся из маршрута. */
-const titleKey = computed(() => navTitleKey(route))
+/**
+ * Заголовок AppBar выводится из маршрута: ключ i18n раздела или имя дела у
+ * подэкрана статистики (вайрфреймы §7.3), которое страница кладёт в meta.
+ */
+const title = computed(() => navTitle(route))
 const activeNav = computed(() => activeNavName(route))
 const backRoute = computed(() => isBackRoute(route))
 

@@ -42,8 +42,9 @@ const routes: RouteRecordRaw[] = [
         name: 'task-stats',
         component: () => import('pages/TaskStatsPage.vue'),
         props: true,
-        // Заголовок подэкрана — имя дела (вайрфреймы §7.3); страница подставит его
-        // на этапе 7, здесь остаётся заголовок раздела.
+        // Заголовок подэкрана — имя дела (вайрфреймы §7.3): страница подставляет
+        // его в meta.titleKey, поэтому здесь остаётся заголовок раздела — он же
+        // запасной, пока дело ещё не загружено (layouts/navigation.ts, navTitle).
         meta: { titleKey: 'nav.stats', navKey: 'stats', back: true },
       },
       {

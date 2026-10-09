@@ -118,15 +118,47 @@ export interface NavRouteLike {
   meta?: Record<string, unknown> | undefined
 }
 
+/** Заголовок AppBar: литеральный текст дела или ключ i18n раздела. */
+export interface NavTitle {
+  /** Ключ словаря при `literal: false`, готовый текст при `literal: true`. */
+  value: string
+  literal: boolean
+}
+
 /**
- * Ключ i18n для заголовка AppBar. Приоритет — `meta.titleKey` маршрута;
- * запасной путь — подпись пункта меню с тем же именем, затем имя приложения.
+ * Заголовок AppBar. Приоритет — `meta.titleKey` маршрута; запасной путь —
+ * подпись пункта меню с тем же именем, затем имя приложения.
+ *
+ * Обычно `meta.titleKey` — ключ i18n, но подэкран `/stats/task/:id` подставляет
+ * туда имя дела (вайрфреймы §7.3). Различает их `isI18nKey`: имя дела в любом
+ * случае содержит заглавную букву, пробел или кириллицу, а ключ словаря — нет.
+ * Признак живёт здесь, чтобы MainLayout не заводил второй такой же.
+ */
+export function navTitle(route: NavRouteLike): NavTitle {
+  const titleKey = route.meta?.titleKey
+  if (typeof titleKey === 'string' && titleKey !== '' && !isI18nKey(titleKey)) {
+    return { value: titleKey, literal: true }
+  }
+  const key = typeof titleKey === 'string' && isI18nKey(titleKey)
+    ? titleKey
+    : (DRAWER_ITEMS.find(candidate => candidate.name === route.name)?.labelKey ?? 'app.name')
+  return { value: key, literal: false }
+}
+
+/**
+ * Ключ i18n для заголовка AppBar: `meta.titleKey`, если это ключ словаря, иначе
+ * подпись пункта меню с тем же именем, затем имя приложения.
  */
 export function navTitleKey(route: NavRouteLike): string {
-  const titleKey = route.meta?.titleKey
-  if (typeof titleKey === 'string') return titleKey
-  const item = DRAWER_ITEMS.find(candidate => candidate.name === route.name)
-  return item?.labelKey ?? 'app.name'
+  return navTitle(route).value
+}
+
+/**
+ * Ключ словаря — только строчные латинские буквы, цифры, дефис и точки
+ * (`nav.tab.stats`, `app.name`). Название дела под это правило не подходит.
+ */
+export function isI18nKey(value: string): boolean {
+  return /^[a-z0-9.-]+$/.test(value)
 }
 
 /**

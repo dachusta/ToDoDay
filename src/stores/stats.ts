@@ -73,10 +73,29 @@ export const useStatsStore = defineStore('stats', () => {
    */
   const allTimeStatsById = (id: string) => allTimeStats.value.get(id)
 
+  /**
+   * Совпадают ли новые агрегаты с уже посчитанными. Нужно, чтобы не сбрасывать
+   * кэш истории на каждом событии liveQuery: подписка приходит и после
+   * собственного recompute (первое событие Dexie — то же самое состояние БД), а
+   * TaskStatsPage читает историю сразу после пересчёта. Пока счётчики не
+   * изменились, кэш истории остаётся действительным (контракты §4.1).
+   */
+  function sameAggregates(next: OverallStats, taskCount: number): boolean {
+    const prev = overallStats.value
+    return (
+      prev !== null &&
+      prev.placed === next.placed &&
+      prev.done === next.done &&
+      prev.skipped === next.skipped &&
+      taskStats.value.size === taskCount
+    )
+  }
+
   /** Применение уже прочитанных завершённых экземпляров (общий путь recompute и liveQuery). */
   function applyInstances(instances: DayInstance[], target: StatsPeriod): void {
     const today = todayISO()
     const { perTask, overall } = aggregateStats(instances, target, today)
+    const historyValid = sameAggregates(overall, perTask.size)
     taskStats.value = perTask
     overallStats.value = overall
     // Сводка «всё время» считается из того же набора экземпляров: recompute и
@@ -84,7 +103,8 @@ export const useStatsStore = defineStore('stats', () => {
     // aggregateStats. Второго запроса к БД поэтому не нужно.
     allTimeStats.value =
       target === 'all' ? perTask : aggregateStats(instances, 'all', today).perTask
-    history.value = new Map() // агрегаты изменились — кэш истории недействителен
+    // Агрегаты изменились — кэш истории недействителен (контракты §4.1)
+    if (!historyValid) history.value = new Map()
     initialized.value = true
   }
 

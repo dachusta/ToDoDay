@@ -13,6 +13,8 @@ import {
   NAV_ITEMS,
   activeNavName,
   isBackRoute,
+  isI18nKey,
+  navTitle,
   navTitleKey,
   type NavItem,
   type NavRouteLike,
@@ -159,6 +161,19 @@ describe('AppBar и активный раздел', () => {
     expect(activeNavName(asNavRoute(taskStats))).toBe('stats')
     expect(navTitleKey(asNavRoute(taskStats))).toBe('nav.stats')
     expect(isBackRoute(asNavRoute(taskStats))).toBe(true)
+  })
+
+  it('страница дела подставляет имя дела в meta.titleKey и AppBar показывает его как есть', () => {
+    // Вайрфреймы §7.3: заголовок подэкрана — имя дела. Страница пишет его в тот же
+    // meta.titleKey, поэтому navTitle отличает готовое имя от ключа словаря.
+    const literal = { name: 'task-stats', meta: { titleKey: 'Зарядка', navKey: 'stats' } }
+    expect(navTitle(literal)).toStrictEqual({ value: 'Зарядка', literal: true })
+    expect(isI18nKey('Зарядка')).toBe(false)
+    expect(isI18nKey('nav.stats')).toBe(true)
+
+    // Пока дело не загружено, в meta лежит ключ раздела — он и показывается
+    const fallback = routeByName.get('task-stats')
+    expect(navTitle(asNavRoute(fallback))).toStrictEqual({ value: 'nav.stats', literal: false })
   })
 
   it('обычный экран не считается подэкраном, а неизвестный маршрут даёт имя приложения', () => {

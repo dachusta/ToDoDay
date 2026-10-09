@@ -248,6 +248,7 @@ export default {
   },
   stats: {
     title: 'Статистика',
+    period: 'Период:',
     period7: '7 дней',
     period30: '30 дней',
     periodAll: 'Всё время',
@@ -255,8 +256,35 @@ export default {
     done: 'выполнено',
     skipped: 'пропущено',
     rate: 'рейт',
+    // разбивка по делам (вайрфреймы §7.1/§7.2)
+    byTask: 'По делам',
+    sort: 'Сортировка',
+    columns: {
+      task: 'Дело',
+      priority: 'Приоритет',
+      placed: 'Размещ.',
+      done: 'Вып.',
+      skipped: 'Проп.',
+      rate: 'Рейт',
+      progress: 'Прогресс',
+    },
+    // карточка узкого экрана (вайрфреймы §7.1)
+    counters: 'вып. {done} · проп. {skipped}',
+    taskStats: 'Статистика дела «{title}»',
+    // экран одного дела (FR-S-4, вайрфреймы §7.3)
     history: 'История',
+    historyEmpty: 'У дела пока нет размещений в завершённых днях.',
+    createdAt: 'создано {date}',
+    // строки истории: дата, длительность и время. Отдельный ключ на каждую форму
+    // длительности — чтобы в словаре не оставалось незаполненных подстановок
+    historyRowN: '{day} {month}, {weekday} · {n} мин · {time}',
+    historyRowH: '{day} {month}, {weekday} · {n} ч · {time}',
+    historyRowHM: '{day} {month}, {weekday} · {h} ч {m} мин · {time}',
+    historyRowNoTimeN: '{day} {month}, {weekday} · {n} мин · без времени',
+    historyRowNoTimeH: '{day} {month}, {weekday} · {n} ч · без времени',
+    historyRowNoTimeHM: '{day} {month}, {weekday} · {h} ч {m} мин · без времени',
     empty: 'Данных пока нет. Завершите первый день.',
+    loadError: 'Не удалось загрузить статистику',
   },
   settings: {
     title: 'Настройки',
