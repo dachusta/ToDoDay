@@ -164,6 +164,7 @@
       :dragging-id="draggingPlacementId"
       @drop-task="onDropTask"
       @hover="cycle.setHoveredSlot"
+      @hover-slot-label="onHoverSlotLabel"
       @placement-action="onPlacementAction"
       @placement-drag-start="onPlacementDragStart"
       @placement-drag-end="onDragEnd"
@@ -180,13 +181,25 @@
       @drag-end="onDragEnd"
     />
 
-    <!-- Перенос и смена статуса объявляются словами (НФТ ТЗ §7) -->
+    <!--
+      Перенос и смена статуса объявляются словами (НФТ ТЗ §7). Слот под указателем
+      идёт вторым регионом: подсветку незрячий пользователь не видит, а во время
+      переноса `aria-live` меняется часто — постоянные сообщения («размещено»)
+      не должны затираться подписью слота.
+    -->
     <p
       class="day-board__live"
       aria-live="polite"
       data-test="live"
     >
       {{ announcement }}
+    </p>
+    <p
+      class="day-board__live day-board__live--slot"
+      aria-live="polite"
+      data-test="live-slot"
+    >
+      {{ hoverAnnouncement }}
     </p>
 
     <!-- FR-B-7: «Изменить длительность» — правит только это размещение -->
@@ -391,6 +404,11 @@ const gridRef = ref<InstanceType<typeof DayGrid> | null>(null)
 const slotListEl = ref<HTMLElement | null>(null)
 
 const announcement = ref('')
+/**
+ * Слот под указателем (НФТ ТЗ §7). Живёт до следующего `pointermove`: подпись
+ * приходит из DayGrid с частотой кадров, а объявлять нужно только смену слота.
+ */
+const hoverAnnouncement = ref('')
 const draggingPlacementId = ref<string | null>(null)
 const durationOpen = ref(false)
 const durationDraft = ref(15)
@@ -503,6 +521,14 @@ function slotLabel(slot: Slot): string {
 
 function announce(key: string, title: string, time: string) {
   announcement.value = t(key, { title, time })
+}
+
+/**
+ * Слот под указателем (НФТ ТЗ §7). Пустая подпись (указатель ушёл с сетки)
+ * очищает регион: последняя подпись не остаётся «текущей» после переноса.
+ */
+function onHoverSlotLabel(label: string) {
+  hoverAnnouncement.value = label
 }
 
 function notifySaveError(retry: () => void) {
@@ -626,6 +652,7 @@ async function applyMoveTo(placement: Placement, slot: Slot) {
 async function onDropTask(taskId: string, slot: Slot) {
   cycle.setHoveredSlot(null)
   cycle.endDrag()
+  hoverAnnouncement.value = ''
   const result = await cycle.placeTask(taskId, slot.startMin)
   if (!result.ok) {
     notifySaveError(() => void onDropTask(taskId, slot))
@@ -749,6 +776,7 @@ async function onDragDrop() {
 function onDragEnd() {
   draggingPlacementId.value = null
   cycle.endDrag()
+  hoverAnnouncement.value = ''
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragDrop)
   window.removeEventListener('pointercancel', onDragEnd)
@@ -853,6 +881,10 @@ onUnmounted(onDragEnd)
   margin: 4px 0 0;
   font-size: 12px;
   color: #616161;
+}
+
+.day-board__live--slot {
+  margin-top: 0;
 }
 
 .day-board__picker {

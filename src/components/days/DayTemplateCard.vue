@@ -179,13 +179,18 @@ const ruleText = computed(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 4px 10px 8px;
-  border: 1px solid var(--q-separator-color, #e0e0e0);
+  border: 1px solid var(--q-separator-color, var(--app-separator));
   border-radius: 8px;
-  background: var(--q-card-background, #fff);
+  background: var(--q-card-background, var(--app-surface));
 }
 
+/*
+  Перенос (FR-D-2): признак — пунктир и тень, а не `opacity`. Прозрачность всей
+  карточки уронила бы контраст названия и правила ниже WCAG AA (НФТ ТЗ §7).
+*/
 .day-template-card--dragging {
-  opacity: 0.5;
+  border-style: dashed;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
 }
 
 /* Прицел между карточками: линия над карточкой — местом вставки (вайрфреймы §3.2). */
@@ -193,9 +198,11 @@ const ruleText = computed(() => {
   box-shadow: 0 -3px 0 0 var(--q-primary, #1976d2);
 }
 
+/* Ручка перетаскивания — не текст, ей достаточно 3:1 как графическому элементу
+   (WCAG 1.4.11); #757575 даёт 4.61:1 на белом и остаётся видимой в тёмной теме */
 .day-template-card__handle {
   cursor: grab;
-  color: #9e9e9e;
+  color: var(--app-hint);
   user-select: none;
   /* Перетаскивание за ручку не должно прокручивать список на тач-экране. */
   touch-action: none;
@@ -204,7 +211,7 @@ const ruleText = computed(() => {
 .day-template-card__order {
   min-width: 16px;
   text-align: right;
-  color: #616161;
+  color: var(--app-meta);
   font-variant-numeric: tabular-nums;
 }
 
@@ -243,7 +250,7 @@ const ruleText = computed(() => {
   gap: 6px;
   font-size: 12px;
   line-height: 18px;
-  color: #616161;
+  color: var(--app-meta);
 }
 
 .day-template-card__time,

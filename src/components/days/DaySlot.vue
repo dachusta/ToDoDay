@@ -8,6 +8,9 @@
     виртуализированная колонка времени в DayGrid). Слот — только строка: приём
     переноса живёт в DayGrid, который считает слот по координате указателя, иначе
     drop поверх уже стоящей карточки не дошёл бы до строки (журнал, дефект D19).
+
+    Строка статична: подсветка слота под указателем — отдельный слой DayGrid,
+    поэтому перенос не перерисовывает все 56 строк (НФТ ТЗ §7).
   -->
   <div
     class="day-slot"
@@ -30,8 +33,6 @@ const props = defineProps<{
   slotData: Slot
   /** Высота строки, px — та же константа, что у слоя размещений (models/cycle). */
   height: number
-  /** Подсветка слота, над которым сейчас держат дело (FR-B-2). */
-  hovered: boolean
 }>()
 
 /**
@@ -41,27 +42,22 @@ const props = defineProps<{
 const classes = computed(() => ({
   'day-slot--hour': props.slotData.isHour,
   'day-slot--half': props.slotData.isHalfHour,
-  'day-slot--hovered': props.hovered,
 }))
 </script>
 
 <style scoped>
 .day-slot {
   box-sizing: border-box;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--app-line);
 }
 
 /* Крупная линия каждые 30 минут (FR-B-1) */
 .day-slot--half {
-  border-top-color: #d5d5d5;
+  border-top-color: var(--app-line-strong);
 }
 
 /* Часовая линия — жирнее (FR-B-1) */
 .day-slot--hour {
-  border-top: 2px solid #9e9e9e;
-}
-
-.day-slot--hovered {
-  background: rgba(25, 118, 210, 0.14);
+  border-top: 2px solid var(--app-line-hour);
 }
 </style>

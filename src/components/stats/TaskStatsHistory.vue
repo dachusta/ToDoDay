@@ -103,8 +103,9 @@ function rowText(entry: PlacementHistoryEntry): string {
   color: var(--q-positive);
 }
 
+/* #757575 вместо #9e9e9e: 4.61:1 против 2.68:1 на белом (WCAG AA, НФТ ТЗ §7) */
 .stats-history__status--skipped {
-  color: #9e9e9e;
+  color: var(--app-hint);
 }
 
 .stats-history__status--pending {

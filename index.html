@@ -7,6 +7,7 @@
     <meta name="description" content="<%= productDescription %>">
     <meta name="format-detection" content="telephone=no">
     <meta name="viewport" content="width=device-width, initial-scale=1<% if (ctx.mode.cordova || ctx.mode.capacitor) { %>, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover<% } %>">
+    <meta name="theme-color" content="#1976D2">
 
     <link rel="icon" type="image/png" sizes="128x128" href="icons/favicon-128x128.png">
     <link rel="icon" type="image/png" sizes="96x96" href="icons/favicon-96x96.png">
@@ -14,8 +15,55 @@
     <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16x16.png">
     <link rel="icon" type="image/ico" href="favicon.ico">
     <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-icon-180x180.png">
+
+    <!--
+      Первый кадр приложения (НФТ ТЗ §7: FCP < 1.5 c на 3G). Разметка и стиль
+      стартового экрана — прямо в документе, без запроса внешних файлов: браузер
+      рисует его сразу после разбора <head>, не дожидаясь бандла. Vue на монтировании
+      убирает узел (src/App.vue), поэтому «мигания» поверх интерфейса нет.
+      Фон — тот же $primary, что у шапки и манифеста; в тёмной системе стартовый
+      экран тоже тёмный, чтобы первый кадр не бил по глазам.
+    -->
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        background: #1976d2;
+        color: #fff;
+        font-family: Roboto, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+        font-size: 20px;
+        font-weight: 500;
+      }
+      #boot-splash__spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid rgba(255, 255, 255, 0.4);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: boot-splash-spin 0.9s linear infinite;
+      }
+      @keyframes boot-splash-spin {
+        to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash__spinner { animation: none; }
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot-splash { background: #121212; }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-splash" role="status" aria-live="polite">
+      <div id="boot-splash__spinner" aria-hidden="true"></div>
+      <%= productName %>
+    </div>
+
     <!-- quasar:entry-point -->
   </body>
 </html>

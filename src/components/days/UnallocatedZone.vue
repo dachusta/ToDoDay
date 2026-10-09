@@ -95,9 +95,9 @@ const open = ref(true)
 <style scoped>
 .unallocated-zone {
   margin-top: 8px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--app-separator);
   border-radius: 8px;
-  background: #fff;
+  background: var(--app-surface);
 }
 
 .unallocated-zone__head {
@@ -109,7 +109,7 @@ const open = ref(true)
   border: 0;
   background: transparent;
   font: inherit;
-  color: #424242;
+  color: var(--app-title);
   cursor: pointer;
 }
 

@@ -148,9 +148,9 @@ function onDragEnd() {
   align-items: center;
   gap: 8px;
   padding: 10px 4px 10px 0;
-  border: 1px solid var(--q-separator-color, #e0e0e0);
+  border: 1px solid var(--q-separator-color, var(--app-separator));
   border-radius: 8px;
-  background: var(--q-card-background, #fff);
+  background: var(--q-card-background, var(--app-surface));
   cursor: default;
 }
 
@@ -158,12 +158,18 @@ function onDragEnd() {
   cursor: grab;
 }
 
+/*
+  Перенос дела на доску (FR-T-4): признак — пунктир и тень вместо `opacity`.
+  Прозрачность всей карточки уронила бы контраст названия и сводки ниже WCAG AA
+  (НФТ ТЗ §7); ведёт карточку тень, а не исчезновение.
+*/
 .task-card--dragging {
-  opacity: 0.5;
+  border-style: dashed;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
 }
 
 .task-card--archived .task-card__title {
-  color: #757575;
+  color: var(--app-hint);
 }
 
 .task-card__stripe {
@@ -200,13 +206,17 @@ function onDragEnd() {
   gap: 6px;
   font-size: 12px;
   line-height: 18px;
-  color: #616161;
+  color: var(--app-meta);
 }
 
+/* Плашка «в архиве»: #616161 на #eeeeee — 6.05:1 (WCAG AA, НФТ ТЗ §7). Текст
+   берётся из переменной темы, а не из fixed-класса Quasar `text-grey-*`: тот
+   остался бы светлым на тёмном фоне */
 .task-card__archived {
   padding: 0 6px;
   border-radius: 8px;
-  background: #eeeeee;
+  background: var(--app-surface-muted);
+  color: var(--app-meta);
 }
 
 .task-card__actions {

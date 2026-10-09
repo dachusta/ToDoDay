@@ -217,9 +217,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 8px 8px 0;
-  border: 1px solid var(--q-separator-color, #e0e0e0);
+  border: 1px solid var(--q-separator-color, var(--app-separator));
   border-radius: 8px;
-  background: var(--q-card-background, #fff);
+  background: var(--q-card-background, var(--app-surface));
   cursor: grab;
 }
 

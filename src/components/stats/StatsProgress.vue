@@ -55,7 +55,8 @@ defineProps<{
 
 .stats-progress__empty {
   flex: 1 1 auto;
-  color: #9e9e9e;
+  /* #757575: 4.61:1 на белом; #9e9e9e давал 2.68:1 (WCAG AA, НФТ ТЗ §7) */
+  color: var(--app-hint);
 }
 
 .stats-progress__value {
@@ -63,6 +64,6 @@ defineProps<{
   min-width: 38px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #616161;
+  color: var(--app-meta);
 }
 </style>

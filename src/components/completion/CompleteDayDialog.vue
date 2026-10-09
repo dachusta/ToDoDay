@@ -319,7 +319,7 @@ function confirm() {
 .completion__time,
 .completion__duration {
   font-size: 12px;
-  color: #616161;
+  color: var(--app-meta);
   white-space: nowrap;
 }
 

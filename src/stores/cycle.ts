@@ -174,6 +174,25 @@ export const useCycleStore = defineStore('cycle', () => {
     liveSubscription = null
   }
 
+  /**
+   * Перечитать текущий день из БД после своей записи (журнал, дефект D43).
+   *
+   * Зачем: подписка liveQuery — асинхронный источник. Её событие приходит и
+   * после собственного `put`, а принесённый им объект может быть снимком,
+   * прочитанным ДО записи: подписка подменяет `currentInstance` старым
+   * состоянием, и оптимистичная правка в памяти пропадает (в тестах это
+   * проявлялось как «размещение осталось pending сразу после завершения дня»).
+   * Dexie не переизлучает то же значение, но порядок «событие подписки → запись»
+   * от него не зависит, поэтому после успешной транзакции ссылка берётся заново:
+   * в памяти оказывается тот же объект, что в БД, и подписка его не «откатывает».
+   */
+  async function refreshCurrentInstance(): Promise<void> {
+    const id = cycleState.value?.activeInstanceId ?? null
+    if (id === null) return
+    const fresh = await db.dayInstances.get(id)
+    if (fresh) currentInstance.value = fresh
+  }
+
   async function initialize(): Promise<Result<void>> {
     // App.vue и страница дня стартуют одновременно, поэтому повторный вызов
     // присоединяется к уже идущей инициализации: два параллельных разрешения дня
@@ -428,6 +447,10 @@ export const useCycleStore = defineStore('cycle', () => {
     completionSource.value = null
     completing.value = false
 
+    // Своя запись прочитана заново: подписка liveQuery не подменит день снимком
+    // до записи (журнал, дефект D43)
+    await refreshCurrentInstance()
+
     // FR-S-1: статистика пересчитывается сразу; её ошибка не отменяет завершение дня
     void useStatsStore()
       .recompute()
@@ -488,6 +511,9 @@ export const useCycleStore = defineStore('cycle', () => {
       shiftMode.value = null
       completionSource.value = null
       completing.value = false
+      // Тот же приём, что в completeDay: после успешной транзакции день берётся
+      // из БД, чтобы событие подписки не вернуло старый снимок (дефект D43)
+      await refreshCurrentInstance()
       void useStatsStore()
         .recompute()
         .then(r => {

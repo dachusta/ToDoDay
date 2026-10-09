@@ -42,7 +42,18 @@
           :key="slot.index"
           :slot-data="slot"
           :height="SLOT_HEIGHT"
-          :hovered="hoveredSlot === slot.index"
+        />
+        <!--
+          Подсветка слота под указателем (FR-B-2) — один слой, а не класс на
+          56 строках: при переносе меняется только его `top`, и ни одна строка
+          сетки не перерисовывается (НФТ ТЗ §7).
+        -->
+        <div
+          v-if="hoverPx !== null"
+          class="day-grid__hover"
+          data-test="slot-hover"
+          :style="{ top: `${hoverPx}px` }"
+          aria-hidden="true"
         />
         <!-- Граница timeStart–timeEnd: не слот, дело в неё не ставится (FR-B-1) -->
         <div
@@ -84,12 +95,24 @@
         :style="{ top: `${nowPx}px` }"
         data-test="now-marker"
       />
+
+      <!--
+        Слот под указателем называется словами (НФТ ТЗ §7): незрячий пользователь
+        не видит подсветку, но слышит «09:30». Событие уходит в общий регион
+        `aria-live` доски, который всегда есть в дереве (DayBoard).
+      -->
+      <p
+        class="day-grid__sr"
+        data-test="slot-hover-live"
+      >
+        {{ hoverLabel }}
+      </p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DaySlot from './DaySlot.vue'
 import PlacementCard from './PlacementCard.vue'
@@ -120,6 +143,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   'drop-task': [taskId: string, slot: Slot]
   hover: [index: number | null]
+  /** Подпись слота под указателем для региона `aria-live` доски (НФТ ТЗ §7). */
+  'hover-slot-label': [label: string]
   'placement-action': [id: PlacementActionId, placement: Placement]
   'placement-drag-start': [placement: Placement, event: PointerEvent]
   'placement-drag-end': []
@@ -159,6 +184,32 @@ const visibleSlots = computed(() => {
 const placed = computed(() =>
   props.placements.filter((p): p is Placement & { startMin: number } => p.startMin !== null),
 )
+
+/**
+ * Подсветка слота переноса (FR-B-2). Считается здесь, а не классом на строке:
+ * строки сетки — статичная разметка, и перенос не заставляет их перерисовываться
+ * (НФТ ТЗ §7 — тяжёлые вычисления в computed). Невидимый слот не подсвечивается.
+ */
+const hoverSlot = computed(() => {
+  const index = props.hoveredSlot
+  if (index === null || index < 0 || index >= props.slots.length) return null
+  return index
+})
+
+const hoverPx = computed(() => (hoverSlot.value === null ? null : hoverSlot.value * SLOT_HEIGHT))
+
+/** Подпись слота для региона `aria-live`: «09:30» вместо «слот 6». */
+const hoverLabel = computed(() => {
+  const slot = hoverSlot.value === null ? undefined : props.slots[hoverSlot.value]
+  return slot === undefined ? '' : clock(slot)
+})
+
+/**
+ * Слот под указателем называется словами (НФТ ТЗ §7): перенос объявляется через
+ * `aria-live`. Событие уходит наверх, потому что регион живёт в разметке доски
+ * и один на весь экран, а не по региону на каждую сетку.
+ */
+watch(hoverLabel, value => emit('hover-slot-label', value))
 
 const nowPx = computed(() => {
   const offset = props.nowStartMin
@@ -271,9 +322,9 @@ defineExpose({ slotAtY, scrollToNow })
   max-height: 64vh;
   overflow-y: auto;
   overflow-x: hidden;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--app-separator);
   border-radius: 8px;
-  background: #fff;
+  background: var(--app-surface);
 }
 
 .day-grid__inner {
@@ -300,13 +351,13 @@ defineExpose({ slotAtY, scrollToNow })
   text-align: right;
   font-size: 11px;
   line-height: 16px;
-  color: #757575;
+  color: var(--app-hint);
   white-space: nowrap;
 }
 
 .day-grid__label--hour {
   font-weight: 600;
-  color: #424242;
+  color: var(--app-title);
 }
 
 .day-grid__rows {
@@ -320,7 +371,37 @@ defineExpose({ slotAtY, scrollToNow })
   left: 0;
   right: 0;
   height: 2px;
-  background: #9e9e9e;
+  background: var(--app-line-hour);
+}
+
+/*
+  Подсветка слота под указателем идёт под карточками (z-index 0 против 2 у
+  карточки), чтобы перенос поверх существующего размещения оставался виден.
+*/
+.day-grid__hover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 15px;
+  background: rgba(25, 118, 210, 0.14);
+  pointer-events: none;
+}
+
+/*
+  Регион объявления слота: тот же приём, что у WAI «visually hidden» — узел
+  читается скринридером и не занимает места в сетке.
+*/
+.day-grid__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .day-grid__placements {

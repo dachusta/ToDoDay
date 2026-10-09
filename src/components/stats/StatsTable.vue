@@ -157,14 +157,14 @@ function ariaSort(column: Column): 'ascending' | 'descending' | undefined {
 .stats-table th,
 .stats-table td {
   padding: 8px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--app-separator);
   text-align: left;
   vertical-align: middle;
 }
 
 .stats-table th {
   font-weight: 500;
-  color: #616161;
+  color: var(--app-meta);
   white-space: nowrap;
 }
 

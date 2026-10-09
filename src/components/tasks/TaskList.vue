@@ -243,7 +243,12 @@ function onDragStart(task: Task, event: DragEvent) {
 .task-skeleton {
   height: 56px;
   border-radius: 8px;
-  background: linear-gradient(90deg, #eeeeee 25%, #f5f5f5 50%, #eeeeee 75%);
+  background: linear-gradient(
+    90deg,
+    var(--app-surface-muted) 25%,
+    var(--app-surface-subtle) 50%,
+    var(--app-surface-muted) 75%
+  );
   background-size: 200% 100%;
   animation: task-skeleton-shimmer 1.2s infinite linear;
 }
@@ -267,13 +272,13 @@ function onDragStart(task: Task, event: DragEvent) {
 .task-table td {
   padding: 8px;
   text-align: left;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--app-separator);
   vertical-align: middle;
 }
 
 .task-table th {
   font-weight: 500;
-  color: #616161;
+  color: var(--app-meta);
 }
 
 .task-table__row[draggable='true'] {
@@ -281,7 +286,7 @@ function onDragStart(task: Task, event: DragEvent) {
 }
 
 .task-table__row--archived .task-table__title {
-  color: #757575;
+  color: var(--app-hint);
 }
 
 .task-table__name {
@@ -304,12 +309,13 @@ function onDragStart(task: Task, event: DragEvent) {
   white-space: nowrap;
 }
 
+/* Плашка «в архиве» — та же пара, что в карточке дела: #616161 на #eeeeee */
 .task-table__archived {
   padding: 0 6px;
   border-radius: 8px;
-  background: #eeeeee;
+  background: var(--app-surface-muted);
   font-size: 12px;
-  color: #616161;
+  color: var(--app-meta);
 }
 
 .task-table__actions {

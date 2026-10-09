@@ -178,6 +178,11 @@
 
     <!-- Подтверждения доступны любому экрану (контракты §6.2). -->
     <ConfirmDialog />
+    <!--
+      Пока подтверждение открыто, фон уходит в `inert` (НФТ ТЗ §7, focus-trap):
+      фокус не может уйти из модального окна в перекрытый интерфейс.
+    -->
+    <FocusTrap />
   </q-layout>
 </template>
 
@@ -186,6 +191,7 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import ConfirmDialog from 'src/components/common/ConfirmDialog.vue'
+import FocusTrap from 'src/components/common/FocusTrap.vue'
 import { useDataActions } from 'src/components/settings/dataActions'
 import { useUiStore } from 'src/stores/ui'
 import { useSettingsStore } from 'src/stores/settings'

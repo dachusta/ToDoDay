@@ -14,7 +14,18 @@ const settings = useSettingsStore()
 const ui = useUiStore()
 const cycle = useCycleStore()
 
+/**
+ * Стартовый экран из index.html (НФТ ТЗ §7: FCP < 1.5 c на 3G) снимается, как
+ * только смонтировалось приложение: дальше интерфейс рисует Vue, и узел не должен
+ * перекрывать его. В тестах разметки index.html в документе нет — это не ошибка.
+ */
+function hideBootSplash() {
+  document.getElementById('boot-splash')?.remove()
+}
+
 onMounted(async () => {
+  hideBootSplash()
+
   // Тема и язык (оба — sync из localStorage; setLanguage переключает локаль i18n)
   settings.setTheme(settings.theme)
   settings.setLanguage(settings.language)

@@ -59,8 +59,10 @@ const label = computed(() => t(`priorities.${props.priority}`))
   color: #1565c0;
 }
 
+/* 5.4:1 вместо 3.79:1 у прежнего #e65100: подпись 12 px — мелкий текст, а не
+   крупная графика, поэтому порог AA для неё 4.5:1 */
 .priority-badge--high {
-  color: #e65100;
+  color: #bf360c;
 }
 
 .priority-badge--critical {

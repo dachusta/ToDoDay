@@ -264,9 +264,10 @@ onUnmounted(stopLocalListeners)
   gap: 6px;
   box-sizing: border-box;
   padding: 2px 4px 2px 0;
-  border: 1px solid #cfd8dc;
+  border: 1px solid var(--app-separator);
   border-radius: 6px;
-  background: #fff;
+  background: var(--app-surface);
+  color: var(--app-title);
   overflow: hidden;
   /* Тач: вертикальный жест остаётся прокруткой доски, перенос — мышью/пером
      и клавиатурным путём «Переместить в слот…» (FR-B-2, НФТ ТЗ §7) */
@@ -275,28 +276,36 @@ onUnmounted(stopLocalListeners)
   z-index: 2;
 }
 
-/* Пересечения разрешены, но подсвечиваются: полоса с частичным наложением (FR-B-3) */
+/*
+  Пересечения разрешены, но подсвечиваются (FR-B-3): рамка и подложка, а не
+  прозрачность всей карточки. `opacity` уронила бы контраст названия и времени
+  ниже WCAG AA (НФТ ТЗ §7) — признак остаётся цветовым и графическим, а текст
+  читаемым.
+*/
 .placement-card--conflict {
-  opacity: 0.5;
-  border-color: #f9a825;
+  border-color: var(--app-conflict);
+  box-shadow: inset 0 0 0 1px var(--app-conflict);
 }
 
+/* Перенос: карточка «отрывается» тенью и пунктиром, а не растворяется (НФТ §7) */
 .placement-card--dragging {
-  opacity: 0.6;
+  border-style: dashed;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
   z-index: 6;
 }
 
 .placement-card--done .placement-card__title {
   text-decoration: line-through;
-  color: #616161;
+  color: var(--app-meta);
 }
 
 .placement-card--skipped {
-  background: #fafafa;
+  background: var(--app-surface-subtle);
 }
 
+/* #757575 — 4.61:1 на белом; прежний #9e9e9e давал 2.68:1 и не проходил AA */
 .placement-card--skipped .placement-card__title {
-  color: #9e9e9e;
+  color: var(--app-hint);
 }
 
 .placement-card--zone {
@@ -334,8 +343,10 @@ onUnmounted(stopLocalListeners)
   color: #c62828;
 }
 
+/* #bf360c вместо #e65100: 5.4:1 на белом против 3.79:1 — значок «⚠» это
+   мелкий текст, а не крупная графика (НФТ ТЗ §7, WCAG AA) */
 .placement-card__warning {
-  color: #e65100;
+  color: #bf360c;
 }
 
 .placement-card__title {
@@ -354,7 +365,7 @@ onUnmounted(stopLocalListeners)
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: #616161;
+  color: var(--app-meta);
 }
 
 .placement-card__time {

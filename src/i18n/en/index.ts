@@ -340,4 +340,20 @@ export default {
     empty: 'Empty',
     retry: 'Retry',
   },
+  // Ошибки по коду `Result` (НФТ ТЗ §7). Ключи те же, что в ru — см. пояснение там.
+  errors: {
+    dbError: 'Could not access the data',
+    validationError: 'The data did not pass validation',
+    conflict: 'Data conflict',
+    notFound: 'Data not found',
+    constraintViolation: 'The action is unavailable in the current state',
+    shiftAlreadyDoneToday: 'The day was already shifted today',
+    dayNotActive: 'The day is not active',
+    storageError: 'Could not save the settings',
+    unknown: 'Unexpected error',
+    // 404 screen (catchAll route)
+    notFoundTitle: 'Page not found',
+    notFoundHint: 'The link may be outdated or the address may contain a typo.',
+    notFoundHome: 'Go to the main screen',
+  },
 }

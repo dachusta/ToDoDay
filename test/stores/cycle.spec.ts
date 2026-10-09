@@ -248,9 +248,44 @@ describe('useCycleStore: завершение дня (FR-E-1…FR-E-3, приё�
     ])
     // Дата дня совпадает с сегодняшней: остаётся текущим, второго экземпляра нет
     expect(cycle.currentInstance?.id).toBe('inst-1')
+    // После своей записи день берётся из БД заново (журнал, дефект D43): событие
+    // подписки liveQuery приходит асинхронно и снимком «до записи», поэтому
+    // оптимистичная правка в памяти не должна оставаться единственным источником
+    expect(cycle.currentInstance?.placements.map(p => [p.id, p.status])).toEqual([
+      ['p1', 'skipped'],
+      ['p2', 'done'],
+      ['p3', 'skipped'],
+    ])
+    expect(cycle.dayProgress).toMatchObject({ done: 1, skipped: 2, pending: 0, total: 3 })
     expect(cycle.nextInstanceId).toBeNull()
     expect(cycle.lastCompletedInstanceId).toBe('inst-1')
     expect(recompute).toHaveBeenCalled()
+  })
+
+  it('completeDay: подписка liveQuery не откатывает статусы дня из памяти (дефект D43)', async () => {
+    await seedInstance({}, [
+      placement({ id: 'p1', status: 'done' }),
+      placement({ id: 'p2', status: 'pending' }),
+    ])
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const before = cycle.currentInstance
+
+    await cycle.completeDay({ p1: 'done', p2: 'done' })
+
+    // Ссылка заменена на прочитанную из БД: подписка сравнивает по значению и
+    // старый снимок «до записи» уже не может стать текущим днём
+    expect(cycle.currentInstance).not.toBe(before)
+    expect(cycle.currentInstance?.status).toBe('completed')
+    expect(cycle.dayProgress).toMatchObject({ done: 2, skipped: 0, pending: 0 })
+
+    // Реакция на изменение экземпляра из другой вкладки сохраняется: подписка
+    // по-прежнему пишет прочитанный день в стор
+    const stored = await db.dayInstances.get('inst-1')
+    expect(stored?.placements.map(p => [p.id, p.status])).toEqual([
+      ['p1', 'done'],
+      ['p2', 'done'],
+    ])
   })
 
   it('completeDay на виртуальном пустом дне сохраняет экземпляр в историю (FR-D-6)', async () => {

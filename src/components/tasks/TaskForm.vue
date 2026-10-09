@@ -348,10 +348,10 @@ async function save() {
   align-items: center;
   gap: 8px;
   padding: 8px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--app-separator);
   border-radius: 8px;
-  background: #fafafa;
-  color: #212121;
+  background: var(--app-surface-subtle);
+  color: var(--app-title);
 }
 
 .task-form__stripe {

@@ -4,7 +4,32 @@ import { formatClock } from 'src/services/dates'
 import { downloadBlob, exportFileName, pickJsonFile } from 'src/services/dataTransfer'
 import { useSettingsStore } from 'src/stores/settings'
 import { useUiStore } from 'src/stores/ui'
+import type { AppError, ErrorCode } from 'src/models/common'
 import type { TimeFormat } from 'src/models/enums'
+
+/**
+ * Код ошибки → ключ словаря (НФТ ТЗ §7: все строки интерфейса из i18n, включая
+ * служебные тексты). Сообщения сторов и сервисов остаются диагностикой: они
+ * написаны по-русски и в UI не показываются — иначе английская локаль получала
+ * бы русскую строку. Таблица полная по `ErrorCode`: новый код не «упадёт» в
+ * пустое сообщение, а получит общий текст (`unknown`).
+ */
+const ERROR_KEYS: Record<ErrorCode, string> = {
+  DB_ERROR: 'errors.dbError',
+  VALIDATION_ERROR: 'errors.validationError',
+  CONFLICT: 'errors.conflict',
+  NOT_FOUND: 'errors.notFound',
+  CONSTRAINT_VIOLATION: 'errors.constraintViolation',
+  SHIFT_ALREADY_DONE_TODAY: 'errors.shiftAlreadyDoneToday',
+  DAY_NOT_ACTIVE: 'errors.dayNotActive',
+  STORAGE_ERROR: 'errors.storageError',
+  UNKNOWN: 'errors.unknown',
+}
+
+/** Ключ словаря для ошибки операции: код важнее текста сообщения. */
+export function errorKey(error: AppError): string {
+  return ERROR_KEYS[error.code] ?? 'errors.unknown'
+}
 
 /**
  * Действия блока «Данные» (FR-SET-4/FR-SET-5/FR-SET-10, вайрфреймы §8).
@@ -28,7 +53,7 @@ export function useDataActions() {
       ui.notify(t('settings.exported'), 'success')
       return true
     }
-    ui.notify(result.error.message, 'error', {
+    ui.notify(t(errorKey(result.error)), 'error', {
       label: t('common.retry'),
       handler: () => void exportData(),
     })
@@ -69,7 +94,9 @@ export function useDataActions() {
     }
 
     ui.notify(
-      result.error.code === 'VALIDATION_ERROR' ? t('settings.importInvalid') : result.error.message,
+      result.error.code === 'VALIDATION_ERROR'
+        ? t('settings.importInvalid')
+        : t(errorKey(result.error)),
       'error',
       { label: t('common.retry'), handler: () => void importData() },
     )
@@ -83,7 +110,7 @@ export function useDataActions() {
       ui.notify(t('settings.settingsSaved'), 'success')
       return true
     }
-    ui.notify(result.error.message, 'error', {
+    ui.notify(t(errorKey(result.error)), 'error', {
       label: t('common.retry'),
       handler: () => void retrySettingsWrite(),
     })
@@ -120,7 +147,7 @@ export function useDataActions() {
       ui.notify(t('settings.cleared'), 'success')
       return true
     }
-    ui.notify(result.error.message, 'error', {
+    ui.notify(t(errorKey(result.error)), 'error', {
       label: t('common.retry'),
       handler: () => void clearData(),
     })
