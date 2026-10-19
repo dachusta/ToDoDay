@@ -29,10 +29,5 @@
     "types": ["node", "vitest/globals"]
   },
   "exclude": ["src-pwa"],
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.d.ts",
-    "src/**/*.vue",
-    "test/**/*.ts"
-  ]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "test/**/*.ts"]
 }

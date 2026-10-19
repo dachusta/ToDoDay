@@ -3,15 +3,15 @@
   "editor.guides.bracketPairs": true,
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
-  "editor.codeActionsOnSave": [
-    "source.fixAll.eslint"
-  ],
-  "eslint.validate": [
-    "javascript",
-    "javascriptreact",
-    "typescript",
-    "vue"
-  ],
+  // .vue оформляет ESLint, а не Prettier: правило vue/max-attributes-per-line
+  // (по одному атрибуту на строку) противоречит склейке атрибутов в printWidth,
+  // и сохранение файла возвращало «'aria-hidden' should be on a new line».
+  // Prettier для .vue отключён и в .prettierignore — форматтер здесь один.
+  "[vue]": {
+    "editor.defaultFormatter": "dbaeumer.vscode-eslint"
+  },
+  "editor.codeActionsOnSave": ["source.fixAll.eslint"],
+  "eslint.validate": ["javascript", "javascriptreact", "typescript", "vue"],
   "js/ts.tsdk.path": "node_modules/typescript/lib",
   "search.exclude": {
     "dist/": true,

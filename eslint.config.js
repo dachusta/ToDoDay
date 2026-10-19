@@ -24,6 +24,12 @@ export default tseslint.config(
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  // Шаблоны и скрипты .vue оформляет ESLint, а не Prettier: правило
+  // vue/max-attributes-per-line из этого пресета требует по одному атрибуту на
+  // строку, а Prettier склеивает атрибуты, если они влезают в printWidth, — прогон
+  // `pnpm format` по .vue давал предупреждения «'aria-hidden' should be on a new
+  // line». Поэтому *.vue внесён в .prettierignore, а `pnpm lint:fix` — штатный
+  // форматтер шаблонов и скриптов; Prettier оформляет только .scss и .json.
   ...pluginVue.configs['flat/recommended'],
   {
     files: ['**/*.vue'],

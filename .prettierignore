@@ -1,0 +1,40 @@
+# Что Prettier НЕ форматирует и почему.
+#
+# 1. *.vue — шаблоны: правило vue/max-attributes-per-line из
+#    pluginVue.configs['flat/recommended'] требует по одному атрибуту на строку,
+#    а Prettier склеивает атрибуты в одну строку, если они влезают в printWidth
+#    100, и по-своему переносит `>` у строчных элементов со смешанным контентом.
+#    Прогон `pnpm format` по .vue возвращал ровно те предупреждения
+#    «'aria-hidden' should be on a new line», которые ловит ESLint.
+#    Шаблоны и скрипты .vue оформляет ESLint: `pnpm lint:fix`.
+*.vue
+#
+# 2. *.js / *.ts — код приложения: его форматтер тоже ESLint. Prettier по
+#    стилю расходится с ним (`arrowParens`, перенос строк длиннее 100), поэтому
+#    форматирование кода им дало бы большой посторонний диф.
+*.js
+*.jsx
+*.mjs
+*.cjs
+*.ts
+*.tsx
+*.mts
+*.cts
+#
+# 3. *.md — документация ведётся вручную: анкоры в «Содержании», сводные
+#    таблицы и подвалы частей держатся на ручной вёрстке.
+*.md
+#
+# 4. docs/scaffold/ — снимок скаффолда из документации (Скаффолд §1), не код
+#    приложения; в eslint.config.js он тоже в ignores.
+docs/scaffold/
+
+# Сгенерированное и служебное: в .gitignore, но Prettier читает и .prettierignore
+dist/
+coverage/
+.quasar/
+.vitetest/
+.tools/
+.cache/
+.pnpm-store/
+src-pwa/

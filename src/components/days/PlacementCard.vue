@@ -37,14 +37,25 @@
       :style="{ backgroundColor: placement.taskSnapshot.color }"
       aria-hidden="true"
     />
-    <span v-if="now" class="placement-card__now" aria-hidden="true">▶</span>
-    <span v-if="statusIcon" class="placement-card__status" aria-hidden="true">{{
-      statusIcon
-    }}</span>
-    <span class="placement-card__title" :title="placement.taskSnapshot.title">{{
-      placement.taskSnapshot.title
-    }}</span>
-    <span v-if="conflict" class="placement-card__warning" aria-hidden="true">⚠</span>
+    <span
+      v-if="now"
+      class="placement-card__now"
+      aria-hidden="true"
+    >▶</span>
+    <span
+      v-if="statusIcon"
+      class="placement-card__status"
+      aria-hidden="true"
+    >{{ statusIcon }}</span>
+    <span
+      class="placement-card__title"
+      :title="placement.taskSnapshot.title"
+    >{{ placement.taskSnapshot.title }}</span>
+    <span
+      v-if="conflict"
+      class="placement-card__warning"
+      aria-hidden="true"
+    >⚠</span>
 
     <span class="placement-card__meta">
       <PriorityBadge :priority="placement.taskSnapshot.priority" />
