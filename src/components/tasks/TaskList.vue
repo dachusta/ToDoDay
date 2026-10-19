@@ -112,19 +112,21 @@
           @dragend="emit('drag-end')"
         >
           <td class="task-table__name">
-            <span
-              class="task-table__stripe"
-              :style="{ backgroundColor: row.task.color }"
-              aria-hidden="true"
-            />
-            <span
-              class="task-table__title"
-              :title="row.task.title"
-            >{{ row.task.title }}</span>
-            <span
-              v-if="row.task.archived"
-              class="task-table__archived"
-            >{{ t('tasks.archivedBadge') }}</span>
+            <div class="task-table__name-content">
+              <span
+                class="task-table__stripe"
+                :style="{ backgroundColor: row.task.color }"
+                aria-hidden="true"
+              />
+              <span
+                class="task-table__title"
+                :title="row.task.title"
+              >{{ row.task.title }}</span>
+              <span
+                v-if="row.task.archived"
+                class="task-table__archived"
+              >{{ t('tasks.archivedBadge') }}</span>
+            </div>
           </td>
           <td><PriorityBadge :priority="row.task.priority" /></td>
           <td>{{ durationText(row.task.durationMin) }}</td>
@@ -289,7 +291,18 @@ function onDragStart(task: Task, event: DragEvent) {
   color: var(--app-hint);
 }
 
+/*
+  Ячейка имени остаётся `table-cell`: `display: flex` на самом `<td>` браузер
+  оборачивает в анонимную ячейку, и <td> перестаёт растягиваться по высоте
+  строки — содержимое диктует высоту (38 px вместо 41 px у соседей), из-за чего
+  border-bottom уезжает вверх на 3 px и линия строки получается рваной.
+  Поэтому флекс живёт во вложенном контейнере, а ячейка тянется как все.
+*/
 .task-table__name {
+  min-width: 0;
+}
+
+.task-table__name-content {
   display: flex;
   align-items: center;
   gap: 8px;
