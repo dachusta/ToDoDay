@@ -10,6 +10,11 @@
     меню действий (FR-B-7) — это же клавиатурная альтернатива drag-and-drop.
     Перенос — pointer events: порог 4 px отделяет его от нажатия, а
     `touch-action: pan-y` оставляет прокрутку доски жестом на тач-экране.
+
+    Выделение названия переносит жест в нативный drag-and-drop: браузер отменяет
+    pointer events, `pointerup` до доски не доходит, и drop не срабатывает.
+    Поэтому текст карточки не выделяется (`user-select: none` в стилях), а
+    нативный `dragstart` гасится — карточку ведёт только перенос по сетке.
   -->
   <div
     ref="rootEl"
@@ -25,31 +30,21 @@
     @keydown.enter.prevent="openMenu"
     @keydown.space.prevent="openMenu"
     @pointerdown="onPointerDown"
+    @dragstart.prevent
   >
     <span
       class="placement-card__stripe"
       :style="{ backgroundColor: placement.taskSnapshot.color }"
       aria-hidden="true"
     />
-    <span
-      v-if="now"
-      class="placement-card__now"
-      aria-hidden="true"
-    >▶</span>
-    <span
-      v-if="statusIcon"
-      class="placement-card__status"
-      aria-hidden="true"
-    >{{ statusIcon }}</span>
-    <span
-      class="placement-card__title"
-      :title="placement.taskSnapshot.title"
-    >{{ placement.taskSnapshot.title }}</span>
-    <span
-      v-if="conflict"
-      class="placement-card__warning"
-      aria-hidden="true"
-    >⚠</span>
+    <span v-if="now" class="placement-card__now" aria-hidden="true">▶</span>
+    <span v-if="statusIcon" class="placement-card__status" aria-hidden="true">{{
+      statusIcon
+    }}</span>
+    <span class="placement-card__title" :title="placement.taskSnapshot.title">{{
+      placement.taskSnapshot.title
+    }}</span>
+    <span v-if="conflict" class="placement-card__warning" aria-hidden="true">⚠</span>
 
     <span class="placement-card__meta">
       <PriorityBadge :priority="placement.taskSnapshot.priority" />
@@ -145,9 +140,7 @@ const rootEl = ref<HTMLElement | null>(null)
 const actionsRef = ref<InstanceType<typeof PlacementActions> | null>(null)
 const statusIcon = computed(() => placementStatusIcon(props.placement.status))
 
-const range = computed(() =>
-  placementRange(props.placement, props.dayStartMin, props.timeFormat),
-)
+const range = computed(() => placementRange(props.placement, props.dayStartMin, props.timeFormat))
 
 /** Подпись времени: интервал на сетке, длительность — у нераспределённого (FR-B-5). */
 const timeLabel = computed(() => {
@@ -272,6 +265,14 @@ onUnmounted(stopLocalListeners)
   /* Тач: вертикальный жест остаётся прокруткой доски, перенос — мышью/пером
      и клавиатурным путём «Переместить в слот…» (FR-B-2, НФТ ТЗ §7) */
   touch-action: pan-y;
+  /*
+    Текст карточки не выделяется: выделенное название браузер начинает тащить
+    нативным drag-and-drop, pointer events обрываются, и перенос по сетке
+    (FR-B-2) не доходит до drop. Отдельно для WebKit — он понимает только
+    префиксную форму.
+  */
+  user-select: none;
+  -webkit-user-select: none;
   cursor: grab;
   z-index: 2;
 }
@@ -287,13 +288,6 @@ onUnmounted(stopLocalListeners)
   box-shadow: inset 0 0 0 1px var(--app-conflict);
 }
 
-/* Перенос: карточка «отрывается» тенью и пунктиром, а не растворяется (НФТ §7) */
-.placement-card--dragging {
-  border-style: dashed;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  z-index: 6;
-}
-
 .placement-card--done .placement-card__title {
   text-decoration: line-through;
   color: var(--app-meta);
@@ -306,6 +300,23 @@ onUnmounted(stopLocalListeners)
 /* #757575 — 4.61:1 на белом; прежний #9e9e9e давал 2.68:1 и не проходил AA */
 .placement-card--skipped .placement-card__title {
   color: var(--app-hint);
+}
+
+/*
+  Перенос (FR-B-2): карточка «отрывается» — полупрозрачная заливка, пунктирная
+  рамка и тень. Прозрачность задаётся заливкой поверхности, а не `opacity`
+  элемента: элементная прозрачность опускает контраст названия и времени
+  (11–12 px) ниже WCAG AA, поэтому признак переноса и был переведён на рамку с
+  тенью (журнал, дефект D38). Сквозь заливку видны линии сетки и подсветка слота
+  под карточкой — видно, куда она встанет, — а текст остаётся читаемым.
+  Правило стоит после `--skipped`: у пропущенного размещения своя поверхность, и
+  полупрозрачность переноса должна её перекрывать.
+*/
+.placement-card--dragging {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--app-surface) 70%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+  z-index: 6;
 }
 
 .placement-card--zone {

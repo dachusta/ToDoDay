@@ -68,13 +68,14 @@ describe('Контраст WCAG AA: светлая тема (НФТ ТЗ §7)', 
   it('поверхности, разделители и подписи заданы переменными темы', () => {
     // Каждая переменная ролей (поверхности, линии, подписи) переопределяется в
     // тёмной теме: иначе поверхность остаётся светлой и белый текст Quasar на ней
-    // не читается. `--app-conflict` — исключение: он объявлен только в `:root`,
-    // потому что проходит порог графики на обеих темах.
-    const overriddenInDark = Object.keys(lightVars).filter(name => name !== '--app-conflict')
+    // не читается. Исключения — цвета, которые держат порог графики на обеих
+    // темах и потому от темы не зависят: `--app-conflict` и `--app-drop-target`.
+    const themeAgnostic = ['--app-conflict', '--app-drop-target']
+    const overriddenInDark = Object.keys(lightVars).filter(name => !themeAgnostic.includes(name))
     expect(Object.keys(darkVars).sort()).toEqual(overriddenInDark.sort())
     for (const [name, value] of Object.entries(lightVars)) {
       expect(value, `${name} — светлая тема`).toMatch(/^#[0-9a-f]{6}$/)
-      if (name !== '--app-conflict') {
+      if (!themeAgnostic.includes(name)) {
         expect(darkVars[name], `${name} — тёмная тема`).toMatch(/^#[0-9a-f]{6}$/)
       }
       // Тёмные поверхности не могут быть светлее светлых: тема действительно
@@ -130,6 +131,9 @@ describe('Контраст WCAG AA: светлая тема (НФТ ТЗ §7)', 
     // поддержка шага сетки, а не носитель информации (WCAG 1.4.11).
     expectGraphic('часовая линия сетки', lightVars['--app-line-hour'] ?? '#8a8a8a', '#ffffff')
     expectGraphic('рамка карточки пересечения', lightVars['--app-conflict'] ?? '#b26a00', '#ffffff')
+    // Слот под указателем — единственный визуальный признак цели переноса ещё и
+    // поверх белой карточки, под которой он оказывается (FR-B-2)
+    expectGraphic('рамка слота переноса', lightVars['--app-drop-target'] ?? '#1976d2', '#ffffff')
   })
 })
 
@@ -160,10 +164,11 @@ describe('Контраст WCAG AA: тёмная тема (НФТ ТЗ §7)', ()
     expectText('превью формы', title, subtle)
   })
 
-  it('пересечение и «сейчас» различимы на тёмной поверхности', () => {
+  it('пересечение, «сейчас» и слот переноса различимы на тёмной поверхности', () => {
     const surface = darkVars['--app-surface'] ?? '#1d1d1d'
     expectGraphic('рамка пересечения', lightVars['--app-conflict'] ?? '#b26a00', surface)
     expectGraphic('линия текущего времени', '#d32f2f', surface)
+    expectGraphic('рамка слота переноса', lightVars['--app-drop-target'] ?? '#1976d2', surface)
   })
 })
 

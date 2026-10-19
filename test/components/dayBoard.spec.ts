@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { QLayout, QPageContainer, Quasar } from 'quasar'
 import { createPinia, setActivePinia } from 'pinia'
@@ -550,6 +551,86 @@ describe('DayBoard: перенос дел (FR-B-2, FR-B-4, FR-B-5)', () => {
 
     expect(await dbPlacement('p1')).toMatchObject({ startMin: 45 })
     expect(card(wrapper, 'p1').attributes('style')).toContain(`top: ${(45 / 15) * SLOT_HEIGHT}px`)
+  })
+
+  /**
+   * Выделенное название срывает перенос: браузер начинает тащить выделенный
+   * текст нативным drag-and-drop, pointer events обрываются, и drop до доски не
+   * доходит — дело остаётся на месте. Поэтому текст карточки не выделяется, а
+   * нативный `dragstart` гасится.
+   */
+  it('выделение названия не срывает перенос карточки (FR-B-2)', async () => {
+    await seedDay([placement({ id: 'p1', startMin: 15, durationMin: 15 })])
+    const { wrapper } = await mountPage()
+
+    const title = card(wrapper, 'p1').find('.placement-card__title')
+    expect(title.exists()).toBe(true)
+
+    // Жест начался на выделенном фрагменте: нативный перенос текста не стартует
+    const nativeDrag = new Event('dragstart', { bubbles: true, cancelable: true })
+    title.element.dispatchEvent(nativeDrag)
+    expect(nativeDrag.defaultPrevented).toBe(true)
+
+    // jsdom не применяет <style> из SFC: правило выделения проверяется по исходнику
+    const source = readFileSync(`${process.cwd()}/src/components/days/PlacementCard.vue`, 'utf8')
+    expect(source).toMatch(/\.placement-card\s*\{[^}]*user-select:\s*none/)
+  })
+
+  /**
+   * Во время переноса видно, в какой слот встанет дело: полоса совпадает со
+   * строкой сетки (высота SLOT_HEIGHT) и лежит выше карточек — на заполненном
+   * дне цель иначе скрыта под ними. Слабая заливка (без рамки) не читается как
+   * цель переноса.
+   */
+  it('подсветка цели совпадает со слотом и видна над карточками (FR-B-2)', async () => {
+    await seedDay([placement({ id: 'p1', startMin: 0, durationMin: 120 })])
+    const { wrapper } = await mountPage()
+
+    const grid = wrapper.find('[data-test="grid"]')
+    const clientY = 300
+    await grid.trigger('dragover', { clientY })
+    await flush()
+
+    // Слот считается от контейнера и его scrollTop (FR-B-1: автоскролл к «сейчас»)
+    const scroller = grid.element as HTMLElement
+    const slotIndex = Math.floor((clientY + scroller.scrollTop) / SLOT_HEIGHT)
+    const highlight = wrapper.find('[data-test="slot-hover"]')
+    expect(highlight.exists()).toBe(true)
+    expect(highlight.attributes('style')).toContain(`top: ${slotIndex * SLOT_HEIGHT}px`)
+    expect(highlight.attributes('style')).toContain(`height: ${SLOT_HEIGHT}px`)
+
+    // jsdom не применяет <style> из SFC: слой над карточками и рамка цели
+    // проверяются по исходнику, иначе регресс в CSS остался бы незамеченным
+    const source = readFileSync(`${process.cwd()}/src/components/days/DayGrid.vue`, 'utf8')
+    const rule = /\.day-grid__hover\s*\{([^}]*)\}/.exec(source)?.[1] ?? ''
+    expect(rule).toContain('z-index: 3')
+    expect(rule).toContain('var(--app-drop-target)')
+  })
+
+  /**
+   * Карточку в переносе видно сквозь: полупрозрачная заливка показывает линии
+   * сетки и подсветку целевого слота под ней. Прозрачность задаётся заливкой, а
+   * не `opacity` элемента — иначе название и время (11–12 px) уходят ниже WCAG AA
+   * (журнал, дефект D38; тест `a11y/contrast.spec.ts` ловит `opacity < 1`).
+   */
+  it('переносимая карточка полупрозрачна, но не через opacity (FR-B-2, НФТ §7)', async () => {
+    await seedDay([placement({ id: 'p1', startMin: 15, durationMin: 15 })])
+    const { wrapper } = await mountPage()
+
+    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 0, clientY: 0, button: 0 })
+    window.dispatchEvent(pointerEvent('pointermove', 120))
+    await flush()
+
+    expect(card(wrapper, 'p1').classes()).toContain('placement-card--dragging')
+
+    // jsdom не применяет <style> из SFC: приём прозрачности проверяется по исходнику
+    const source = readFileSync(`${process.cwd()}/src/components/days/PlacementCard.vue`, 'utf8')
+    const rule = /\.placement-card--dragging\s*\{([^}]*)\}/.exec(source)?.[1] ?? ''
+    expect(rule).toContain('background: color-mix(')
+    expect(rule).not.toContain('opacity')
+
+    window.dispatchEvent(pointerEvent('pointerup', 120))
+    await flush()
   })
 
   it('нераспределённое размещение переносится на сетку (FR-B-5)', async () => {
