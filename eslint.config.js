@@ -20,6 +20,10 @@ export default tseslint.config(
       // docs/scaffold/ — снимок-оверлей из документации (Скаффолд §1), а не код приложения:
       // те же файлы скопированы в src/ и линцуются там.
       'docs/scaffold/**',
+      // Скомпилированный quasar.config.ts: файл генерирует сам Quasar CLI (пересборка
+      // конфига в watch-режиме), в git он не попадает (.gitignore). Комментарии в нём
+      // уже вырезаны бандлером, поэтому правила вида no-empty на нём срабатывают ложно.
+      'quasar.config.*.temporary.compiled*',
     ],
   },
   js.configs.recommended,

@@ -1,8 +1,15 @@
 import { fileURLToPath } from 'node:url'
 import { configure } from 'quasar/wrappers'
+import { resolveAppVersion } from './scripts/app-version.mjs'
 
 export default configure((/* ctx */) => {
   const srcDir = fileURLToPath(new URL('./src', import.meta.url))
+  // Версия сборки считается из git (README, «Версия сборки»): ближайший тег
+  // `vX.Y.Z` + смещение от него. Поднимать номер вручную не нужно — новый коммит
+  // сам делает сборку отличной от тега (`0.1.0+3.g01a2e03`), а выпуск фиксируется
+  // тегом. Значение уходит в бандл через `build.define` и читается
+  // `src/services/appInfo.ts`.
+  const appVersion = resolveAppVersion()
 
   return {
     boot: ['i18n', 'db'],
@@ -20,6 +27,18 @@ export default configure((/* ctx */) => {
     build: {
       target: { browser: ['es2022', 'firefox115', 'chrome115', 'safari14'] },
       typescript: { strict: true, vueShim: true },
+      /**
+       * Глобал `__APP_VERSION__` (см. `appVersion` выше) — единственное место в
+       * коде, где номер версии берётся не из `package.json`: в `package.json`
+       * остаётся только база для проектов без тегов.
+       *
+       * Строка оборачивается в `JSON.stringify`, потому что Quasar передаёт
+       * `define` в Vite/Rolldown без изменений, а подстановка идёт текстом:
+       * без кавычек в бандл попал бы невалидный код `0.1.0+3.g01a2e03`.
+       */
+      define: {
+        __APP_VERSION__: JSON.stringify(appVersion),
+      },
       /**
        * Options API нужен сторонним компонентам на ней. Quasar app-vite сам
        * задаёт __VUE_OPTIONS_API__ из этого флага, и по умолчанию он выключен:

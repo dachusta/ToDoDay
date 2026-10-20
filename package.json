@@ -17,7 +17,8 @@
     "test": "vitest run --pool=threads",
     "test:watch": "vitest --pool=threads",
     "test:coverage": "vitest run --pool=threads --coverage",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "version:show": "node scripts/app-version.mjs"
   },
   "dependencies": {
     "@quasar/extras": "^1.16.12",
