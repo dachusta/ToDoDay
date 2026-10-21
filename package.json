@@ -8,8 +8,12 @@
   "type": "module",
   "scripts": {
     "dev": "quasar dev",
+    "predev": "node scripts/clean-qconf.mjs",
     "build": "quasar build",
+    "prebuild": "node scripts/clean-qconf.mjs",
     "build:pwa": "quasar build -m pwa",
+    "prebuild:pwa": "node scripts/clean-qconf.mjs",
+    "clean:qconf": "node scripts/clean-qconf.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{scss,json}\"",

@@ -17,6 +17,26 @@ pnpm install
 quasar dev
 ```
 
+### Временные копии `quasar.config`
+
+Перед `dev`/`build` Quasar CLI компилирует `quasar.config.ts` в соседний файл
+`quasar.config.ts.temporary.compiled.<timestamp>.js` и удаляет его после чтения конфига.
+Удаляет он его через `fs.rmSync`, а в Node.js 25.2.1 на Windows этот вызов **молча ничего
+не делает**, если в пути есть не-ASCII символы (корень проекта — `...\Документы\...`).
+Поэтому в корне оставалась одна копия за каждый запуск, и они копились.
+
+Обход в проекте построен на том, что `fs.unlinkSync` работает в любом случае:
+
+- `pnpm dev`, `pnpm build`, `pnpm build:pwa` перед запуском убирают копии прошлых
+  запусков (`predev`/`prebuild*` → [`scripts/clean-qconf.mjs`](scripts/clean-qconf.mjs));
+- `pnpm clean:qconf` — то же вручную; это замена `quasar clean --qconf`, которая внутри
+  вызывает тот же неработающий `removeSync`;
+- если синхронное удаление на текущем Node.js сломано, скрипт печатает предупреждение.
+  На Node 24 (его выставляет `.tools/env.ps1`) проблемы нет вовсе.
+
+Сами копии в git не попадают (`.gitignore`), ESLint их игнорирует. Обновлять номер
+версии или править `.gitignore` при этом не нужно.
+
 ### Format & Lint the files
 
 ```bash
@@ -27,7 +47,7 @@ pnpm run lint
 
 ```bash
 pnpm typecheck      # vue-tsc --noEmit
-pnpm test           # 420 тестов в 37 файлах
+pnpm test           # 427 тестов в 38 файлах
 pnpm test:coverage  # покрытие services/* и stores/* (порог 70 %)
 pnpm build          # SPA → dist/spa
 pnpm build:pwa      # PWA → dist/pwa (офлайн, манифест, service worker)
