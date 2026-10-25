@@ -19,7 +19,7 @@ const seedTask = (over: Partial<Task> & { id: string }): Task => ({
   ...over,
 })
 
-describe('useTasksStore: гэпы скаффолд §6', () => {
+describe('useTasksStore: API задач (контракты §1)', () => {
   beforeEach(async () => {
     resetStorage()
     freshPinia()

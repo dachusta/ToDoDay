@@ -5,8 +5,7 @@ import tseslint from 'typescript-eslint'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Линтер обязан ловить `new Date('YYYY-MM-DD')` — критерий этапа 9 плана
- * реализации MVP (ТЗ §2.8).
+ * Линтер обязан ловить `new Date('YYYY-MM-DD')` — правило ТЗ §2.8.
  *
  * Проверка идёт по настоящему правилу из `eslint.config.js`: селектор читается
  * из конфига (а не копируется в тест) и исполняется на разборе исходника.

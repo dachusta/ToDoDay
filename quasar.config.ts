@@ -40,8 +40,8 @@ export default configure((/* ctx */) => {
   return {
     boot: ['i18n', 'db'],
 
-    // Скаффолд §3.1 объявляет 'app.scss'; здесь подключён 'app.css', потому что Vite
-    // грузит Sass-препроцессор через свой windowsSafeRealPathSync, а тот вызывает PowerShell
+    // Подключён 'app.css', потому что Vite грузит Sass-препроцессор через свой
+    // windowsSafeRealPathSync, а тот вызывает PowerShell
     // дочерним процессом с pipe — в песочнице DSH это spawn EPERM, и Vite падает с
     // «Preprocessor dependency "sass-embedded" not found». Глобальный слой стилей пуст,
     // поэтому результат идентичен. В обычном окружении вернуть 'app.scss'
@@ -78,9 +78,8 @@ export default configure((/* ctx */) => {
        * включён ради библиотек.
        */
       vueOptionsAPI: true,
-      // Алиасы скаффолда: 'src/...' (boot, stores, services) и Quasar-конвенция
-      // 'pages/...' / 'layouts/...' в router/routes.ts. Мастер Quasar задаёт этот
-      // блок в своём quasar.config.ts; в оверлее его не было, и Vite падал с
+      // 'src/...' (boot, stores, services) и Quasar-конвенция 'pages/...' /
+      // 'layouts/...' в router/routes.ts. Без этой карты Vite падал с
       // «Failed to resolve import "src/stores/ui" from "src/App.vue"»,
       // затем — «... "layouts/MainLayout.vue" from "src/router/routes.ts"».
       alias: {

@@ -25,11 +25,7 @@
 #    таблицы и подвалы частей держатся на ручной вёрстке.
 *.md
 #
-# 4. docs/scaffold/ — снимок скаффолда из документации (Скаффолд §1), не код
-#    приложения; в eslint.config.js он тоже в ignores.
-docs/scaffold/
-
-# Сгенерированное и служебное: в .gitignore, но Prettier читает и .prettierignore
+# 4. Сгенерированное и служебное: в .gitignore, но Prettier читает и .prettierignore
 dist/
 coverage/
 .quasar/

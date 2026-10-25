@@ -25,7 +25,7 @@ const instance = (over: Partial<DayInstance> & { id: string }): DayInstance => (
   ...over,
 })
 
-describe('useStatsStore: гэпы скаффолд §6', () => {
+describe('useStatsStore: API статистики (контракты §4)', () => {
   beforeEach(async () => {
     resetStorage()
     freshPinia()

@@ -487,7 +487,7 @@ describe('SettingsPage: «Данные» (FR-SET-4/5/10, вайрфреймы §
 
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: 'Удалить все дела, шаблоны и историю? Действие необратимо.',
+        message: 'Удалить все дела, планы и историю? Действие необратимо.',
         danger: true,
       }),
     )
@@ -526,7 +526,7 @@ describe('SettingsPage: «Данные» (FR-SET-4/5/10, вайрфреймы §
     )
     expect(confirm.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({
-        message: 'Удалить все дела, шаблоны и историю? Действие необратимо.',
+        message: 'Удалить все дела, планы и историю? Действие необратимо.',
       }),
     )
     // Экспорт выполнен, очистка отменена — данные на месте

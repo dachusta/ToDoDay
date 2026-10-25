@@ -1,6 +1,6 @@
 import { createPinia } from 'pinia'
 
-// Реэкспорт всех сторов (скаффолд §6.7): удобная точка входа для страниц и тестов
+// Реэкспорт всех сторов: удобная точка входа для страниц и тестов
 export { useTasksStore } from './tasks'
 export { useDayPlansStore } from './dayPlans'
 export { useCycleStore } from './cycle'

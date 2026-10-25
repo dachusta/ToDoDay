@@ -98,7 +98,7 @@ export const APPBAR_MENU_ITEMS: readonly MenuItem[] = [
   { id: 'export', icon: 'file_download', labelKey: 'more.export' },
   { id: 'import', icon: 'file_upload', labelKey: 'more.import' },
   // «О приложении» — блок экрана настроек (вайрфреймы §8), поэтому это маршрут
-  // с якорем: страница настроек появится на этапе 8 и обработает hash.
+  // с якорем: страница настроек обрабатывает hash.
   { id: 'about', icon: 'info', labelKey: 'more.about', to: { name: 'settings', hash: '#about' } },
 ]
 

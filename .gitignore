@@ -26,7 +26,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Этап 0: локальный тулчейн и кэши пакетных менеджеров (песочница DSH не даёт писать вне workspace)
+# Локальный тулчейн и кэши пакетных менеджеров (песочница DSH не даёт писать вне workspace)
 /.tools
 /.cache
 /.pnpm-store

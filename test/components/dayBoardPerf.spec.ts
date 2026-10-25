@@ -17,7 +17,7 @@ import { quasarComponents, quasarDirectives, quasarPluginOptions } from '../vite
 import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helpers'
 
 /**
- * Производительность и объявления доски (НФТ ТЗ §7, этап 10 плана).
+ * Производительность и объявления доски (НФТ ТЗ §7).
  *
  * Проверяется то, что можно проверить честно, без браузерных метрик: состав DOM
  * при 100+ размещениях (виртуализация подписей и активный слой размещений),
