@@ -343,6 +343,7 @@ defineExpose({ slotAtY, scrollToNow })
   border: 1px solid var(--app-separator);
   border-radius: 8px;
   background: var(--app-surface);
+  padding: 12px 0;
 }
 
 .day-grid__inner {
