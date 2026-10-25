@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -113,5 +121,25 @@ describe('isSyncRmBroken: диагностика Node.js', () => {
     expect(typeof result).toBe('boolean')
     const cacheDir = join(ROOT, 'node_modules', '.cache')
     expect(readdirSync(cacheDir).filter(name => name.startsWith('.qconf-rm-probe-'))).toEqual([])
+  })
+})
+
+describe('подключение уборки к конфигу сборки', () => {
+  it('quasar.config.ts убирает копии сам, до попытки CLI', () => {
+    const config = readFileSync(join(ROOT, 'quasar.config.ts'), 'utf8')
+
+    // Без этого вызова копии удалял бы только CLI — а его removeSync на Node 25
+    // молча не работает, и прямой `quasar dev` из IDE снова копил бы файлы.
+    expect(config).toContain("from './scripts/clean-qconf.mjs'")
+    expect(config).toContain('removeTemporaryConfigs(projectDir)')
+    // projectDir — корень проекта: копии лежат рядом с конфигом, а не в src
+    expect(config).toContain("new URL('.', import.meta.url)")
+  })
+
+  it('сбой уборки не ломает загрузку конфига', () => {
+    const config = readFileSync(join(ROOT, 'quasar.config.ts'), 'utf8')
+
+    // Уборка — вспомогательная операция: исключение из неё не должно ронять сборку
+    expect(config).toMatch(/try\s*{\s*removeTemporaryConfigs\(projectDir\)\s*}\s*catch/)
   })
 })

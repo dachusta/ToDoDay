@@ -19,16 +19,24 @@ quasar dev
 
 ### Временные копии `quasar.config`
 
-Перед `dev`/`build` Quasar CLI компилирует `quasar.config.ts` в соседний файл
-`quasar.config.ts.temporary.compiled.<timestamp>.js` и удаляет его после чтения конфига.
-Удаляет он его через `fs.rmSync`, а в Node.js 25.2.1 на Windows этот вызов **молча ничего
-не делает**, если в пути есть не-ASCII символы (корень проекта — `...\Документы\...`).
-Поэтому в корне оставалась одна копия за каждый запуск, и они копились.
+Перед `dev`/`build`/`prepare` Quasar CLI компилирует `quasar.config.ts` в соседний файл
+`quasar.config.ts.temporary.compiled.<timestamp>.js` и после чтения конфига удаляет его
+через `fs.rmSync`. В Node.js 25.2.1 на Windows этот вызов **молча ничего не делает**, если
+в пути есть не-ASCII символы (корень проекта — `...\Документы\...`): ошибки нет, файл
+остаётся. Поэтому копии копились — по одной за запуск, в том числе при прямом
+`quasar dev` из IDE, который не проходит через pre-скрипты `pnpm`.
 
-Обход в проекте построен на том, что `fs.unlinkSync` работает в любом случае:
+Уборка сделана так, чтобы не зависеть от способа запуска и версии Node:
 
-- `pnpm dev`, `pnpm build`, `pnpm build:pwa` перед запуском убирают копии прошлых
-  запусков (`predev`/`prebuild*` → [`scripts/clean-qconf.mjs`](scripts/clean-qconf.mjs));
+- [`quasar.config.ts`](quasar.config.ts) при загрузке сам вызывает
+  `removeTemporaryConfigs()` из [`scripts/clean-qconf.mjs`](scripts/clean-qconf.mjs).
+  Это происходит раньше, чем CLI попробует убрать копию своим неработающим `removeSync`,
+  и срабатывает при любом запуске: `quasar dev|build|prepare`, `pnpm dev`, ярлык IDE.
+  Если конфиг падает с ошибкой, копия остаётся для разбора стека — так и задумано CLI;
+  её уберёт следующий запуск;
+- `predev`/`prebuild`/`prebuild:pwa` в [`package.json`](package.json) до запуска убирают
+  копии, оставшиеся от прошлых запусков (в том числе если конфиг не скомпилировался и до
+  его загрузки дело не дошло);
 - `pnpm clean:qconf` — то же вручную; это замена `quasar clean --qconf`, которая внутри
   вызывает тот же неработающий `removeSync`;
 - если синхронное удаление на текущем Node.js сломано, скрипт печатает предупреждение.
@@ -47,7 +55,7 @@ pnpm run lint
 
 ```bash
 pnpm typecheck      # vue-tsc --noEmit
-pnpm test           # 427 тестов в 38 файлах
+pnpm test           # 429 тестов в 38 файлах
 pnpm test:coverage  # покрытие services/* и stores/* (порог 70 %)
 pnpm build          # SPA → dist/spa
 pnpm build:pwa      # PWA → dist/pwa (офлайн, манифест, service worker)

@@ -1,6 +1,14 @@
 import { fileURLToPath } from 'node:url'
 import { configure } from 'quasar/wrappers'
 import { resolveAppVersion } from './scripts/app-version.mjs'
+// Уборка временных копий этого же конфига. CLI пишет копию
+// `quasar.config.ts.temporary.compiled.<timestamp>.js` перед каждым запуском и
+// убирает её через `fs.rmSync`, который на Node 25 при не-ASCII пути молча ничего
+// не делает (корень проекта — `...\Документы\...`), поэтому копии копились.
+// Подробности и проверка версии Node — в scripts/clean-qconf.mjs.
+import { removeTemporaryConfigs } from './scripts/clean-qconf.mjs'
+
+const projectDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default configure((/* ctx */) => {
   const srcDir = fileURLToPath(new URL('./src', import.meta.url))
@@ -10,6 +18,24 @@ export default configure((/* ctx */) => {
   // тегом. Значение уходит в бандл через `build.define` и читается
   // `src/services/appInfo.ts`.
   const appVersion = resolveAppVersion()
+
+  /**
+   * Уборка копии, из которой читается этот конфиг, — после того как все поля
+   * собраны, но до того, как CLI попробует удалить её своим `removeSync` (на Node 25
+   * он молча не работает). Так копии не остаются ни при одном способе запуска:
+   * `quasar dev|build|prepare`, `pnpm dev`, прямой вызов CLI из IDE.
+   *
+   * Именно здесь, а не при импорте модуля: если конфиг упадёт с ошибкой, CLI
+   * специально оставляет копию для разбора стека — этот сценарий не ломается,
+   * копию уберёт следующий запуск. К моменту вызова файл уже прочитан в память,
+   * поэтому удалять его из исполняющегося модуля безопасно.
+   */
+  try {
+    removeTemporaryConfigs(projectDir)
+  } catch {
+    // Уборка — вспомогательная операция: её сбой не должен ломать загрузку конфига.
+    // Оставшуюся копию уберёт следующий запуск.
+  }
 
   return {
     boot: ['i18n', 'db'],
