@@ -1,9 +1,9 @@
 <template>
   <!--
-    Доска дня (вайрфреймы §1, FR-B-1…FR-B-7): шапка дня, баннер пересечений,
-    сетка с размещениями и нераспределённые. Действия FR-B-7 собраны в меню
-    карточки, а диалоги («Переместить в слот…», длительность, замена) живут здесь
-    одним экземпляром: сто карточек не должны держать сто диалогов (НФТ ТЗ §7).
+    Доска дня (FR-B-1…FR-B-8): шапка плана дня, баннер пересечений, сетка с
+    размещениями, нераспределённые и «Убрано из плана». Действия карточки
+    собраны в меню, диалоги правки — в PlacementEditDialogs (один экземпляр на
+    доску, чтобы сто карточек не держали сто диалогов).
   -->
   <section
     class="day-board"
@@ -21,42 +21,47 @@
         data-test="board-template"
       >
         <span
-          v-if="template"
+          v-if="plan"
           class="day-board__accent"
-          :style="{ backgroundColor: template.accentColor }"
+          :style="{ backgroundColor: plan.accentColor }"
           aria-hidden="true"
         />
-        <!--
-          Имя шаблона читается из живого шаблона (FR-D-3), удалённый шаблон даёт
-          заглушку «Шаблон удалён» (FR-D-4), а день без шаблона — «Без шаблона»
-          (FR-D-6): два признака не смешиваются.
-        -->
         <span
-          v-if="template"
+          v-if="plan"
           class="day-board__template-name"
-        >{{ template.name }}</span>
+          data-test="plan-name"
+        >{{ plan.name }}</span>
         <span
-          v-else-if="cycle.isTemplateless"
+          v-else-if="cycle.isPlanMissing"
           class="day-board__template-name"
-          data-test="template-name"
-        >{{ t('day.noTemplate') }}</span>
+          data-test="plan-deleted"
+        >{{ t('day.planDeleted') }}</span>
         <span
           v-else
           class="day-board__template-name"
-          data-test="template-deleted"
-        >{{ t('day.templateDeleted') }}</span>
+          data-test="plan-none"
+        >{{ t('day.noPlan') }}</span>
         <span aria-hidden="true">·</span>
         <span class="day-board__range">{{ timeRange }}</span>
       </div>
-      <!--
-        FR-C-3 / FR-E-1 / FR-E-3: сдвиг на следующий день, завершение дня и
-        отмена завершения. «Следующий день →» показывается, только пока день
-        active и сдвиг в эти сутки ещё не делался (canShiftNext), «Завершить
-        день» — пока день active, «Отменить завершение» — пока в памяти сессии
-        живёт снапшот завершённого дня (FR-E-3), поэтому она остаётся и после
-        того, как тост «День завершён» исчез.
-      -->
+      <div
+        v-if="planRuleText"
+        class="day-board__rule text-caption text-grey-7"
+        data-test="plan-rule"
+      >
+        {{ planRuleText }}
+      </div>
       <div class="day-board__actions q-mt-sm q-gutter-sm">
+        <q-btn
+          v-if="plan"
+          outline
+          no-caps
+          color="primary"
+          icon="edit_calendar"
+          :label="t('day.openPlan')"
+          data-test="open-plan"
+          @click="onOpenPlan"
+        />
         <q-btn
           v-if="cycle.canShiftNext"
           outline
@@ -89,7 +94,6 @@
       </div>
     </header>
 
-    <!-- Счётчик пересечений — число пар, а не карточек (FR-B-3) -->
     <q-banner
       v-if="showConflictBanner"
       dense
@@ -100,10 +104,6 @@
       {{ cycle.conflicts.length }} {{ t('day.conflicts', cycle.conflicts.length) }}
     </q-banner>
 
-    <!--
-      Пустой день (FR-D-6): день уже открыт виртуально, сетка 08:00–22:00 на
-      месте, CTA ничего не «создаёт» — он настраивает шаблон или ведёт к списку дел.
-    -->
     <div
       v-if="cycle.isCurrentDayEmpty"
       class="day-board__empty"
@@ -120,7 +120,7 @@
           unelevated
           no-caps
           color="primary"
-          :label="t('day.setup')"
+          :label="t('day.createPlan')"
           data-test="setup-day"
           @click="goSetup"
         />
@@ -161,7 +161,9 @@
       :now-start-min="nowStartMin"
       :day-start-min="dayStartMin"
       :time-format="timeFormat"
-      :dragging-id="draggingPlacementId"
+      :dragging-id="drag.draggingId.value"
+      :planned-starts="plannedStarts"
+      mode="day"
       @drop-task="onDropTask"
       @hover="cycle.setHoveredSlot"
       @hover-slot-label="onHoverSlotLabel"
@@ -173,20 +175,24 @@
     <UnallocatedZone
       :placements="cycle.unallocatedPlacements"
       :read-only="readOnly"
-      :dragging-id="draggingPlacementId"
+      :dragging-id="drag.draggingId.value"
       :day-start-min="dayStartMin"
       :time-format="timeFormat"
+      :planned-starts="plannedStarts"
+      mode="day"
       @action="onPlacementAction"
       @drag-start="onPlacementDragStart"
       @drag-end="onDragEnd"
     />
 
-    <!--
-      Перенос и смена статуса объявляются словами (НФТ ТЗ §7). Слот под указателем
-      идёт вторым регионом: подсветку незрячий пользователь не видит, а во время
-      переноса `aria-live` меняется часто — постоянные сообщения («размещено»)
-      не должны затираться подписью слота.
-    -->
+    <RemovedPlannedZone
+      :placements="cycle.removedPlacements"
+      :read-only="readOnly"
+      :day-start-min="dayStartMin"
+      :time-format="timeFormat"
+      @restore="onRestore"
+    />
+
     <p
       class="day-board__live"
       aria-live="polite"
@@ -202,235 +208,102 @@
       {{ hoverAnnouncement }}
     </p>
 
-    <!-- FR-B-7: «Изменить длительность» — правит только это размещение -->
-    <q-dialog v-model="durationOpen">
-      <q-card style="min-width: 280px">
-        <q-card-section class="text-subtitle1">
-          {{ t('placement.durationTitle') }}
-        </q-card-section>
-        <q-separator />
-        <q-card-section class="row items-center justify-center q-gutter-md">
-          <q-btn
-            round
-            dense
-            icon="remove"
-            :aria-label="t('tasks.decrease')"
-            data-test="duration-minus"
-            @click="stepDuration(-15)"
-          />
-          <span
-            class="text-h6"
-            data-test="duration-value"
-          >{{ durationLabel }}</span>
-          <q-btn
-            round
-            dense
-            icon="add"
-            :aria-label="t('tasks.increase')"
-            data-test="duration-plus"
-            @click="stepDuration(15)"
-          />
-        </q-card-section>
-        <q-separator />
-        <q-card-actions align="right">
-          <q-btn
-            v-close-popup
-            flat
-            no-caps
-            :label="t('common.cancel')"
-          />
-          <q-btn
-            unelevated
-            no-caps
-            color="primary"
-            :label="t('common.save')"
-            data-test="duration-save"
-            @click="saveDuration"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
+    <PlacementEditDialogs
+      ref="dialogsRef"
+      :slots="cycle.slots"
+      :time-format="timeFormat"
+      :day-start-min="dayStartMin"
+      @change-duration="onDialogDuration"
+      @replace="onDialogReplace"
+      @move-to-slot="onDialogMove"
+    />
 
-    <!-- FR-B-7: «Заменить дело» — снимок и длительность берутся с нового дела -->
-    <q-dialog v-model="replaceOpen">
-      <q-card style="min-width: 320px; max-width: 460px">
-        <q-card-section class="text-subtitle1">
-          {{ t('placement.replaceTitle') }}
-        </q-card-section>
-        <q-separator />
-        <q-card-section class="day-board__picker">
-          <p
-            v-if="replaceCandidates.length === 0"
-            class="text-grey-7"
-            data-test="replace-empty"
-          >
-            {{ t('placement.noTasks') }}
-          </p>
-          <q-list v-else>
-            <q-item
-              v-for="task in replaceCandidates"
-              :key="task.id"
-              v-close-popup
-              clickable
-              :data-test="`replace-${task.id}`"
-              @click="applyReplace(task.id)"
-            >
-              <q-item-section avatar>
-                <span
-                  class="day-board__swatch"
-                  :style="{ backgroundColor: task.color }"
-                />
-              </q-item-section>
-              <q-item-section>{{ task.title }}</q-item-section>
-              <q-item-section side>
-                <PriorityBadge :priority="task.priority" />
-              </q-item-section>
-            </q-item>
-          </q-list>
-        </q-card-section>
-        <q-separator />
-        <q-card-actions align="right">
-          <q-btn
-            v-close-popup
-            flat
-            no-caps
-            :label="t('common.cancel')"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
-
-    <!--
-      FR-B-2: «Переместить в слот…» — клавиатурная альтернатива drag-and-drop.
-      Список слотов дня: стрелки двигают фокус внутри списка и не переносят
-      карточку по сетке; выбор слота делает то же, что drop.
-    -->
-    <q-dialog
-      v-model="slotPickerOpen"
-      @show="focusFirstSlot"
-    >
-      <q-card style="min-width: 280px; max-width: 420px">
-        <q-card-section class="text-subtitle1">
-          {{ t('placement.moveToSlotTitle') }}
-        </q-card-section>
-        <q-separator />
-        <div
-          ref="slotListEl"
-          class="day-board__slots"
-          role="list"
-          :aria-label="t('placement.slotListAria')"
-          data-test="slot-list"
-          @keydown="onSlotListKeydown"
-        >
-          <div
-            v-for="slot in cycle.slots"
-            :key="slot.index"
-            class="day-board__slot"
-            role="listitem"
-            tabindex="0"
-            :aria-label="slotLabel(slot)"
-            :data-test="`slot-${slot.index}`"
-            @click="applyMove(slot)"
-            @keydown.enter.prevent="applyMove(slot)"
-            @keydown.space.prevent="applyMove(slot)"
-          >
-            {{ slotLabel(slot) }}
-          </div>
-        </div>
-        <q-separator />
-        <q-card-actions align="right">
-          <q-btn
-            v-close-popup
-            flat
-            no-caps
-            :label="t('common.cancel')"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
-
-    <!--
-      FR-E-1: диалог завершения дня. Открытием управляет `completing` в сторе —
-      его ставят кнопка «Завершить день», сдвиг (FR-C-3) и авто-переход при смене
-      суток (FR-C-4), поэтому диалог один на все три триггера.
-    -->
     <CompleteDayDialog
       v-model="completionOpen"
-      :placements="placements"
+      :placements="completionPlacements"
       :date-label="dateLabel"
-      :template-label="templateLabel"
+      :plan-label="planLabel"
       :source="cycle.completionSource"
       :shift-pending="cycle.shiftPending"
       :day-start-min="dayStartMin"
       :time-format="timeFormat"
+      :removed-count="cycle.removedCount"
       @submit="onCompleteDay"
     />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useNow } from '@vueuse/core'
 import { format } from 'date-fns'
-import { enUS, ru } from 'date-fns/locale'
 import DayGrid from './DayGrid.vue'
 import UnallocatedZone from './UnallocatedZone.vue'
+import RemovedPlannedZone from './RemovedPlannedZone.vue'
+import PlacementEditDialogs from './PlacementEditDialogs.vue'
 import CompleteDayDialog from 'src/components/completion/CompleteDayDialog.vue'
-import PriorityBadge from 'src/components/common/PriorityBadge.vue'
-import { durationDescriptor } from 'src/components/tasks/taskFormat'
+import { formatDayLabel, formatTimeRange, ruleTextDescriptor } from './dayFormat'
+import { weekdayLabelKey } from './dayRepeat'
+import { usePlacementDrag } from './usePlacementDrag'
 import type { PlacementActionId } from './placementActions'
-import { formatClock, minutesOfDay, parseISODate, todayISO } from 'src/services/dates'
+import { formatClock, minutesOfDay, todayISO } from 'src/services/dates'
 import type { Slot } from 'src/models/cycle'
 import type { Placement } from 'src/models/dayInstance'
 import type { PlacementStatus } from 'src/models/enums'
 import { useCycleStore } from 'src/stores/cycle'
 import { useSettingsStore } from 'src/stores/settings'
-import { useTasksStore } from 'src/stores/tasks'
 import { useUiStore } from 'src/stores/ui'
 
 const { t } = useI18n()
 const router = useRouter()
 const cycle = useCycleStore()
 const settings = useSettingsStore()
-const tasks = useTasksStore()
 const ui = useUiStore()
 
-/** Локальные словари даты: подпись дня не зависит от системной локали браузера. */
-const DATE_LOCALES = { ru, en: enUS } as const
-
 const gridRef = ref<InstanceType<typeof DayGrid> | null>(null)
-const slotListEl = ref<HTMLElement | null>(null)
+const dialogsRef = ref<InstanceType<typeof PlacementEditDialogs> | null>(null)
 
 const announcement = ref('')
-/**
- * Слот под указателем (НФТ ТЗ §7). Живёт до следующего `pointermove`: подпись
- * приходит из DayGrid с частотой кадров, а объявлять нужно только смену слота.
- */
 const hoverAnnouncement = ref('')
-const draggingPlacementId = ref<string | null>(null)
-const durationOpen = ref(false)
-const durationDraft = ref(15)
-const replaceOpen = ref(false)
-const slotPickerOpen = ref(false)
-const activePlacementId = ref<string | null>(null)
-
-/**
- * Часы доски: минутная точность нужна маркеру текущего времени и рисунку ▶
- * (FR-B-1, FR-B-6), а сравнение даты идёт через todayISO() — кэш часов полночь
- * не догоняет (ТЗ §2.8).
- */
 const now = useNow({ interval: 60_000 })
 
+const plan = computed(() => cycle.currentPlan)
 const placements = computed<Placement[]>(() => cycle.currentInstance?.placements ?? [])
+const completionPlacements = computed(() =>
+  placements.value.filter(placement => placement.removed !== true),
+)
 const timeFormat = computed(() => settings.timeFormat)
 const readOnly = computed(() => cycle.currentInstance?.status !== 'active')
 const dayStartMin = computed(() =>
   cycle.currentInstance ? minutesOfDay(cycle.currentInstance.timeStart) : 0,
 )
 
-/** Экземпляр датирован сегодняшним днём: иначе маркер и ▶ смысла не имеют. */
+const dateLabel = computed(() => {
+  const instance = cycle.currentInstance
+  if (!instance) return ''
+  return formatDayLabel(instance.date, settings.language)
+})
+
+const timeRange = computed(() => {
+  const instance = cycle.currentInstance
+  if (!instance) return ''
+  return formatTimeRange(instance.timeStart, instance.timeEnd, timeFormat.value)
+})
+
+const planLabel = computed(() => {
+  if (plan.value) return plan.value.name
+  return cycle.isPlanMissing ? t('day.planDeleted') : t('day.noPlan')
+})
+
+const planRuleText = computed(() => {
+  const current = plan.value
+  if (!current || current.repeatRule.type === 'none') return ''
+  const descriptor = ruleTextDescriptor(current.repeatRule, weekday => t(weekdayLabelKey(weekday)))
+  return t(descriptor.key, descriptor.params)
+})
+
 const isToday = computed(() => {
   void now.value
   return cycle.currentInstance?.date === todayISO()
@@ -446,7 +319,6 @@ const nowStartMin = computed<number | null>(() => {
   return offset
 })
 
-/** Только pending/done со слотом (scheduler.detectConflicts, FR-B-3). */
 const conflictIds = computed(() => {
   const ids = new Set<string>()
   if (!settings.showConflicts) return ids
@@ -459,37 +331,16 @@ const conflictIds = computed(() => {
 
 const showConflictBanner = computed(() => settings.showConflicts && cycle.conflicts.length > 0)
 
-const dateLabel = computed(() => {
-  const instance = cycle.currentInstance
-  if (!instance) return ''
-  const date = parseISODate(instance.date)
-  const locale = DATE_LOCALES[settings.language]
-  const weekday = format(date, 'EEEE', { locale })
-  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} · ${format(date, 'd MMMM', { locale })}`
+/** Плановое время только для отклонившихся размещений: «план: HH:mm». */
+const plannedStarts = computed(() => {
+  const map = new Map<string, number | null>()
+  for (const placement of placements.value) {
+    const planned = cycle.plannedTimeFor(placement)
+    if (planned !== null && planned !== placement.startMin) map.set(placement.id, planned)
+  }
+  return map
 })
 
-const timeRange = computed(() => {
-  const instance = cycle.currentInstance
-  if (!instance) return ''
-  return `${formatClock(instance.timeStart, timeFormat.value)}–${formatClock(instance.timeEnd, timeFormat.value)}`
-})
-
-const template = computed(() => cycle.currentTemplate)
-
-/**
- * Имя шаблона для диалога завершения: живой шаблон, иначе заглушки FR-D-4/FR-D-6
- * — те же два признака, что и в шапке, и они не смешиваются.
- */
-const templateLabel = computed(() => {
-  if (template.value) return template.value.name
-  return cycle.isTemplateless ? t('day.noTemplate') : t('day.templateDeleted')
-})
-
-/**
- * Диалог завершения живёт по состоянию стора (`completing`), а не по своему
- * ref: открыть его могут три триггера (FR-E-1). Закрытие без фиксации — всегда
- * `dismissCompletion`, потому что у авто-триггера это ещё и разовый пропуск.
- */
 const completionOpen = computed({
   get: () => cycle.completing,
   set: (value: boolean) => {
@@ -497,18 +348,20 @@ const completionOpen = computed({
   },
 })
 
-const activePlacement = computed(
-  () => placements.value.find(p => p.id === activePlacementId.value) ?? null,
-)
-
-/** Кандидаты на замену (FR-B-7): живые дела, архивные на доску не ставятся. */
-const replaceCandidates = computed(() =>
-  [...tasks.activeTasks].sort((a, b) => a.title.localeCompare(b.title)),
-)
-
-const durationLabel = computed(() => {
-  const { key, params } = durationDescriptor(durationDraft.value)
-  return t(key, params)
+const drag = usePlacementDrag({
+  gridRef,
+  readOnly: () => readOnly.value,
+  slots: () => cycle.slots,
+  hoveredSlot: () => cycle.hoveredSlot,
+  onHover: index => cycle.setHoveredSlot(index),
+  onDrop: (placementId, slot) => {
+    const placement = findPlacement(placementId)
+    if (placement) return applyMoveTo(placement, slot)
+  },
+  onEnd: () => {
+    hoverAnnouncement.value = ''
+    cycle.endDrag()
+  },
 })
 
 function findPlacement(id: string): Placement | undefined {
@@ -523,10 +376,6 @@ function announce(key: string, title: string, time: string) {
   announcement.value = t(key, { title, time })
 }
 
-/**
- * Слот под указателем (НФТ ТЗ §7). Пустая подпись (указатель ушёл с сетки)
- * очищает регион: последняя подпись не остаётся «текущей» после переноса.
- */
 function onHoverSlotLabel(label: string) {
   hoverAnnouncement.value = label
 }
@@ -535,21 +384,20 @@ function notifySaveError(retry: () => void) {
   ui.notify(t('placement.saveError'), 'error', { label: t('common.retry'), handler: retry })
 }
 
-/** Пустой день: «Настроить день» ведёт к шаблонам, «Взять дело» — к списку дел (FR-D-6). */
 function goSetup() {
-  void router.push({ name: 'days' })
+  void router.push({ name: 'days', query: { create: todayISO() } })
 }
 
 function goTasks() {
   void router.push({ name: 'tasks' })
 }
 
-// --- Завершение дня (FR-E-1…FR-E-3) ---------------------------------------
+function onOpenPlan() {
+  const planId = cycle.currentPlan?.id
+  if (planId) void router.push({ name: 'day-plan', params: { id: planId } })
+}
 
-/**
- * FR-C-3: «Следующий день →» ставит shiftPending и открывает диалог завершения;
- * отказы показываются текстом по коду (вайрфреймы §9.3).
- */
+// --- Завершение дня ------------------------------------------------------
 async function onShiftNext() {
   const result = await cycle.shiftToNextDay()
   if (result.ok) return
@@ -560,13 +408,6 @@ async function onShiftNext() {
   ui.notify(message, 'warning', undefined, 5000)
 }
 
-/**
- * FR-S-1/FR-E-3: после завершения тост «День завершён» (5 с, вайрфреймы §9.3)
- * даёт ярлык «Отменить», а кнопка в шапке остаётся всю сессию — тост её не
- * заменяет. Отдельная ветка — FR-E-2: фиксация записалась, но сегодняшний день
- * не открылся; повторять completeDay бессмысленно (день уже completed), поэтому
- * предлагается повторный resolveCurrentDay().
- */
 async function onCompleteDay(marks: Record<string, 'done' | 'skipped'>) {
   const result = await cycle.completeDay(marks)
   if (result.ok) {
@@ -595,7 +436,6 @@ async function onCompleteDay(marks: Record<string, 'done' | 'skipped'>) {
   })
 }
 
-/** FR-E-2: `details.reason = 'RESOLVE_AFTER_COMPLETE'` — свой путь обработки. */
 function isResolveAfterComplete(details: unknown): boolean {
   return (
     typeof details === 'object' &&
@@ -604,7 +444,6 @@ function isResolveAfterComplete(details: unknown): boolean {
   )
 }
 
-/** FR-E-3: отмена возвращает день, снимок и удаляет экземпляр, созданный завершением. */
 async function onCancelCompletion() {
   const result = await cycle.cancelCompletion()
   if (result.ok) return
@@ -614,7 +453,6 @@ async function onCancelCompletion() {
   })
 }
 
-/** Слот ещё не начался: отметка `done` сохраняется, но с предупреждением (FR-B-7). */
 function isFutureSlot(placement: Placement): boolean {
   const offset = nowStartMin.value
   return offset !== null && placement.startMin !== null && placement.startMin > offset
@@ -634,7 +472,15 @@ async function applyRemove(placement: Placement) {
   announcement.value = t('placement.removed')
 }
 
-/** Общий путь переноса: и drop по сетке, и выбор слота в меню (FR-B-2). */
+async function onRestore(placement: Placement) {
+  const result = await cycle.restorePlacement(placement.id)
+  if (!result.ok) {
+    notifySaveError(() => void onRestore(placement))
+    return
+  }
+  announcement.value = t('day.restored')
+}
+
 async function applyMoveTo(placement: Placement, slot: Slot) {
   const result = await cycle.movePlacement(placement.id, slot.startMin)
   if (!result.ok) {
@@ -643,7 +489,6 @@ async function applyMoveTo(placement: Placement, slot: Slot) {
   }
   announce('placement.moved', placement.taskSnapshot.title, slotLabel(slot))
   const moved = findPlacement(placement.id)
-  // FR-B-4: валидный, но не помещающийся слот уводит размещение в нераспределённые
   if (moved !== undefined && moved.startMin === null) {
     ui.notify(t('placement.doesNotFit'), 'warning', undefined, 5000)
   }
@@ -680,152 +525,61 @@ async function onPlacementAction(id: PlacementActionId, placement: Placement) {
       await applyStatus(placement, 'pending')
       return
     case 'change-duration':
-      activePlacementId.value = placement.id
-      durationDraft.value = placement.durationMin
-      durationOpen.value = true
+      dialogsRef.value?.openDuration(placement)
       return
     case 'replace':
-      activePlacementId.value = placement.id
-      replaceOpen.value = true
+      dialogsRef.value?.openReplace(placement)
       return
     case 'move-to-slot':
-      activePlacementId.value = placement.id
-      slotPickerOpen.value = true
+      dialogsRef.value?.openSlotPicker(placement)
       return
     case 'remove':
       await applyRemove(placement)
   }
 }
 
-function stepDuration(delta: number) {
-  durationDraft.value = Math.min(1425, Math.max(15, durationDraft.value + delta))
-}
-
-async function saveDuration() {
-  const placement = activePlacement.value
-  durationOpen.value = false
+async function onDialogDuration(placementId: string, durationMin: number) {
+  const placement = findPlacement(placementId)
   if (!placement) return
-
-  const result = await cycle.changePlacementDuration(placement.id, durationDraft.value)
+  const result = await cycle.changePlacementDuration(placement.id, durationMin)
   if (!result.ok) {
-    notifySaveError(() => {
-      durationOpen.value = true
-      void saveDuration()
-    })
+    notifySaveError(() => void onDialogDuration(placementId, durationMin))
     return
   }
-  const updated = findPlacement(placement.id)
+  const updated = findPlacement(placementId)
   if (updated !== undefined && updated.startMin === null) {
     ui.notify(t('placement.doesNotFit'), 'warning', undefined, 5000)
   }
 }
 
-async function applyReplace(taskId: string) {
-  const placement = activePlacement.value
-  replaceOpen.value = false
+async function onDialogReplace(placementId: string, taskId: string) {
+  const placement = findPlacement(placementId)
   if (!placement) return
-
   const result = await cycle.replacePlacement(placement.id, taskId)
   if (!result.ok) {
-    notifySaveError(() => void applyReplace(taskId))
+    notifySaveError(() => void onDialogReplace(placementId, taskId))
     return
   }
-  const updated = findPlacement(placement.id)
+  const updated = findPlacement(placementId)
   if (updated !== undefined && updated.startMin === null) {
     ui.notify(t('placement.doesNotFit'), 'warning', undefined, 5000)
   }
 }
 
-async function applyMove(slot: Slot) {
-  const placement = activePlacement.value
-  slotPickerOpen.value = false
-  if (!placement) return
-  await applyMoveTo(placement, slot)
+async function onDialogMove(placementId: string, slot: Slot) {
+  const placement = findPlacement(placementId)
+  if (placement) await applyMoveTo(placement, slot)
 }
-
-// --- Перетаскивание размещения по сетке (FR-B-2) --------------------------
 
 function onPlacementDragStart(placement: Placement, event: PointerEvent) {
-  if (readOnly.value) return
-  draggingPlacementId.value = placement.id
-  // Контракты §3.1: перенос с доски отмечается в сторе (dragSource = 'board')
   cycle.startDrag(placement.taskId, 'board')
-  window.addEventListener('pointermove', onDragMove)
-  window.addEventListener('pointerup', onDragDrop)
-  window.addEventListener('pointercancel', onDragEnd)
-  onDragMove(event)
-}
-
-function onDragMove(event: PointerEvent) {
-  cycle.setHoveredSlot(gridRef.value?.slotAtY(event.clientY) ?? null)
-}
-
-async function onDragDrop() {
-  const placementId = draggingPlacementId.value
-  const slotIndex = cycle.hoveredSlot
-  onDragEnd()
-  if (placementId === null || slotIndex === null) return
-
-  const slot = cycle.slots[slotIndex]
-  const placement = findPlacement(placementId)
-  if (slot === undefined || placement === undefined) return
-  if (placement.startMin === slot.startMin) return
-  await applyMoveTo(placement, slot)
+  drag.startDrag(placement, event)
 }
 
 function onDragEnd() {
-  draggingPlacementId.value = null
+  drag.endDrag()
   cycle.endDrag()
-  hoverAnnouncement.value = ''
-  window.removeEventListener('pointermove', onDragMove)
-  window.removeEventListener('pointerup', onDragDrop)
-  window.removeEventListener('pointercancel', onDragEnd)
 }
-
-// --- Список слотов в диалоге (FR-B-2, НФТ ТЗ §7) ---------------------------
-
-function slotItems(): HTMLElement[] {
-  return [...(slotListEl.value?.querySelectorAll<HTMLElement>('[role="listitem"]') ?? [])]
-}
-
-/** Фокус на первый слот: список открывается готовым к работе стрелками (НФТ §7). */
-function focusFirstSlot() {
-  slotItems()[0]?.focus()
-}
-
-// Диалог рендерит содержимое в портал: к моменту события `show` список уже есть,
-// но полагаться только на него нельзя — дублируем фокус после отрисовки, а
-// затем ещё раз макротаском: закрытие меню карточки возвращает фокус на якорь
-// (НФТ ТЗ §7: список слотов открывается готовым к работе стрелками).
-watch(slotPickerOpen, open => {
-  if (!open) return
-  void nextTick(() => {
-    focusFirstSlot()
-    setTimeout(focusFirstSlot, 0)
-  })
-})
-
-/** Стрелки двигают фокус только внутри списка слотов. */
-function onSlotListKeydown(event: KeyboardEvent) {
-  const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End']
-  if (!keys.includes(event.key)) return
-  event.preventDefault()
-
-  const items = slotItems()
-  if (items.length === 0) return
-  const current = items.findIndex(item => item === document.activeElement)
-  const next =
-    event.key === 'ArrowDown'
-      ? current + 1
-      : event.key === 'ArrowUp'
-        ? current - 1
-        : event.key === 'Home'
-          ? 0
-          : items.length - 1
-  items[Math.min(Math.max(next, 0), items.length - 1)]?.focus()
-}
-
-onUnmounted(onDragEnd)
 </script>
 
 <style scoped>
@@ -857,7 +611,6 @@ onUnmounted(onDragEnd)
   border-radius: 50%;
 }
 
-/* Действия шапки: сдвиг, завершение и отмена завершения (FR-C-3, FR-E-1…FR-E-3) */
 .day-board__actions {
   display: flex;
   flex-wrap: wrap;
@@ -885,35 +638,5 @@ onUnmounted(onDragEnd)
 
 .day-board__live--slot {
   margin-top: 0;
-}
-
-.day-board__picker {
-  max-height: 50vh;
-  overflow-y: auto;
-}
-
-.day-board__swatch {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
-}
-
-.day-board__slots {
-  max-height: 50vh;
-  overflow-y: auto;
-}
-
-.day-board__slot {
-  padding: 4px 12px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.day-board__slot:focus-visible,
-.day-board__slot:hover {
-  background: rgba(25, 118, 210, 0.12);
-  outline: none;
 }
 </style>

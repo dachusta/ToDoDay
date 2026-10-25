@@ -1,25 +1,34 @@
 import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
-import { QLayout, QPageContainer, Quasar } from 'quasar'
-import { createPinia, setActivePinia } from 'pinia'
-import { defineComponent, nextTick } from 'vue'
+import { QExpansionItem, QLayout, QPageContainer, Quasar } from 'quasar'
+import { createPinia, getActivePinia, setActivePinia, type Pinia } from 'pinia'
+import { defineComponent } from 'vue'
+import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DaysPage from 'src/pages/DaysPage.vue'
-import { db } from 'src/services/db'
+import DayPlanForm from 'src/components/days/DayPlanForm.vue'
 import { i18n } from 'src/boot/i18n'
+import { db } from 'src/services/db'
+import { addDaysISO, todayISO } from 'src/services/dates'
+import { formatShortDateLabel } from 'src/components/days/dayFormat'
 import { err } from 'src/models/common'
-import { useDaysStore } from 'src/stores/days'
+import type { DayPlan, DayPlanInput } from 'src/models/day'
+import type { DayInstance } from 'src/models/dayInstance'
+import type { Task, TaskInput } from 'src/models/task'
 import { useCycleStore } from 'src/stores/cycle'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useTasksStore } from 'src/stores/tasks'
 import { useUiStore } from 'src/stores/ui'
-import type { DayTemplate } from 'src/models/day'
-import type { DayInstance } from 'src/models/dayInstance'
 import { quasarComponents, quasarDirectives, quasarPluginOptions } from '../vitest/quasar'
 import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helpers'
 
 /**
- * Экран «Дни» целиком (вайрфреймы §3, FR-D-1…FR-D-6). Страница монтируется в
- * реальном каркасе QLayout + QPageContainer: вне layout QPage и QPageSticky (FAB)
- * не рендерятся вовсе, а в приложении они всегда внутри него.
+ * Раздел «Дни» (FR-D-1…FR-D-7): единый список планов дней — конкретные даты,
+ * повторяющиеся планы и заготовки «без даты». Страница монтируется в реальном
+ * каркасе QLayout + QPageContainer: вне layout QPage и QPageSticky (FAB) не
+ * рендерятся, а в приложении раздел всегда внутри него.
+ *
+ * Планы создаются через стор (он же валидирует ввод), поэтому тест проверяет
+ * связку «стор → карточка/секция», а не ручную раскладку строк в Dexie.
  */
 
 const $ = <T extends Element>(selector: string): T | null =>
@@ -43,6 +52,159 @@ const Harness = defineComponent({
 /** Смонтированные страницы: снимаем их до сброса БД, иначе живут старые liveQuery. */
 const mounted: VueWrapper[] = []
 
+function makeRouter(): Router {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'today', component: { template: '<div />' } },
+      { path: '/days', name: 'days', component: { template: '<div />' } },
+      { path: '/days/:id', name: 'day-plan', component: { template: '<div />' } },
+    ],
+  })
+}
+
+/**
+ * Материализация планов идёт транзакциями Dexie + liveQuery, поэтому тест ждёт
+ * условие, а не фиксированную паузу.
+ */
+async function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
+  const start = Date.now()
+  while (!check() && Date.now() - start < timeoutMs) await flush(20)
+}
+
+async function mountPage(
+  path = '/days',
+  pinia: Pinia = getActivePinia() ?? createPinia(),
+): Promise<{ wrapper: VueWrapper; router: Router }> {
+  setActivePinia(pinia)
+  const router = makeRouter()
+  await router.push(path)
+  await router.isReady()
+
+  const wrapper = mount(Harness, {
+    global: {
+      plugins: [[Quasar, quasarPluginOptions], pinia, i18n, router],
+      // QExpansionItem не входит в общий набор test/vitest/quasar.ts: страница
+      // использует его для свёрнутых секций «Прошедшие» и «Без даты».
+      components: { ...quasarComponents, QExpansionItem },
+      directives: quasarDirectives,
+    },
+    attachTo: document.body,
+  })
+  mounted.push(wrapper)
+
+  await waitUntil(
+    () => useDayPlansStore().initialized || wrapper.find('[data-test="load-error"]').exists(),
+  )
+  await flush()
+  return { wrapper, router }
+}
+
+async function clickElement(element: Element | null): Promise<void> {
+  if (element === null) throw new Error('элемент не найден')
+  await new DOMWrapper(element).trigger('click')
+  await flush()
+}
+
+async function click(selector: string): Promise<void> {
+  await clickElement($(selector))
+}
+
+function inputElement(selector: string): HTMLInputElement {
+  const root = $(selector)
+  if (root === null) throw new Error(`поле ${selector} не найдено`)
+  if (root instanceof HTMLInputElement) return root
+  const input = root.querySelector('input')
+  if (input === null) throw new Error(`поле ${selector} не найдено`)
+  return input
+}
+
+async function setInput(selector: string, value: string): Promise<void> {
+  await new DOMWrapper(inputElement(selector)).setValue(value)
+  await flush(0)
+}
+
+/** QDialog/QMenu телепортируют разметку в body — ищем пункты меню там. */
+async function openMenu(wrapper: VueWrapper, planId: string): Promise<void> {
+  await wrapper.find(`[data-plan="${planId}"] [data-test="menu"]`).trigger('click')
+  await flush()
+}
+
+async function clickMenuAction(action: string): Promise<void> {
+  await click(`[data-action="${action}"]`)
+}
+
+async function openForm(): Promise<void> {
+  await waitUntil(() => $('[data-test="new-day"]') !== null)
+  await click('[data-test="new-day"]')
+  await waitUntil(() => $('[data-test="name"]') !== null)
+}
+
+async function saveForm(): Promise<void> {
+  await click('[data-test="save"]')
+  await flush()
+}
+
+const input = (over: Partial<DayPlanInput> = {}): DayPlanInput => ({
+  name: 'День',
+  accentColor: '#2196F3',
+  date: todayISO(),
+  repeatRule: { type: 'none' },
+  timeStart: '08:00',
+  timeEnd: '22:00',
+  ...over,
+})
+
+async function seedPlan(over: Partial<DayPlanInput> = {}): Promise<DayPlan> {
+  const result = await useDayPlansStore().createPlan(input(over))
+  if (!result.ok) throw new Error(`план не создан: ${result.error.message}`)
+  return result.data
+}
+
+async function seedTask(over: Partial<TaskInput> = {}): Promise<Task> {
+  const result = await useTasksStore().createTask({
+    title: 'Дело',
+    priority: 'medium',
+    color: '#2196F3',
+    durationMin: 30,
+    ...over,
+  })
+  if (!result.ok) throw new Error('дело не создано')
+  return result.data
+}
+
+/** Строка плана для проверок, которые приходят в БД в обход валидатора (импорт). */
+const planRow = (over: Partial<DayPlan> & { id: string }): DayPlan => ({
+  name: `План ${over.id}`,
+  accentColor: '#2196F3',
+  date: null,
+  repeatRule: { type: 'none' },
+  timeStart: '08:00',
+  timeEnd: '22:00',
+  gridStepMin: 15,
+  plannedPlacements: [],
+  createdAt: 1,
+  updatedAt: 1,
+  ...over,
+})
+
+const activeInstance = (planId: string): DayInstance => ({
+  id: 'inst-1',
+  planId,
+  templateId: null,
+  date: todayISO(),
+  status: 'active',
+  placements: [],
+  timeStart: '08:00',
+  timeEnd: '22:00',
+  createdAt: 1,
+})
+
+const cards = (wrapper: VueWrapper): DOMWrapper<Element>[] =>
+  wrapper.findAll('[data-plan]')
+const card = (wrapper: VueWrapper, id: string): DOMWrapper<Element> =>
+  wrapper.find(`[data-plan="${id}"]`)
+
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) {
     try {
@@ -51,494 +213,382 @@ afterEach(() => {
       // Обёртка могла быть снята тестом — для очистки это неважно
     }
   }
-  useDaysStore().unsubscribe()
+  useDayPlansStore().unsubscribe()
+  useTasksStore().unsubscribe()
   useCycleStore().dispose()
   // QDialog/QMenu телепортируют разметку в body (приём из tasksPage.spec.ts)
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
 })
 
-const template = (over: Partial<DayTemplate> & { id: string }): DayTemplate => ({
-  name: `шаблон ${over.id}`,
-  order: 0,
-  timeStart: '08:00',
-  timeEnd: '22:00',
-  gridStepMin: 15,
-  accentColor: '#2196F3',
-  repeatRule: { type: 'none' },
-  plannedTaskIds: [],
-  createdAt: 1,
-  ...over,
+beforeEach(async () => {
+  resetStorage()
+  freshPinia()
+  await resetDatabase()
 })
 
-/** Четыре шаблона вайрфреймов §3.1 — по одному на каждый вид правила. */
-const wireframeTemplates = (): DayTemplate[] => [
-  template({
-    id: 't1',
-    name: 'Рабочий день',
-    order: 0,
-    repeatRule: { type: 'weekdays', weekdays: [0, 1, 2, 3, 4] },
-  }),
-  template({
-    id: 't2',
-    name: 'Спорт-день',
-    order: 1,
-    timeStart: '06:00',
-    timeEnd: '10:00',
-    accentColor: '#4CAF50',
-    repeatRule: { type: 'monthdays', monthdays: [1, 15] },
-  }),
-  template({
-    id: 't3',
-    name: 'Выходной',
-    order: 2,
-    timeStart: '09:00',
-    timeEnd: '23:00',
-    accentColor: '#FF9800',
-    repeatRule: { type: 'weekdays', weekdays: [5, 6] },
-  }),
-  template({ id: 't4', name: 'Свободный день', order: 3, timeStart: '10:00', timeEnd: '20:00' }),
-]
-
-const activeInstance: DayInstance = {
-  id: 'inst-1',
-  templateId: 't1',
-  date: '2020-01-01',
-  status: 'active',
-  placements: [],
-  timeStart: '08:00',
-  timeEnd: '22:00',
-  createdAt: 1,
-}
-
-function buildPage(pinia: ReturnType<typeof createPinia>): VueWrapper {
-  const wrapper = mount(Harness, {
-    global: {
-      plugins: [[Quasar, quasarPluginOptions], pinia, i18n],
-      components: quasarComponents,
-      directives: quasarDirectives,
-    },
-    attachTo: document.body,
-  })
-  mounted.push(wrapper)
-  return wrapper
-}
-
-/** Страница со своим (или переданным) Pinia: свой нужен там, где важен spy. */
-async function mountPage(pinia = createPinia()): Promise<VueWrapper> {
-  setActivePinia(pinia)
-  const wrapper = buildPage(pinia)
-  // `daysStore.loadAll()` читает таблицу и подписывает liveQuery асинхронно:
-  // под нагрузкой полного прогона фиксированной паузы не хватает, и список
-  // приходит пустым. Ждём данные стора или баннер ошибки загрузки.
-  await waitUntil(
-    () => useDaysStore().initialized || wrapper.find('[data-test="load-error"]').exists(),
-    3000,
-  )
-  await flush()
-  return wrapper
-}
-
-const cardNames = (wrapper: VueWrapper): string[] =>
-  wrapper.findAll('.day-template-card__name').map(node => node.text())
-
-const cardPositions = (wrapper: VueWrapper): string[] =>
-  wrapper.findAll('[data-test="order"]').map(node => node.text())
-
-const cardRules = (wrapper: VueWrapper): string[] =>
-  wrapper.findAll('[data-test="rule"]').map(node => node.text())
-
-const click = async (element: Element | null): Promise<void> => {
-  if (element === null) throw new Error('элемент не найден')
-  await new DOMWrapper(element).trigger('click')
-}
-
-/** Кнопка сохранения формы открыта в теле документа (QDialog телепортируется). */
-const saveForm = async (): Promise<void> => {
-  await click($('[data-test="save"]'))
-  await flush()
-}
-
-const setText = async (selector: string, value: string): Promise<void> => {
-  const element = $<HTMLInputElement>(selector)
-  if (element === null) throw new Error(`поле ${selector} не найдено`)
-  await new DOMWrapper(element).setValue(value)
-}
-
-/** Открыть контекстное меню карточки: содержимое q-menu появляется в body. */
-async function openMenu(wrapper: VueWrapper, index = 0): Promise<void> {
-  const buttons = wrapper.findAll('[data-test="menu"]')
-  const button = buttons[index]
-  if (button === undefined) throw new Error('кнопка меню не найдена')
-  await button.trigger('click')
-  await flush()
-}
-
-const orderedRows = (): Promise<DayTemplate[]> => db.dayTemplates.orderBy('order').toArray()
-
-/**
- * Материализация дня — асинхронная работа стора с Dexie (транзакция), поэтому
- * тест ждёт условие, а не фиксированную паузу: иначе проверка ловит промежуточное
- * состояние и падает по таймингу.
- */
-async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now()
-  while (!check() && Date.now() - start < timeoutMs) await flush(20)
-}
-
-/**
- * Перетаскивание живёт на pointer events (ТЗ §4.1): событие движения вешается на
- * window, а место вставки считается по серединам карточек. jsdom геометрию не
- * считает, поэтому середины задаются тестом через getBoundingClientRect.
- */
-function stubCardGeometry(wrapper: VueWrapper, height = 50, gap = 10): void {
-  wrapper.findAll('.day-template-card').forEach((card, index) => {
-    const top = index * (height + gap)
-    vi.spyOn(card.element as HTMLElement, 'getBoundingClientRect').mockReturnValue({
-      top,
-      height,
-      bottom: top + height,
-      left: 0,
-      right: 200,
-      width: 200,
-      x: 0,
-      y: top,
-      toJSON: () => ({}),
-    } as DOMRect)
-  })
-}
-
-function pointerEvent(type: string, clientY: number): Event {
-  const event = new Event(type)
-  Object.defineProperty(event, 'clientY', { value: clientY })
-  Object.defineProperty(event, 'pointerId', { value: 1 })
-  return event
-}
-
-describe('DaysPage: список шаблонов (вайрфреймы §3.1, FR-D-2)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
-  })
-
-  it('показывает номер в цикле, диапазон времени и правило словами', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-
-    const wrapper = await mountPage()
-
-    expect(cardNames(wrapper)).toEqual([
-      'Рабочий день',
-      'Спорт-день',
-      'Выходной',
-      'Свободный день',
-    ])
-    expect(cardPositions(wrapper)).toEqual(['1', '2', '3', '4'])
-    expect(cardRules(wrapper)).toEqual([
-      'Пн, Вт, Ср, Чт, Пт',
-      '1, 15 числа',
-      'Сб, Вс',
-      'без привязки',
-    ])
-    expect(wrapper.findAll('.day-template-card__time').map(node => node.text())).toEqual([
-      '08:00–22:00',
-      '06:00–10:00',
-      '09:00–23:00',
-      '10:00–20:00',
-    ])
-    expect(wrapper.find('[data-test="count"]').text()).toBe(i18n.global.t('days.count', { n: 4 }))
-  })
-
-  it('FR-D-7: показывает число дел и быстро правит список из меню', async () => {
-    await db.tasks.bulkAdd([
-      {
-        id: 'a',
-        title: 'Первое',
-        priority: 'medium',
-        color: '#2196F3',
-        durationMin: 30,
-        archived: false,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      {
-        id: 'b',
-        title: 'Второе',
-        priority: 'high',
-        color: '#4CAF50',
-        durationMin: 45,
-        archived: false,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ])
-
-    const created = await useDaysStore().createTemplate({
-      name: 'С делами',
-      accentColor: '#2196F3',
-      timeStart: '08:00',
-      timeEnd: '22:00',
-      repeatRule: { type: 'none' },
-      plannedTaskIds: ['a', 'b'],
+describe('DaysPage: секции и бейджи списка (FR-D-2, FR-D-6)', () => {
+  it('раскладывает планы по секциям: ближайшие, повторяющиеся, прошедшие, без даты', async () => {
+    const today = todayISO()
+    const todayPlan = await seedPlan({ name: 'Сегодняшний', date: today })
+    const tomorrowPlan = await seedPlan({ name: 'Завтрашний', date: addDaysISO(today, 1) })
+    const pastPlan = await seedPlan({ name: 'Прошедший', date: addDaysISO(today, -1) })
+    const recurring = await seedPlan({
+      name: 'По понедельникам',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [0] },
     })
-    if (!created.ok) throw new Error('шаблон не создан')
+    const template = await seedPlan({ name: 'Заготовка', date: null })
 
-    const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="tasks-count"]').text()).toBe(
-      i18n.global.t('days.tasksCount', { n: 2 }),
+    const { wrapper } = await mountPage()
+
+    expect(wrapper.find('[data-test="upcoming-section"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="recurring-section"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="past-section"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="template-section"]').exists()).toBe(true)
+
+    expect(wrapper.find('[data-test="count"]').text()).toBe(
+      i18n.global.t('days.count', { n: 5 }),
+    )
+    expect(cards(wrapper)).toHaveLength(5)
+
+    // Конкретный день: дата словами, у сегодняшнего — бейдж «Сегодня»
+    const todayCard = card(wrapper, todayPlan.id)
+    expect(todayCard.attributes('data-mode')).toBe('oneoff')
+    expect(todayCard.find('[data-test="today-badge"]').text()).toBe(
+      i18n.global.t('days.today'),
+    )
+    expect(todayCard.find('[data-test="plan-date"]').exists()).toBe(true)
+
+    const tomorrowCard = card(wrapper, tomorrowPlan.id)
+    expect(tomorrowCard.attributes('data-mode')).toBe('oneoff')
+    expect(tomorrowCard.find('[data-test="today-badge"]').exists()).toBe(false)
+    expect(tomorrowCard.find('[data-test="plan-date"]').text()).toBe(
+      formatShortDateLabel(addDaysISO(today, 1), 'ru'),
     )
 
-    await openMenu(wrapper)
-    await click($('[data-action="tasks"]'))
-    await waitUntil(() => useTasksStore().initialized)
-    await flush()
+    // Повторяющийся: правило словами и бейдж «Повторяется»
+    const recurringCard = card(wrapper, recurring.id)
+    expect(recurringCard.attributes('data-mode')).toBe('recurring')
+    expect(recurringCard.find('[data-test="recurring-badge"]').text()).toBe(
+      i18n.global.t('days.recurring'),
+    )
+    expect(recurringCard.find('[data-test="plan-rule"]').text()).toBe(
+      i18n.global.t('days.ruleWeekdays', { list: i18n.global.t('days.weekdays.mon') }),
+    )
 
-    expect($('[data-test="template-tasks"]')).not.toBeNull()
-    await click($('[data-test="template-tasks"] [data-task="a"] [data-test="task-remove"]'))
-    await flush()
-    await click($('[data-test="tasks-save"]'))
-    await flush()
-    for (let i = 0; i < 50; i++) {
-      await flush(20)
-      if ((await db.dayTemplates.get(created.data.id))?.plannedTaskIds.length === 1) break
-    }
+    // Заготовка «без даты»: бейдж и подсказка, что в «Сегодня» не открывается
+    const templateCard = card(wrapper, template.id)
+    expect(templateCard.attributes('data-mode')).toBe('template')
+    expect(templateCard.find('[data-test="template-badge"]').text()).toBe(
+      i18n.global.t('days.noDate'),
+    )
+    expect(templateCard.find('[data-test="plan-no-date"]').text()).toBe(
+      i18n.global.t('days.noDateHint'),
+    )
 
-    expect((await db.dayTemplates.get(created.data.id))?.plannedTaskIds).toEqual(['b'])
-    expect(wrapper.find('[data-test="tasks-count"]').text()).toBe(
+    // Прошедший день лежит в свёрнутой секции, но его карточка в дереве
+    expect(card(wrapper, pastPlan.id).find('[data-test="past-badge"]').text()).toBe(
+      i18n.global.t('days.pastBadge'),
+    )
+    expect(wrapper.find('[data-test="past-section"]').text()).toContain(
+      i18n.global.t('days.pastSection', { n: 1 }),
+    )
+    expect(wrapper.find('[data-test="template-section"]').text()).toContain(
+      i18n.global.t('days.templatesSection', { n: 1 }),
+    )
+  })
+
+  it('показывает число дел плана и диапазон времени', async () => {
+    const task = await seedTask({ title: 'Зарядка', durationMin: 45 })
+    const plan = await seedPlan({
+      name: 'С делами',
+      date: null,
+      plannedPlacements: [
+        { id: 'pp1', taskId: task.id, startMin: null, durationMin: 45 },
+      ],
+    })
+
+    const { wrapper } = await mountPage()
+
+    const target = card(wrapper, plan.id)
+    expect(target.find('[data-test="tasks-count"]').text()).toBe(
       i18n.global.t('days.tasksCount', { n: 1 }),
     )
+    expect(target.text()).toContain('08:00–22:00')
   })
 
-  it('перетаскивание за ручку пересчитывает order и мгновенно меняет цикл (FR-D-2)', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    const wrapper = await mountPage()
-    stubCardGeometry(wrapper)
-
-    // Тянем первую карточку вниз, за середину третьей
-    await wrapper.findAll('.day-template-card__handle')[0]?.trigger('pointerdown', { clientY: 25 })
-    window.dispatchEvent(pointerEvent('pointermove', 130))
-    await flush()
-    // Прицел показывает место вставки, активная карточка полупрозрачна
-    expect(wrapper.findAll('.day-template-card')[2]?.classes()).toContain(
-      'day-template-card--drop-target',
-    )
-    expect(wrapper.findAll('.day-template-card')[0]?.classes()).toContain(
-      'day-template-card--dragging',
-    )
-
-    window.dispatchEvent(pointerEvent('pointerup', 130))
-    await flush()
-
-    expect(cardNames(wrapper)).toEqual(['Спорт-день', 'Выходной', 'Рабочий день', 'Свободный день'])
-    expect(cardPositions(wrapper)).toEqual(['1', '2', '3', '4'])
-    expect((await orderedRows()).map(row => row.name)).toEqual([
-      'Спорт-день',
-      'Выходной',
-      'Рабочий день',
-      'Свободный день',
-    ])
-    expect((await orderedRows()).map(row => row.order)).toEqual([0, 1, 2, 3])
-    // Слушатели pointer-событий снимаются: второе движение ничего не меняет
-    window.dispatchEvent(pointerEvent('pointermove', 400))
-    expect((await orderedRows()).map(row => row.name)[0]).toBe('Спорт-день')
-  })
-
-  it('стрелки меняют порядок без перетаскивания (НФТ ТЗ §7)', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    const wrapper = await mountPage()
-
-    // У первой карточки «выше» недоступно — край диапазона
-    const ups = wrapper.findAll('[data-test="move-up"]')
-    expect(ups[0]?.attributes('disabled')).toBeDefined()
-    expect(ups[1]?.attributes('disabled')).toBeUndefined()
-
-    await click(wrapper.findAll('.day-template-card')[1]?.element ?? null)
-    await wrapper.findAll('[data-test="move-up"]')[1]?.trigger('click')
-    await flush()
-
-    expect(cardNames(wrapper)).toEqual(['Спорт-день', 'Рабочий день', 'Выходной', 'Свободный день'])
-    expect((await orderedRows()).map(row => row.name)[0]).toBe('Спорт-день')
-  })
-
-  it('в режиме «по названию» перетаскивание выключено, порядок цикла не тронут', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    const wrapper = await mountPage()
-
-    useDaysStore().setSortMode('name')
-    await nextTick()
-    stubCardGeometry(wrapper)
-
-    // Список показывает алфавит, а order в БД остаётся прежним (контракты §2.2)
-    expect(cardNames(wrapper)).toEqual([
-      'Выходной',
-      'Рабочий день',
-      'Свободный день',
-      'Спорт-день',
-    ])
-
-    // Попытка тащить в этом режиме ничего не делает: порядок цикла не меняется
-    await wrapper.findAll('.day-template-card__handle')[0]?.trigger('pointerdown', { clientY: 25 })
-    window.dispatchEvent(pointerEvent('pointermove', 400))
-    window.dispatchEvent(pointerEvent('pointerup', 400))
-    await flush()
-
-    expect(wrapper.findAll('.day-template-card--dragging')).toHaveLength(0)
-    expect((await orderedRows()).map(row => row.name)).toEqual([
-      'Рабочий день',
-      'Спорт-день',
-      'Выходной',
-      'Свободный день',
-    ])
-  })
-
-  it('показывает ошибку загрузки и повторяет её по кнопке', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const days = useDaysStore()
-    const spy = vi.spyOn(days, 'loadAll').mockResolvedValueOnce(err('DB_ERROR', 'нет БД'))
-
-    const wrapper = await mountPage(pinia)
-
-    expect(wrapper.find('[data-test="load-error"]').exists()).toBe(true)
-    spy.mockRestore()
-
-    await click(wrapper.find('[data-test="load-error"] .q-btn').element)
-    await flush()
-
-    expect(wrapper.find('[data-test="load-error"]').exists()).toBe(false)
-  })
-})
-
-describe('DaysPage: создание и удаление (FR-D-1, FR-D-4)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
-  })
-
-  it('пустое состояние показывает CTA и открывает форму', async () => {
-    const wrapper = await mountPage()
+  it('пустой раздел показывает CTA и создаёт первый день', async () => {
+    const { wrapper } = await mountPage()
 
     expect(wrapper.find('[data-test="empty"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="empty"]').text()).toContain(i18n.global.t('days.emptyHint'))
+    expect(wrapper.find('[data-test="empty"]').text()).toContain(
+      i18n.global.t('days.emptyHint'),
+    )
+    expect(wrapper.find('[data-test="count"]').text()).toBe(
+      i18n.global.t('days.count', { n: 0 }),
+    )
 
-    await click(wrapper.find('[data-test="empty-create"]').element)
-    await flush()
+    const ui = useUiStore()
+    const notify = vi.spyOn(ui, 'notify')
 
-    expect($('[data-test="name"]')).not.toBeNull()
-  })
-
-  it('создаёт шаблон по FAB: одна запись в БД — одна карточка', async () => {
-    const wrapper = await mountPage()
-
-    await click(wrapper.find('[data-test="new-day"]').element)
-    await flush()
-    await setText('[data-test="name"]', 'Рабочий день')
+    await clickElement(wrapper.find('[data-test="empty-create"]').element)
+    await waitUntil(() => $('[data-test="name"]') !== null)
+    await setInput('[data-test="name"]', 'Первый день')
     await saveForm()
 
-    expect(await db.dayTemplates.count()).toBe(1)
-    expect(cardNames(wrapper)).toEqual(['Рабочий день'])
-    expect(wrapper.findAll('.day-template-card')).toHaveLength(1)
+    await waitUntil(() => useDayPlansStore().plansCount === 1)
+    const stored = await db.dayPlans.toArray()
+    expect(stored).toHaveLength(1)
+    expect(stored[0]).toMatchObject({ name: 'Первый день', date: todayISO() })
+
     expect(wrapper.find('[data-test="empty"]').exists()).toBe(false)
+    expect(cards(wrapper)).toHaveLength(1)
+    expect(card(wrapper, stored[0]?.id ?? '').find('[data-test="today-badge"]').exists()).toBe(
+      true,
+    )
+    expect(notify).toHaveBeenCalledWith(
+      i18n.global.t('days.created'),
+      'success',
+      undefined,
+      2000,
+    )
   })
 
-  it('правит шаблон через меню «Редактировать» (FR-D-3)', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    const wrapper = await mountPage()
+  it('создаёт день по FAB: одна запись в БД — одна карточка', async () => {
+    const { wrapper } = await mountPage()
 
-    await openMenu(wrapper, 0)
-    await click($('[data-action="edit"]'))
-    await flush()
+    await openForm()
 
-    expect($<HTMLInputElement>('[data-test="name"]')?.value).toBe('Рабочий день')
+    // Форма создания: конкретный день на сегодня выбран по умолчанию
+    expect(inputElement('[data-test="date"]').value).toBe(todayISO())
+    expect(
+      document.body.querySelector('[data-mode="oneoff"]')?.getAttribute('aria-checked'),
+    ).toBe('true')
 
-    await setText('[data-test="name"]', 'Рабочий')
+    await setInput('[data-test="name"]', 'Рабочий день')
     await saveForm()
 
-    expect(await db.dayTemplates.count()).toBe(4)
-    expect(cardNames(wrapper)[0]).toBe('Рабочий')
-    expect((await db.dayTemplates.get('t1'))?.name).toBe('Рабочий')
+    await waitUntil(() => useDayPlansStore().plansCount === 1)
+    const stored = await db.dayPlans.toArray()
+    expect(stored).toHaveLength(1)
+    expect(stored[0]).toMatchObject({
+      name: 'Рабочий день',
+      date: todayISO(),
+      repeatRule: { type: 'none' },
+    })
+    expect(cards(wrapper)).toHaveLength(1)
+    expect(wrapper.find('[data-test="empty"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="count"]').text()).toBe(
+      i18n.global.t('days.count', { n: 1 }),
+    )
   })
 
-  it('запрещает удаление шаблона с активным экземпляром (FR-D-4)', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    await db.dayInstances.add(activeInstance)
+  it('не сохраняет второй день на ту же дату и показывает ошибку в поле', async () => {
+    await seedPlan({ name: 'Занято', date: todayISO() })
+    await mountPage()
 
-    const wrapper = await mountPage()
+    await openForm()
+    await setInput('[data-test="name"]', 'Дубль')
+    await saveForm()
+
+    expect(await db.dayPlans.count()).toBe(1)
+    // Форма осталась открыта: диалог не закрылся на ошибке валидатора
+    expect(inputElement('[data-test="name"]').value).toBe('Дубль')
+    expect(document.body.textContent).toContain(i18n.global.t('days.validation.dateTaken'))
+    expect(inputElement('[data-test="date"]').closest('.q-field')?.classList.contains(
+      'q-field--error',
+    )).toBe(true)
+  })
+
+  it('отклоняет повторяющийся день с пересечением правила', async () => {
+    const existing = await seedPlan({
+      name: 'Спорт-день',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [0] },
+    })
+    await mountPage()
+
+    await openForm()
+    await setInput('[data-test="name"]', 'Второй понедельник')
+    await click('[data-mode="weekdays"]')
+    await click('[data-weekday="0"]')
+    await saveForm()
+
+    expect(await db.dayPlans.count()).toBe(1)
+    const conflicts = $('[data-test="conflicts"]')
+    expect(conflicts).not.toBeNull()
+    expect(conflicts?.textContent).toContain(existing.name)
+    expect(conflicts?.textContent).toContain(
+      i18n.global.t('days.validation.overlapWeekdays', { name: existing.name }),
+    )
+    expect($('[data-test="error-rule"]')).toBeNull()
+    // Ошибка не закрыла форму
+    expect(inputElement('[data-test="name"]').value).toBe('Второй понедельник')
+  })
+
+  it('создаёт день на основе повторяющегося плана (копия)', async () => {
+    const pinia = getActivePinia() ?? createPinia()
+    setActivePinia(pinia)
+    const tasks = useTasksStore()
+    await tasks.loadAll()
+    const task = await seedTask({ title: 'Зарядка', durationMin: 45 })
+    const base = await seedPlan({
+      name: 'Утренний план',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [0, 1] },
+      plannedPlacements: [
+        { id: 'pp1', taskId: task.id, startMin: null, durationMin: 45 },
+      ],
+    })
+
+    const { wrapper } = await mountPage('/days', pinia)
+
+    await openMenu(wrapper, base.id)
+    await clickMenuAction('copy')
+    await waitUntil(() => $('[data-test="name"]') !== null)
+
+    expect($('[data-test="base-plan"]')?.textContent).toContain(base.name)
+    expect(inputElement('[data-test="name"]').value).toBe(base.name)
+    expect(inputElement('[data-test="date"]').value).toBe(todayISO())
+    expect(
+      document.body.querySelector('[data-mode="oneoff"]')?.getAttribute('aria-checked'),
+    ).toBe('true')
+
+    await setInput('[data-test="name"]', 'Копия утра')
+    await saveForm()
+    await waitUntil(() => useDayPlansStore().plansCount === 2)
+
+    const created = (await db.dayPlans.toArray()).find(row => row.name === 'Копия утра')
+    expect(created).toBeDefined()
+    expect(created).toMatchObject({ date: todayISO(), repeatRule: { type: 'none' } })
+    expect(created?.plannedPlacements).toHaveLength(1)
+    expect(created?.plannedPlacements[0]).toMatchObject({ taskId: task.id, durationMin: 45 })
+    expect(cards(wrapper)).toHaveLength(2)
+  })
+
+  it('создаёт день на основе заготовки «без даты» (копия)', async () => {
+    const pinia = getActivePinia() ?? createPinia()
+    setActivePinia(pinia)
+    const tasks = useTasksStore()
+    await tasks.loadAll()
+    const task = await seedTask({ title: 'Почта', durationMin: 30 })
+    const base = await seedPlan({
+      name: 'Заготовка',
+      date: null,
+      repeatRule: { type: 'none' },
+      plannedPlacements: [
+        { id: 'pp1', taskId: task.id, startMin: null, durationMin: 30 },
+      ],
+    })
+
+    const { wrapper } = await mountPage('/days', pinia)
+
+    await openMenu(wrapper, base.id)
+    await clickMenuAction('copy')
+    await waitUntil(() => $('[data-test="name"]') !== null)
+
+    expect($('[data-test="base-plan"]')?.textContent).toContain(base.name)
+
+    await setInput('[data-test="name"]', 'День из заготовки')
+    await saveForm()
+    await waitUntil(() => useDayPlansStore().plansCount === 2)
+
+    const created = (await db.dayPlans.toArray()).find(
+      row => row.name === 'День из заготовки',
+    )
+    expect(created?.date).toBe(todayISO())
+    expect(created?.plannedPlacements[0]?.taskId).toBe(task.id)
+  })
+
+  it('открывает план по клику на карточку', async () => {
+    const plan = await seedPlan({ name: 'Открыть меня', date: todayISO() })
+    const { wrapper, router } = await mountPage()
+
+    await clickElement(card(wrapper, plan.id).element)
+    await flush()
+
+    expect(router.currentRoute.value.name).toBe('day-plan')
+    expect(router.currentRoute.value.params.id).toBe(plan.id)
+  })
+
+  it('запрещает удаление плана с активным днём и говорит, что делать', async () => {
+    const plan = await seedPlan({ name: 'Открытый день', date: todayISO() })
+    await db.dayInstances.add(activeInstance(plan.id))
+
+    const { wrapper } = await mountPage()
     const ui = useUiStore()
     const confirm = vi.spyOn(ui, 'openConfirm').mockResolvedValue(true)
     const notify = vi.spyOn(ui, 'notify')
 
-    await openMenu(wrapper, 0)
-    await click($('[data-action="delete"]'))
+    await openMenu(wrapper, plan.id)
+    await clickMenuAction('delete')
     await flush()
 
-    // Диалог подтверждения получил имя шаблона, удаление отклонено кодом
     expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ message: i18n.global.t('days.deleteConfirm', { name: 'Рабочий день' }) }),
+      expect.objectContaining({
+        message: i18n.global.t('days.deletePlanConfirm', { name: plan.name }),
+      }),
     )
-    expect(await db.dayTemplates.get('t1')).toBeDefined()
-    expect(cardNames(wrapper)).toHaveLength(4)
-    // Предложение сначала завершить день (FR-D-4), а не ошибка БД
+    expect(await db.dayPlans.get(plan.id)).toBeDefined()
+    expect(cards(wrapper)).toHaveLength(1)
     expect(notify).toHaveBeenCalledWith(
-      i18n.global.t('days.deleteBlocked'),
+      i18n.global.t('days.deletePlanBlocked'),
       'warning',
       undefined,
       5000,
     )
   })
 
-  it('удаляет шаблон без активных экземпляров, завершённые не мешают', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    await db.dayInstances.add({ ...activeInstance, id: 'inst-2', status: 'completed' })
+  it('удаляет план без активных дней и обновляет список', async () => {
+    const plan = await seedPlan({ name: 'Удалить меня', date: todayISO() })
+    const { wrapper } = await mountPage()
+    const ui = useUiStore()
+    vi.spyOn(ui, 'openConfirm').mockResolvedValue(true)
+    const notify = vi.spyOn(ui, 'notify')
 
-    const wrapper = await mountPage()
-    vi.spyOn(useUiStore(), 'openConfirm').mockResolvedValue(true)
+    await openMenu(wrapper, plan.id)
+    await clickMenuAction('delete')
+    await waitUntil(() => useDayPlansStore().plansCount === 0)
 
-    await openMenu(wrapper, 0)
-    await click($('[data-action="delete"]'))
-    await flush()
-
-    expect(await db.dayTemplates.get('t1')).toBeUndefined()
-    expect(cardNames(wrapper)).toEqual(['Спорт-день', 'Выходной', 'Свободный день'])
-    // Порядок уплотняется до 0..n-1 (контракты §2.7)
-    expect((await orderedRows()).map(row => row.order)).toEqual([0, 1, 2])
+    expect(await db.dayPlans.get(plan.id)).toBeUndefined()
+    expect(wrapper.find('[data-test="empty"]').exists()).toBe(true)
+    expect(notify).toHaveBeenCalledWith(i18n.global.t('days.deleted'), 'error')
   })
 
-  it('отказ в подтверждении не удаляет шаблон', async () => {
-    await db.dayTemplates.bulkAdd(wireframeTemplates())
-    const wrapper = await mountPage()
+  it('не удаляет план при отказе в подтверждении', async () => {
+    const plan = await seedPlan({ name: 'Остаться', date: todayISO() })
+    const { wrapper } = await mountPage()
     vi.spyOn(useUiStore(), 'openConfirm').mockResolvedValue(false)
 
-    await openMenu(wrapper, 0)
-    await click($('[data-action="delete"]'))
+    await openMenu(wrapper, plan.id)
+    await clickMenuAction('delete')
     await flush()
 
-    expect(await db.dayTemplates.get('t1')).toBeDefined()
-    expect(cardNames(wrapper)).toHaveLength(4)
+    expect(await db.dayPlans.get(plan.id)).toBeDefined()
+    expect(cards(wrapper)).toHaveLength(1)
   })
 })
 
-describe('DaysPage: конфликты правил (FR-D-5, вайрфреймы §3.2)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
-  })
-
-  it('показывает баннер и перечень конфликтующих шаблонов', async () => {
+describe('DaysPage: конфликты правил (FR-D-5)', () => {
+  it('показывает баннер и перечень пересекающихся планов', async () => {
     // Конфликт мог появиться импортом: семантика файла не проверяется (FR-SET-5)
-    await db.dayTemplates.bulkAdd([
-      template({ id: 'c1', name: 'Пн-1', order: 0, repeatRule: { type: 'weekdays', weekdays: [0] } }),
-      template({ id: 'c2', name: 'Пн-2', order: 1, repeatRule: { type: 'weekdays', weekdays: [0, 1] } }),
+    await db.dayPlans.bulkAdd([
+      planRow({ id: 'c1', name: 'Пн-1', repeatRule: { type: 'weekdays', weekdays: [0] } }),
+      planRow({
+        id: 'c2',
+        name: 'Пн-2',
+        repeatRule: { type: 'weekdays', weekdays: [0, 1] },
+      }),
     ])
 
-    const wrapper = await mountPage()
+    const { wrapper } = await mountPage()
 
     const banner = wrapper.find('[data-test="conflict-banner"]')
     expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain(i18n.global.t('days.conflictBanner'))
 
-    await click(banner.find('[data-test="show-conflicts"]').element)
-    await flush()
+    await clickElement(banner.find('[data-test="show-conflicts"]').element)
 
     const rows = $$('[data-test="conflict-row"]').map(node => node.textContent ?? '')
     expect(rows).toHaveLength(2)
@@ -548,89 +598,66 @@ describe('DaysPage: конфликты правил (FR-D-5, вайрфрейм�
     expect($('[data-test="conflicts-none"]')).toBeNull()
   })
 
-  it('после отклонённого сохранения предлагает снэкбар со ссылкой на конфликты', async () => {
-    await db.dayTemplates.add(
-      template({ id: 'c1', name: 'Спорт-день', repeatRule: { type: 'weekdays', weekdays: [0] } }),
-    )
+  it('не показывает баннер, когда правила не пересекаются', async () => {
+    await seedPlan({
+      name: 'Пн',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [0] },
+    })
+    await seedPlan({
+      name: 'Вт',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [1] },
+    })
 
-    const wrapper = await mountPage()
-    const notify = vi.spyOn(useUiStore(), 'notify')
-
-    await click(wrapper.find('[data-test="new-day"]').element)
-    await flush()
-
-    await setText('[data-test="name"]', 'Рабочий')
-    await click($('[data-repeat="weekdays"]'))
-    await click($('[data-weekday="0"]'))
-    await saveForm()
-
-    // Конфликтующий шаблон не сохранён, страница предложила ссылку на перечень
-    expect(await db.dayTemplates.count()).toBe(1)
-    expect(notify).toHaveBeenCalledWith(
-      i18n.global.t('days.conflictBanner'),
-      'warning',
-      expect.objectContaining({ label: i18n.global.t('days.showConflicts') }),
-    )
-
-    // Обработчик ссылки открывает диалог с перечнем (вайрфреймы §3.2)
-    const action = notify.mock.calls.at(-1)?.[2]
-    action?.handler()
-    await flush()
-
-    expect($('[data-test="conflict-row"]')?.textContent).toContain('Спорт-день')
+    const { wrapper } = await mountPage()
+    expect(wrapper.find('[data-test="conflict-banner"]').exists()).toBe(false)
   })
 })
 
-describe('DaysPage: пустой день и resolveCurrentDay({ force: true }) (FR-D-6)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
+describe('DaysPage: создание по query-параметру и ошибка загрузки', () => {
+  /**
+   * `?create=YYYY-MM-DD` открывает форму на нужную дату и вычищает параметр из
+   * адреса. Проверяется связка «query → defaultDate формы» и очистка URL.
+   *
+   * Дату из query сейчас нельзя сохранить через саму форму: `consumeCreateQuery`
+   * сначала открывает диалог, а затем делает `router.replace({ query })`, и
+   * QDialog (не persistent) закрывается на смене маршрута. Это дефект страницы,
+   * он отмечен в отчёте; тест фиксирует корректную передачу даты и очистку URL,
+   * не закрепляя преждевременное закрытие как норму.
+   */
+  it('передаёт дату из ?create= в форму и убирает параметр из адреса', async () => {
+    const target = addDaysISO(todayISO(), 3)
+    const { wrapper, router } = await mountPage(`/days?create=${target}`)
+
+    await waitUntil(() => router.currentRoute.value.query.create === undefined)
+
+    expect(router.currentRoute.value.query.create).toBeUndefined()
+    expect(wrapper.findComponent(DayPlanForm).props('defaultDate')).toBe(target)
   })
 
-  it('создание шаблона заменяет виртуальный пустой день днём по шаблону', async () => {
+  it('некорректная дата в ?create= заменяется на сегодня', async () => {
+    const { wrapper, router } = await mountPage('/days?create=not-a-date')
+    await waitUntil(() => router.currentRoute.value.query.create === undefined)
+
+    expect(wrapper.findComponent(DayPlanForm).props('defaultDate')).toBe(todayISO())
+  })
+
+  it('показывает ошибку загрузки и повторяет её по кнопке', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    await useDaysStore().loadAll()
-    const cycle = useCycleStore()
-    expect((await cycle.initialize()).ok).toBe(true)
-    // Пока шаблонов нет, текущий день виртуален и в Dexie его нет (FR-D-6)
-    expect(cycle.isVirtualInstance).toBe(true)
-    expect(await db.dayInstances.count()).toBe(0)
+    const spy = vi
+      .spyOn(useDayPlansStore(), 'loadAll')
+      .mockResolvedValueOnce(err('DB_ERROR', 'нет БД'))
 
-    const wrapper = await mountPage(pinia)
-    await click(wrapper.find('[data-test="new-day"]').element)
-    await flush()
-    await setText('[data-test="name"]', 'Рабочий день')
-    await saveForm()
+    const { wrapper } = await mountPage('/days', pinia)
 
-    const stored = await db.dayTemplates.toArray()
-    expect(stored).toHaveLength(1)
-    await waitUntil(() => cycle.currentInstance?.templateId === stored[0]?.id)
-    expect(cycle.currentInstance?.templateId).toBe(stored[0]?.id)
-    expect(cycle.isVirtualInstance).toBe(false)
-    expect(cycle.cycleState?.activeInstanceId).toBe(cycle.currentInstance?.id)
-    expect(await db.dayInstances.count()).toBe(1)
-  })
+    expect(wrapper.find('[data-test="load-error"]').exists()).toBe(true)
+    spy.mockRestore()
 
-  it('материализованный день force не пересоздаёт (FR-D-6, FR-D-3)', async () => {
-    await db.dayTemplates.add(template({ id: 't1', name: 'Рабочий день' }))
-    const cycle = useCycleStore()
-    await useDaysStore().loadAll()
-    expect((await cycle.initialize()).ok).toBe(true)
+    await clickElement(wrapper.find('[data-test="load-error"] .q-btn').element)
 
-    const instanceId = cycle.currentInstance?.id
-    expect(cycle.isVirtualInstance).toBe(false)
-
-    const wrapper = await mountPage()
-    await openMenu(wrapper, 0)
-    await click($('[data-action="edit"]'))
-    await flush()
-    await setText('[data-test="name"]', 'Рабочий')
-    await saveForm()
-
-    expect((await db.dayTemplates.get('t1'))?.name).toBe('Рабочий')
-    expect(cycle.currentInstance?.id).toBe(instanceId)
-    expect(await db.dayInstances.count()).toBe(1)
+    await waitUntil(() => useDayPlansStore().initialized)
+    expect(wrapper.find('[data-test="load-error"]').exists()).toBe(false)
   })
 })

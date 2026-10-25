@@ -1,40 +1,20 @@
 <template>
   <q-page class="days-page q-pa-md">
-    <!--
-      Экран «Дни» (вайрфреймы §3): список шаблонов с drag-сортировкой (FR-D-2),
-      счётчиком и режимом сортировки, состояния загрузки/пустоты/ошибки, FAB и
-      форма шаблона (FR-D-1, FR-D-3). Конфликты правил показываются баннером со
-      ссылкой на перечень (FR-D-5, вайрфреймы §3.2).
-    -->
     <div class="days-page__toolbar row items-center q-col-gutter-sm">
       <div
         class="col text-caption text-grey-7"
         data-test="order-hint"
       >
-        {{ t('days.orderHint') }}
+        {{ t('days.listHint') }}
       </div>
       <div
         class="col-auto text-caption text-grey-7"
         data-test="count"
       >
-        {{ t('days.count', { n: days.templatesCount }) }}
-      </div>
-      <div class="col-auto">
-        <q-select
-          v-model="sortMode"
-          :options="sortOptions"
-          emit-value
-          map-options
-          dense
-          outlined
-          class="days-page__sort"
-          :label="t('days.sort')"
-          data-test="sort-mode"
-        />
+        {{ t('days.count', { n: plans.plansCount }) }}
       </div>
     </div>
 
-    <!-- Ошибка БД: баннер с повтором, данные не изменены (вайрфреймы §3.2). -->
     <q-banner
       v-if="loadError"
       dense
@@ -53,9 +33,8 @@
       </template>
     </q-banner>
 
-    <!-- Конфликты уже сохранённых правил (например, после импорта FR-SET-5). -->
     <q-banner
-      v-if="days.hasConflicts"
+      v-if="plans.hasConflicts"
       dense
       class="bg-warning text-black q-mb-sm"
       data-test="conflict-banner"
@@ -68,7 +47,7 @@
           color="black"
           :label="t('days.showConflicts')"
           data-test="show-conflicts"
-          @click="openStoredConflicts"
+          @click="conflictsOpen = true"
         />
       </template>
     </q-banner>
@@ -77,6 +56,7 @@
       v-if="loading"
       class="days-page__skeleton"
       :aria-label="t('common.loading')"
+      data-test="skeleton"
     >
       <div
         v-for="index in 3"
@@ -86,7 +66,7 @@
     </div>
 
     <div
-      v-else-if="days.templatesCount === 0"
+      v-else-if="plans.plansCount === 0"
       class="days-page__empty"
       data-test="empty"
     >
@@ -109,36 +89,93 @@
         :label="t('days.new')"
         class="q-mt-sm"
         data-test="empty-create"
-        @click="openCreate"
+        @click="openCreate()"
       />
     </div>
 
-    <!--
-      Порядок в цикле: перетаскивание за ручку ⠿ (pointer events) пересчитывает
-      order через daysStore.moveToPosition (FR-D-2, контракты §2.6). В режиме «по
-      названию» перетаскивание выключено: список показывает не порядок цикла, и
-      drag переставлял бы шаблоны «наугад».
-    -->
-    <div
-      v-else
-      ref="listEl"
-      class="days-page__list"
-      data-test="list"
-    >
-      <DayTemplateCard
-        v-for="(element, index) in list"
-        :key="element.id"
-        :template="element"
-        :position="index + 1"
-        :can-move-up="draggableOrder && index > 0"
-        :can-move-down="draggableOrder && index < list.length - 1"
-        :dragging="draggingIndex === index"
-        :drop-target="dropIndex === index && draggingIndex !== null && draggingIndex !== index"
-        @action="id => onAction(id, element)"
-        @move="delta => move(element, delta)"
-        @handle-down="event => onHandleDown(event, index)"
-      />
-    </div>
+    <template v-else>
+      <section
+        v-if="plans.upcomingPlans.length"
+        class="days-page__section"
+        data-test="upcoming-section"
+      >
+        <div class="days-page__section-title">
+          {{ t('days.upcoming') }}
+        </div>
+        <div class="days-page__list">
+          <DayPlanCard
+            v-for="plan in plans.upcomingPlans"
+            :key="plan.id"
+            :plan="plan"
+            :is-today="plan.id === effectiveTodayPlanId"
+            @open="openPlan"
+            @create-copy="openCopy"
+            @delete="onDelete"
+          />
+        </div>
+      </section>
+
+      <section
+        v-if="plans.recurringPlans.length"
+        class="days-page__section"
+        data-test="recurring-section"
+      >
+        <div class="days-page__section-title">
+          {{ t('days.recurringSection') }}
+        </div>
+        <div class="days-page__list">
+          <DayPlanCard
+            v-for="plan in plans.recurringPlans"
+            :key="plan.id"
+            :plan="plan"
+            :is-today="plan.id === effectiveTodayPlanId"
+            @open="openPlan"
+            @create-copy="openCopy"
+            @delete="onDelete"
+          />
+        </div>
+      </section>
+
+      <q-expansion-item
+        v-if="plans.pastPlans.length"
+        class="days-page__section"
+        data-test="past-section"
+        :label="t('days.pastSection', { n: plans.pastPlans.length })"
+      >
+        <div class="days-page__list">
+          <DayPlanCard
+            v-for="plan in plans.pastPlans"
+            :key="plan.id"
+            :plan="plan"
+            :is-past="true"
+            @open="openPlan"
+            @create-copy="openCopy"
+            @delete="onDelete"
+          />
+        </div>
+      </q-expansion-item>
+
+      <q-expansion-item
+        v-if="plans.templatePlans.length"
+        class="days-page__section"
+        data-test="template-section"
+        :label="t('days.templatesSection', { n: plans.templatePlans.length })"
+      >
+        <p class="text-caption text-grey-7">
+          {{ t('days.templatesHint') }}
+        </p>
+        <div class="days-page__list">
+          <DayPlanCard
+            v-for="plan in plans.templatePlans"
+            :key="plan.id"
+            :plan="plan"
+            @open="openPlan"
+            @create-copy="openCopy"
+            @delete="onDelete"
+          />
+        </div>
+      </q-expansion-item>
+    </template>
 
     <q-page-sticky
       position="bottom-right"
@@ -151,25 +188,18 @@
         :label="t('days.fab')"
         :aria-label="t('days.new')"
         data-test="new-day"
-        @click="openCreate"
+        @click="openCreate()"
       />
     </q-page-sticky>
 
-    <DayTemplateForm
+    <DayPlanForm
       v-model="formOpen"
-      :template="editing"
+      :plan="editing"
+      :default-date="defaultDate"
+      :base-plan="basePlan"
       @saved="onSaved"
-      @conflict="onConflict"
     />
 
-    <!-- FR-D-7: быстрый редактор списка дел без открытия всей формы шаблона -->
-    <TemplateTasksDialog
-      v-model="tasksDialogOpen"
-      :template="tasksDialogTemplate"
-      @saved="onTasksSaved"
-    />
-
-    <!-- Диалог с перечнем конфликтующих шаблонов (FR-D-5, вайрфреймы §3.2). -->
     <q-dialog v-model="conflictsOpen">
       <q-card style="width: 480px; max-width: 100%">
         <q-card-section class="text-subtitle1">
@@ -211,312 +241,160 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import DayTemplateCard from 'src/components/days/DayTemplateCard.vue'
-import DayTemplateForm from 'src/components/days/DayTemplateForm.vue'
-import TemplateTasksDialog from 'src/components/days/TemplateTasksDialog.vue'
+import { useNow } from '@vueuse/core'
+import DayPlanCard from 'src/components/days/DayPlanCard.vue'
+import DayPlanForm from 'src/components/days/DayPlanForm.vue'
 import { weekdayLabelKey } from 'src/components/days/dayRepeat'
-import type { DayTemplate, RepeatRule } from 'src/models/day'
+import type { DayPlan } from 'src/models/day'
+import { isValidISODate, todayISO } from 'src/services/dates'
 import { isOverlapIssue } from 'src/services/validators/day'
-import { useDaysStore } from 'src/stores/days'
 import { useCycleStore } from 'src/stores/cycle'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useUiStore } from 'src/stores/ui'
 
 const { t } = useI18n()
-const days = useDaysStore()
+const route = useRoute()
+const router = useRouter()
+const plans = useDayPlansStore()
 const cycle = useCycleStore()
 const ui = useUiStore()
 
 const loadError = ref(false)
 const formOpen = ref(false)
-const editing = ref<DayTemplate | null>(null)
+const editing = ref<DayPlan | null>(null)
+const defaultDate = ref<string | null>(null)
+const basePlan = ref<DayPlan | null>(null)
 const conflictsOpen = ref(false)
-/** FR-D-7: диалог быстрого редактирования списка дел шаблона. */
-const tasksDialogOpen = ref(false)
-const tasksDialogTemplate = ref<DayTemplate | null>(null)
-/**
- * Правило, конфликты которого показывает диалог: его присылает форма при
- * отклонённом сохранении (FR-D-5). null — диалог открыт из баннера и показывает
- * пересечения уже сохранённых шаблонов (например, после импорта, FR-SET-5).
- */
-const conflictRule = ref<RepeatRule | null>(null)
+const now = useNow({ interval: 60_000 })
 
-/** Локальная копия списка для перетаскивания: drag не мутирует state стора. */
-const list = ref<DayTemplate[]>([])
+const loading = computed(() => plans.loading && !plans.initialized)
 
-/** Корень списка: по нему считаются середины карточек при перетаскивании. */
-const listEl = ref<HTMLElement | null>(null)
-const draggingIndex = ref<number | null>(null)
-const dropIndex = ref<number | null>(null)
-
-const sortMode = computed<'manual' | 'name'>({
-  get: () => days.sortMode,
-  set: value => days.setSortMode(value),
+const effectiveTodayPlanId = computed(() => {
+  void now.value
+  return plans.resolvedPlanForDate(todayISO())?.id ?? null
 })
 
-const sortOptions = computed(() => [
-  { label: t('days.sortManual'), value: 'manual' },
-  { label: t('days.sortName'), value: 'name' },
-])
-
-/** Перетаскивание имеет смысл только в режиме «по порядку» (контракты §2.6). */
-const draggableOrder = computed(() => days.sortMode === 'manual')
-
-/** Пока идёт первичная загрузка — skeleton вместо пустого состояния. */
-const loading = computed(() => days.loading && !days.initialized)
-
-/**
- * Список для vuedraggable: копия показываемого порядка (manual — по `order`,
- * name — по названию, контракты §2.2). В режиме «по названию» порядок цикла не
- * показывается, поэтому и перестановка выключена: стрелки и drag доступны только
- * там, где список отражает `order`.
- */
-watch(
-  () => days.sortedTemplates,
-  value => {
-    list.value = [...value]
-  },
-  { immediate: true },
+const conflictLines = computed<string[]>(() =>
+  plans.recurringPlans.flatMap(plan =>
+    plans
+      .validateNoOverlap(plan.repeatRule, plan.id)
+      .filter(isOverlapIssue)
+      .map(issue => lineForIssue(plan.name, issue)),
+  ),
 )
 
-onMounted(() => {
-  void load()
-})
+function lineForIssue(name: string, issue: ReturnType<typeof plans.validateNoOverlap>[number]): string {
+  const other = plans.planById(issue.conflictingPlanIds[0] ?? '')?.name ?? t('days.planNotFound')
+  const key =
+    issue.code === 'OVERLAP_WEEKDAYS'
+      ? 'days.validation.overlapWeekdays'
+      : 'days.validation.overlapMonthdays'
+  const values = (issue.values ?? [])
+    .map(value =>
+      issue.code === 'OVERLAP_WEEKDAYS' ? t(weekdayLabelKey(value)) : String(value),
+    )
+    .join(', ')
+  const text = t(key, { name: other })
+  return values ? `${name}: ${text} — ${t('days.validation.values', { values })}` : `${name}: ${text}`
+}
 
-// Контракты §2.3: подписка живёт, пока экран открыт. Перетаскивание снимает
-// свои слушатели с window, иначе они пережили бы переход на другой экран.
-onUnmounted(() => {
-  stopDrag()
-  days.unsubscribe()
-})
-
-/** Загрузка шаблонов. Ошибка БД — баннер, а не пустой экран. */
 async function load() {
-  const result = await days.loadAll()
+  const result = await plans.loadAll()
   loadError.value = !result.ok
 }
 
-function openCreate() {
+function openCreate(date?: string | null) {
   editing.value = null
+  basePlan.value = null
+  defaultDate.value = date ?? todayISO()
   formOpen.value = true
 }
 
-/**
- * FR-D-6 / ТЗ §6 правило 7а: после создания или правки шаблона пустой
- * (виртуальный) текущий день заменяется днём по шаблону. force пересчитывает
- * только виртуальный день — материализованный экземпляр не пересоздаётся
- * (FR-D-3), поэтому вызов безвреден и для правки.
- */
-async function onSaved() {
+function openCopy(plan: DayPlan) {
+  editing.value = null
+  basePlan.value = plan
+  defaultDate.value = todayISO()
+  formOpen.value = true
+}
+
+function openPlan(plan: DayPlan) {
+  void router.push({ name: 'day-plan', params: { id: plan.id } })
+}
+
+async function onSaved(saved: DayPlan) {
   const created = editing.value === null
   editing.value = null
-  conflictRule.value = null
+  basePlan.value = null
+  defaultDate.value = null
   ui.notify(created ? t('days.created') : t('days.saved'), 'success', undefined, 2000)
 
-  if (!cycle.initialized || !cycle.isVirtualInstance) return
-  await cycle.resolveCurrentDay({ force: true })
-}
-
-/**
- * FR-D-7: список дел сохраняется отдельным диалогом. Если текущий день ещё
- * виртуальный и шаблон подходит на сегодня, force пересоздаёт его — заготовки
- * появляются сразу, как и после сохранения формы (ТЗ §2.9 правило 7а).
- */
-async function onTasksSaved() {
-  ui.notify(t('days.tasksSaved'), 'success', undefined, 2000)
-
-  if (!cycle.initialized || !cycle.isVirtualInstance) return
-  await cycle.resolveCurrentDay({ force: true })
-}
-
-/**
- * Конфликт правил (FR-D-5): форма уже показала перечень инлайн, страница
- * добавляет снэкбар со ссылкой на диалог (вайрфреймы §3.2). В диалог уходит
- * правило отклонённого сохранения — иначе «Показать конфликты» открыло бы
- * пересечения сохранённых шаблонов, а не то, что пользователь только что ввёл.
- */
-function onConflict(rule: RepeatRule) {
-  conflictRule.value = rule
-  ui.notify(t('days.conflictBanner'), 'warning', {
-    label: t('days.showConflicts'),
-    handler: () => {
-      conflictsOpen.value = true
-    },
-  })
-}
-
-/** Диалог из баннера: показываем пересечения уже сохранённых шаблонов. */
-function openStoredConflicts() {
-  conflictRule.value = null
-  conflictsOpen.value = true
-}
-
-async function onAction(id: 'edit' | 'tasks' | 'delete', template: DayTemplate) {
-  if (id === 'edit') {
-    editing.value = template
-    formOpen.value = true
-    return
+  if (!cycle.initialized) return
+  if (saved.date === null) return
+  if (saved.date === cycle.currentInstance?.date) {
+    await cycle.syncCurrentDayWithPlan(saved.id)
   }
+}
 
-  if (id === 'tasks') {
-    tasksDialogTemplate.value = template
-    tasksDialogOpen.value = true
-    return
-  }
-
+async function onDelete(plan: DayPlan) {
   const confirmed = await ui.openConfirm({
-    title: t('days.delete'),
-    message: t('days.deleteConfirm', { name: template.name }),
+    title: t('days.deletePlan'),
+    message: t('days.deletePlanConfirm', { name: plan.name }),
     confirmLabel: t('common.delete'),
     cancelLabel: t('common.cancel'),
     danger: true,
   })
   if (!confirmed) return
 
-  const result = await days.deleteTemplate(template.id)
+  const result = await plans.deletePlan(plan.id)
   if (result.ok) {
     ui.notify(t('days.deleted'), 'error')
     return
   }
-  // FR-D-4: шаблон держит незавершённый день — удаление запрещено, предлагаем
-  // сначала завершить день. Это не ошибка БД, повторять операцию бессмысленно.
   if (result.error.code === 'CONSTRAINT_VIOLATION') {
-    ui.notify(t('days.deleteBlocked'), 'warning', undefined, 5000)
+    ui.notify(t('days.deletePlanBlocked'), 'warning', undefined, 5000)
     return
   }
   ui.notify(t('days.saveError'), 'error')
 }
 
-/** Перестановка стрелками — клавиатурная альтернатива drag (НФТ ТЗ §7). */
-async function move(template: DayTemplate, delta: number) {
-  // Стрелки доступны только в режиме «по порядку», поэтому индекс в показываемом
-  // списке совпадает с индексом в order.
-  const ordered = days.orderedTemplates
-  const from = ordered.findIndex(item => item.id === template.id)
-  const to = from + delta
-  if (from < 0 || to < 0 || to >= ordered.length) return
-
-  const result = await days.moveToPosition(template.id, to)
-  if (!result.ok) {
-    ui.notify(t('days.saveError'), 'error')
-    return
-  }
-  list.value = [...days.sortedTemplates]
+async function consumeCreateQuery() {
+  const create = route.query.create
+  if (typeof create !== 'string') return
+  const date = isValidISODate(create) ? create : todayISO()
+  // Сначала убираем query: QDialog закрывается при смене маршрута, и форма,
+  // открытая до router.replace, мгновенно получила бы update:modelValue=false.
+  const query = { ...route.query }
+  delete query.create
+  await router.replace({ query })
+  openCreate(date)
 }
 
-/**
- * Перетаскивание за ручку ⠿ — на pointer events (тот же приём, что ТЗ §4.1
- * предписывает доске дня). Своя реализация вместо vuedraggable сознательно:
- * библиотека объявлена через Options API, а Quasar собирает приложение с
- * `build.vueOptionsAPI: false` (по умолчанию) — тогда Vue не вызывает
- * applyOptions, у vuedraggable не регистрируются computed realList/getKey, её
- * render не рисует ничего, и список остаётся пустым при непустом счётчике
- * (журнал, приложение С, дефект D15).
- */
-function onHandleDown(event: PointerEvent, index: number): void {
-  if (!draggableOrder.value) return
-  draggingIndex.value = index
-  dropIndex.value = index
-  window.addEventListener('pointermove', onPointerMove)
-  window.addEventListener('pointerup', onPointerUp)
-  window.addEventListener('pointercancel', onPointerUp)
-  event.preventDefault()
-}
-
-/** Карточки списка в порядке разметки: по ним считается место вставки. */
-function cardElements(): HTMLElement[] {
-  return [...(listEl.value?.querySelectorAll<HTMLElement>('.day-template-card') ?? [])]
-}
-
-/** Место вставки: первая карточка, чья середина ниже указателя. */
-function onPointerMove(event: PointerEvent): void {
-  if (draggingIndex.value === null) return
-  const cards = cardElements()
-  if (!cards.length) return
-
-  let target = cards.length - 1
-  for (let index = 0; index < cards.length; index += 1) {
-    const rect = cards[index]?.getBoundingClientRect()
-    if (rect && event.clientY < rect.top + rect.height / 2) {
-      target = index
-      break
-    }
-  }
-  dropIndex.value = target
-}
-
-async function onPointerUp(): Promise<void> {
-  const from = draggingIndex.value
-  const to = dropIndex.value
-  stopDrag()
-  if (from === null || to === null || from === to) return
-
-  const moved = list.value[from]
-  if (!moved) return
-
-  const result = await days.moveToPosition(moved.id, to)
-  if (!result.ok) {
-    ui.notify(t('days.saveError'), 'error')
-    return
-  }
-  list.value = [...days.sortedTemplates]
-}
-
-function stopDrag(): void {
-  draggingIndex.value = null
-  dropIndex.value = null
-  window.removeEventListener('pointermove', onPointerMove)
-  window.removeEventListener('pointerup', onPointerUp)
-  window.removeEventListener('pointercancel', onPointerUp)
-}
-
-/**
- * Перечень конфликтов для диалога (FR-D-5, вайрфреймы §3.2): строка на каждое
- * пересечение — с кем именно и по каким значениям. Считается теми же функциями,
- * что и валидация формы (`days.validateNoOverlap` → `repeat.validateNoOverlap`),
- * поэтому «Показать конфликты» из снэкбара показывает ровно то, что отклонено.
- */
-const conflictLines = computed<string[]>(() => {
-  const draft = conflictRule.value
-  if (draft) return linesForRule(draft)
-  return days.orderedTemplates.flatMap(template =>
-    linesForRule(template.repeatRule, template.id).map(line => `${template.name}: ${line}`),
-  )
+onMounted(async () => {
+  await load()
+  await consumeCreateQuery()
 })
-
-function linesForRule(rule: RepeatRule, excludeId?: string): string[] {
-  return days
-    .validateNoOverlap(rule, excludeId)
-    .filter(isOverlapIssue)
-    .map(issue => {
-      const name =
-        days.templateById(issue.conflictingTemplateIds[0] ?? '')?.name ??
-        t('day.templateDeleted')
-      const key =
-        issue.code === 'OVERLAP_WEEKDAYS'
-          ? 'days.validation.overlapWeekdays'
-          : 'days.validation.overlapMonthdays'
-      const values = (issue.values ?? [])
-        .map(value =>
-          issue.code === 'OVERLAP_WEEKDAYS' ? t(weekdayLabelKey(value)) : String(value),
-        )
-        .join(', ')
-      const text = t(key, { name })
-      return values ? `${text} — ${t('days.validation.values', { values })}` : text
-    })
-}
 </script>
 
 <style scoped>
-.days-page__sort {
-  min-width: 150px;
+.days-page__section {
+  margin-top: 12px;
+}
+
+.days-page__section-title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--app-meta);
 }
 
 .days-page__list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-top: 6px;
 }
 
 .days-page__empty {
@@ -539,7 +417,7 @@ function linesForRule(rule: RepeatRule, excludeId?: string): string[] {
   border-radius: 8px;
   background: linear-gradient(90deg, #eeeeee 25%, #f5f5f5 50%, #eeeeee 75%);
   background-size: 200% 100%;
-  animation: days-skeleton-shimmer 1.2s infinite linear;
+  animation: days-skeleton-shimmer 1.2s linear infinite;
 }
 
 .days-page__conflicts {

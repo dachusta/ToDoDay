@@ -1,5 +1,6 @@
 import { format } from 'date-fns'
 import type { TimeFormat } from 'src/models/enums'
+import type { Slot } from 'src/models/cycle'
 
 /** ТЗ §2.8: единственный источник локальной календарной даты 'YYYY-MM-DD'. */
 export function todayISO(): string {
@@ -18,6 +19,22 @@ export function toLocalISO(date: Date): string {
 export function parseISODate(iso: string): Date {
   const [y = 0, m = 1, d = 1] = iso.split('-').map(Number)
   return new Date(y, m - 1, d)
+}
+
+/**
+ * Реальная календарная дата 'YYYY-MM-DD'. Проверяет не только форму, но и
+ * существование даты: '2025-02-30' не станет 2 марта молча.
+ */
+export function isValidISODate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [y = 0, m = 1, d = 1] = value.split('-').map(Number)
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false
+  const date = new Date(y, m - 1, d)
+  return (
+    date.getFullYear() === y &&
+    date.getMonth() === m - 1 &&
+    date.getDate() === d
+  )
 }
 
 /** Календарная арифметика: addDaysISO('2025-01-31', 1) === '2025-02-01'. */
@@ -60,4 +77,26 @@ export function formatMinutesOfDay(minutes: number, format12h: TimeFormat): stri
 /** FR-SET-3: сырое 'HH:mm' из данных → подпись на экране ('08:15' | '8:15 AM'). */
 export function formatClock(hhmm: string, format12h: TimeFormat): string {
   return formatMinutesOfDay(minutesOfDay(hhmm), format12h)
+}
+
+/**
+ * Слоты дня с шагом 15 минут. Один и тот же расчёт используют доска «Сегодня»
+ * и редактор плана: `startMin` — смещение от `timeStart`, `label` — время суток.
+ */
+export function buildSlots(timeStart: string, timeEnd: string): Slot[] {
+  const startMin = minutesOfDay(timeStart)
+  const endMin = minutesOfDay(timeEnd)
+  const total = Math.max(0, Math.floor((endMin - startMin) / 15))
+  return Array.from({ length: total }, (_, i) => {
+    const min = startMin + i * 15
+    const h = Math.floor(min / 60)
+    const m = min % 60
+    return {
+      index: i,
+      startMin: i * 15,
+      label: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+      isHour: m === 0,
+      isHalfHour: m === 30,
+    }
+  })
 }

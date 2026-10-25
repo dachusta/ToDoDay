@@ -18,6 +18,16 @@
     >
       <q-item-section>
         <q-item-label>{{ rowText(entry) }}</q-item-label>
+        <q-item-label
+          v-if="entry.unplanned"
+          caption
+          data-test="stats-history-unplanned"
+        >
+          {{ t('stats.historyUnplanned') }}
+          <template v-if="entry.removed">
+            · {{ t('stats.historyRemoved') }}
+          </template>
+        </q-item-label>
       </q-item-section>
       <q-item-section side>
         <span

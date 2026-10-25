@@ -1,18 +1,18 @@
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { QLayout, QPageContainer, Quasar } from 'quasar'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DayBoardPage from 'src/pages/DayBoardPage.vue'
 import { i18n } from 'src/boot/i18n'
-import { db } from 'src/services/db'
 import { todayISO } from 'src/services/dates'
 import { SLOT_HEIGHT } from 'src/models/cycle'
 import { useCycleStore } from 'src/stores/cycle'
-import { useDaysStore } from 'src/stores/days'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useTasksStore } from 'src/stores/tasks'
-import type { DayInstance, Placement } from 'src/models/dayInstance'
+import type { DayPlan, DayPlanInput } from 'src/models/day'
+import type { Task } from 'src/models/task'
 import { quasarComponents, quasarDirectives, quasarPluginOptions } from '../vitest/quasar'
 import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helpers'
 
@@ -24,6 +24,10 @@ import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helper
  * отсутствие перерисовки статичной части сетки при переносе и объявление слота
  * через `aria-live`. Абсолютные миллисекунды не утверждаются: в jsdom они зависят
  * от загрузки машины, а не от кода (прецеденты D25/D29/D32/D33 журнала).
+ *
+ * День приходит из плана: 120 плановых размещений материализуются
+ * `cycle.initialize()` — так проверяется реальный путь «план → факт», а не
+ * подложенный в Dexie экземпляр.
  *
  * Часы детерминированы там же, где и в `dayBoard.spec.ts`: подменяется `useNow`,
  * а не `Date` (Vue сравнивает `event.timeStamp` с моментом подписки).
@@ -69,13 +73,16 @@ function makeRouter(): Router {
   })
 }
 
-async function waitUntil(check: () => boolean, timeoutMs = 5000): Promise<void> {
+async function waitFor(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 5000,
+): Promise<void> {
   const start = Date.now()
-  while (!check() && Date.now() - start < timeoutMs) await flush(20)
+  while (!(await check()) && Date.now() - start < timeoutMs) await flush(20)
 }
 
 async function mountPage(): Promise<VueWrapper> {
-  const pinia = createPinia()
+  const pinia = getActivePinia() ?? createPinia()
   setActivePinia(pinia)
   const router = makeRouter()
   await router.push('/')
@@ -91,39 +98,72 @@ async function mountPage(): Promise<VueWrapper> {
   })
   mounted.push(wrapper)
 
-  await waitUntil(() => !wrapper.find('[data-test="skeleton"]').exists())
+  await waitFor(() => !wrapper.find('[data-test="skeleton"]').exists())
   return wrapper
 }
 
-/** Размещение с ключом FR-B-2: `startMin` кратен 15 и лежит внутри дня 08:00–22:00. */
-const placement = (id: string, index: number): Placement => ({
-  id,
-  taskId: `t${index}`,
-  startMin: (index % 56) * 15,
-  durationMin: 15,
-  status: 'pending',
-  placedAt: index,
-  taskSnapshot: { title: `дело ${index}`, color: '#2196F3', priority: 'low' },
-})
-
-/** Материализованный активный день на сегодня (иначе initialize создаст свой). */
-async function seedDay(placements: Placement[]): Promise<void> {
-  const instance: DayInstance = {
-    id: 'inst-1',
-    templateId: null,
-    date: todayISO(),
-    status: 'active',
-    placements,
-    timeStart: '08:00',
-    timeEnd: '22:00',
-    createdAt: 1,
-  }
-  await db.dayInstances.add(instance)
-  await db.cycleState.update('current', { activeInstanceId: instance.id })
+/** Рабочее дело, на которое ссылаются все плановые размещения нагрузки. */
+async function seedTask(title: string): Promise<Task> {
+  const result = await useTasksStore().createTask({
+    title,
+    priority: 'low',
+    color: '#2196F3',
+    durationMin: 15,
+  })
+  if (!result.ok) throw new Error(`дело: ${result.error.message}`)
+  return result.data
 }
 
-/** Полный день: 56 слотов по 15 минут от 08:00 до 22:00. */
-const MANY: Placement[] = Array.from({ length: 120 }, (_, index) => placement(`p${index}`, index))
+async function createPlan(input: Partial<DayPlanInput> = {}): Promise<DayPlan> {
+  const plans = useDayPlansStore()
+  if (!plans.initialized) await plans.loadAll()
+  const result = await plans.createPlan({
+    name: 'Нагрузка',
+    accentColor: '#2196F3',
+    date: todayISO(),
+    repeatRule: { type: 'none' },
+    timeStart: '08:00',
+    timeEnd: '22:00',
+    ...input,
+  })
+  if (!result.ok) throw new Error(`план: ${result.error.message}`)
+  return result.data
+}
+
+/** 120 плановых размещений: полный день, повторно по кругу, все по 15 минут. */
+const PLANNED_COUNT = 120
+
+async function mountLoadedDay(): Promise<VueWrapper> {
+  await useTasksStore().loadAll()
+  await useDayPlansStore().loadAll()
+  const task = await seedTask('Нагрузка')
+  await createPlan({
+    plannedPlacements: Array.from({ length: PLANNED_COUNT }, (_, index) => ({
+      id: `pp${index}`,
+      taskId: task.id,
+      startMin: (index % 56) * 15,
+      durationMin: 15,
+    })),
+  })
+  const initialized = await useCycleStore().initialize()
+  if (!initialized.ok) throw new Error(`цикл: ${initialized.error.message}`)
+  return mountPage()
+}
+
+/** Событие переноса с координатой указателя: jsdom не считает layout и DataTransfer. */
+function fireDrag(target: Element, type: string, clientY: number): void {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clientY', { value: clientY })
+  Object.defineProperty(event, 'relatedTarget', { value: document.body })
+  target.dispatchEvent(event)
+}
+
+const gridEl = (wrapper: VueWrapper) => wrapper.find('[data-test="grid"]').element as HTMLElement
+
+/** Индекс слота под указателем — та же формула, что у DayGrid.slotAtY. */
+function slotAt(wrapper: VueWrapper, clientY: number): number {
+  return Math.floor((clientY + gridEl(wrapper).scrollTop) / SLOT_HEIGHT)
+}
 
 async function prepare(): Promise<void> {
   resetStorage()
@@ -147,7 +187,7 @@ function teardown(): void {
     }
   }
   useTasksStore().unsubscribe()
-  useDaysStore().unsubscribe()
+  useDayPlansStore().unsubscribe()
   useCycleStore().dispose()
   document.body.innerHTML = ''
   Object.defineProperty(window, 'innerWidth', {
@@ -162,8 +202,7 @@ describe('Доска: производительность при 100+ разм�
   afterEach(teardown)
 
   it('виртуализирует подписи времени и держит один слой размещений', async () => {
-    await seedDay(MANY)
-    const wrapper = await mountPage()
+    const wrapper = await mountLoadedDay()
 
     // Строки слотов — статичная разметка дня: 56 на 14 часов
     expect(wrapper.findAll('.day-slot')).toHaveLength(56)
@@ -174,30 +213,30 @@ describe('Доска: производительность при 100+ разм�
 
     // Слой размещений не размонтируется вместе с якорным слотом (НФТ ТЗ §7)
     const cards = wrapper.findAll('[data-test="placements"] .placement-card')
-    expect(cards).toHaveLength(120)
-    expect(cards.map(node => node.attributes('data-placement'))).toEqual(
-      MANY.map(item => item.id),
-    )
+    expect(cards).toHaveLength(PLANNED_COUNT)
+    const expectedIds = (useCycleStore().currentInstance?.placements ?? []).map(item => item.id)
+    expect(expectedIds).toHaveLength(PLANNED_COUNT)
+    expect(cards.map(node => node.attributes('data-placement'))).toEqual(expectedIds)
   })
 
   it('перенос не перерисовывает строки сетки и подписи: те же DOM-узлы', async () => {
-    await seedDay(MANY)
-    const wrapper = await mountPage()
+    const wrapper = await mountLoadedDay()
 
     const grid = wrapper.find('[data-test="grid"]')
     const rowsBefore = wrapper.findAll('.day-slot').map(node => node.element)
     const labelsBefore = wrapper.findAll('[data-test="slot-label"]').map(node => node.element)
-    const cardsBefore = wrapper.findAll('[data-test="placements"] .placement-card').map(n => n.element)
+    const cardsBefore = wrapper
+      .findAll('[data-test="placements"] .placement-card')
+      .map(node => node.element)
 
     // Наведение на слот переноса: подсветка — один слой, а не класс у 56 строк.
     // Слот считается от контейнера, а он уже прокручен к текущему времени
     // (FR-B-1), поэтому ожидаемое смещение берётся от фактического scrollTop.
     const clientY = 300
-    await grid.trigger('dragover', { clientY })
+    fireDrag(grid.element, 'dragover', clientY)
     await flush()
 
-    const scroller = grid.element as HTMLElement
-    const slotIndex = Math.floor((clientY + scroller.scrollTop) / SLOT_HEIGHT)
+    const slotIndex = slotAt(wrapper, clientY)
     const highlight = wrapper.find('[data-test="slot-hover"]')
     expect(highlight.exists()).toBe(true)
     expect(highlight.attributes('style')).toContain(`${slotIndex * SLOT_HEIGHT}px`)
@@ -206,36 +245,32 @@ describe('Доска: производительность при 100+ разм�
     expect(wrapper.findAll('[data-test="slot-label"]').map(node => node.element)).toEqual(
       labelsBefore,
     )
-    expect(wrapper.findAll('[data-test="placements"] .placement-card').map(n => n.element)).toEqual(
-      cardsBefore,
-    )
+    expect(
+      wrapper.findAll('[data-test="placements"] .placement-card').map(node => node.element),
+    ).toEqual(cardsBefore)
   })
 
   it('слот под указателем объявляется через aria-live (НФТ ТЗ §7)', async () => {
-    await seedDay([placement('p0', 0)])
-    const wrapper = await mountPage()
+    const wrapper = await mountLoadedDay()
 
     const live = wrapper.find('[data-test="live-slot"]')
     expect(live.attributes('aria-live')).toBe('polite')
     expect(live.text()).toBe('')
 
     // Подпись слота под указателем: слот считается от контейнера и его scrollTop,
-    // а день начинается в 08:00 (шаблон seedDay) с шагом 15 минут.
+    // а день начинается в 08:00 (план на сегодня) с шагом 15 минут.
     const grid = wrapper.find('[data-test="grid"]')
     const clientY = 300
-    const slotIndex = Math.floor((clientY + (grid.element as HTMLElement).scrollTop) / SLOT_HEIGHT)
-    const minutes = 8 * 60 + slotIndex * 15
-    const expected = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(
-      minutes % 60,
-    ).padStart(2, '0')}`
+    const slotIndex = slotAt(wrapper, clientY)
+    const expected = useCycleStore().slots[slotIndex]?.label
 
-    await grid.trigger('dragover', { clientY })
+    fireDrag(grid.element, 'dragover', clientY)
     await flush()
     expect(live.text()).toBe(expected)
     expect(useCycleStore().hoveredSlot).toBe(slotIndex)
 
     // Указатель ушёл с сетки — объявление снимается, чужой слот не «висит» текущим
-    await grid.trigger('dragleave', { relatedTarget: document.body })
+    fireDrag(grid.element, 'dragleave', clientY)
     await flush()
     expect(live.text()).toBe('')
   })

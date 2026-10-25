@@ -4,10 +4,9 @@ import type { PlacementStatus, TimeFormat } from 'src/models/enums'
 
 /**
  * Действия размещения (FR-B-7). Список один на всё приложение: он рисуется
- * контекстным меню карточки и он же — клавиатурная альтернатива drag-and-drop
- * (FR-B-2), поэтому «Переместить в слот…» живёт здесь, а не в разметке.
- * Идентификатор действия — это и есть результат: `mark-done` ставит `done`,
- * `unmark-done` возвращает `pending` (снятие отметки не удаляет размещение).
+ * контекстным меню карточки и он же — клавиатурная альтернатива drag-and-drop.
+ * `mode: 'day'` — факт дня (статусы + правки), `mode: 'plan'` — план дня
+ * (только правки, без статусов выполнения).
  */
 export type PlacementActionId =
   | 'mark-done'
@@ -19,6 +18,8 @@ export type PlacementActionId =
   | 'move-to-slot'
   | 'remove'
 
+export type PlacementActionMode = 'day' | 'plan'
+
 export interface PlacementAction {
   id: PlacementActionId
   icon: string
@@ -28,33 +29,36 @@ export interface PlacementAction {
 
 /**
  * Видимые действия карточки. Завершённый день — только для чтения: изменяющих
- * действий нет вовсе (`DAY_NOT_ACTIVE`), поэтому список пуст и карточка не
- * показывает ни меню, ни кнопку «⋮» (вайрфреймы §1.3).
+ * действий нет вовсе (`DAY_NOT_ACTIVE`), поэтому список пуст.
  */
 export function visiblePlacementActions(
   placement: Placement,
   readOnly: boolean,
+  mode: PlacementActionMode = 'day',
 ): PlacementAction[] {
   if (readOnly) return []
 
-  const actions: PlacementAction[] = [
+  if (mode === 'plan') {
+    return [
+      { id: 'change-duration', icon: 'schedule', labelKey: 'placement.changeDuration' },
+      { id: 'replace', icon: 'swap_horiz', labelKey: 'placement.replace' },
+      { id: 'move-to-slot', icon: 'east', labelKey: 'placement.moveToSlot' },
+      { id: 'remove', icon: 'delete', labelKey: 'placement.remove', dividerBefore: true },
+    ]
+  }
+
+  return [
     placement.status === 'done'
       ? { id: 'unmark-done', icon: 'undo', labelKey: 'placement.unmarkDone' }
       : { id: 'mark-done', icon: 'check', labelKey: 'placement.markDone' },
     placement.status === 'skipped'
       ? { id: 'unmark-skipped', icon: 'undo', labelKey: 'placement.unmarkSkipped' }
       : { id: 'mark-skipped', icon: 'close', labelKey: 'placement.markSkipped' },
-  ]
-
-  // Изменяющие день действия требуют активного экземпляра (FR-B-7)
-  actions.push(
     { id: 'change-duration', icon: 'schedule', labelKey: 'placement.changeDuration', dividerBefore: true },
     { id: 'replace', icon: 'swap_horiz', labelKey: 'placement.replace' },
     { id: 'move-to-slot', icon: 'east', labelKey: 'placement.moveToSlot' },
     { id: 'remove', icon: 'delete', labelKey: 'placement.remove', dividerBefore: true },
-  )
-
-  return actions
+  ]
 }
 
 /** Статус — иконкой, не чекбоксом (FR-B-6): pending без отметки, done ✓, skipped ✗. */

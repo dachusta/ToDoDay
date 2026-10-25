@@ -46,6 +46,10 @@
         :read-only="readOnly"
         :day-start-min="dayStartMin"
         :time-format="timeFormat"
+        :unplanned="placement.unplanned === true"
+        :planned-start-min="plannedStarts?.get(placement.id) ?? null"
+        :archived="archivedIds?.has(placement.id) === true"
+        :mode="mode"
         @action="(id, target) => emit('action', id, target)"
         @drag-start="(target, event) => emit('drag-start', target, event)"
         @drag-end="emit('drag-end')"
@@ -71,12 +75,19 @@ withDefaults(
     draggingId?: string | null
     dayStartMin?: number
     timeFormat?: TimeFormat
+    /** 'day' — факт дня, 'plan' — редактор плана. */
+    mode?: 'day' | 'plan'
+    plannedStarts?: ReadonlyMap<string, number | null>
+    archivedIds?: ReadonlySet<string>
   }>(),
   {
     readOnly: false,
     draggingId: null,
     dayStartMin: 0,
     timeFormat: '24h',
+    mode: 'day',
+    plannedStarts: () => new Map<string, number | null>(),
+    archivedIds: () => new Set<string>(),
   },
 )
 

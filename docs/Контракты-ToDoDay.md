@@ -1146,4 +1146,16 @@ notify оборачивает Quasar Notify. `timeout` — длительнос�
 - `test/i18n/completeness.spec.ts` — полнота i18n по источникам: наборы ключей ru и en совпадают и не содержат пустых строк; каждый литеральный ключ `t('...')` есть в обоих словарях и отдаёт непустой перевод в обеих локалях; ключи, собранные кодом (`priorities.*`, `placementStatusKey`, дескрипторы `durationDescriptor`/`summaryDescriptor`/`historyRowDescriptor` — шесть форм истории, `labelKey` меню и действий, карта `errors.*` по всем девяти кодам `ErrorCode`), разрешаются; в шаблонах нет русских текстовых узлов и литеральных подписей (кроме символов `·`, `—`, `▶`, `✓`, `✗`, `⚠`); русские литералы скриптов — только сообщения `Result` и `console.warn` из закрытого списка НФТ ТЗ §7 (перечислены в тесте); словари — единственное место переводов.
 - `test/pwa/offline.spec.ts` — собранный `dist/pwa`: `index.html` содержит стартовый экран с inline-стилем, не содержит блокирующего внешнего CSS и подключает приложение модулем; критическая цепочка (HTML + CSS в gzip) укладывается в бюджет с печатью оценки времени по профилю Slow 3G; манифест предкеша сервис-воркера покрывает все собранные JS/CSS и шрифты (и каждая его запись существует на диске); `sw.js` содержит `NavigationRoute` на `index.html`, `skipWaiting`, `clientsClaim` и предкеш манифеста приложения. Если сборки нет, тесты пропускаются: без `pnpm build:pwa` проверять нечего.
 
-Журнал правок (приложения А–Щ) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+## 10. Ревизия 2.0.0: `useDayPlansStore` и внеплановый факт
+
+- `useDaysStore` заменён на `useDayPlansStore` (`src/stores/dayPlans.ts`): `plans`, `planById`, `planByDate`, `resolvedPlanForDate`, `upcomingPlans`, `pastPlans`, `recurringPlans`, `templatePlans`, `plansCount`, `hasConflicts`; actions `createPlan`, `updatePlan`, `deletePlan`, `placeTaskInPlan`, `addTasksToPlan`, `movePlanPlacement`, `removePlanPlacement`, `changePlanPlacementDuration`, `replacePlanPlacement`.
+- `DayPlan`: `date: string | null`, `repeatRule`, `plannedPlacements`; `planMode`: `oneoff` / `recurring` / `template`.
+- `onDayPlanChanged` — emitter для `useCycleStore`: создание/правка/удаление плана синхронизируются с открытым фактом через `reconcileInstanceWithPlan`.
+- `useCycleStore`: `currentPlan`, `currentPlanMode`, `isPlanless`, `isPlanMissing`, `removedPlacements`, `removedCount`, `unplannedCount`, `plannedTimeFor`, `isUnplanned`, `restorePlacement`, `syncCurrentDayWithPlan`; разрешение дня — `resolvePlanForDate`; при завершении `removed` становится `skipped`.
+- `Placement`: `plannedId`, `unplanned`, `removed`. `DayInstance`: `planId` (легаси `templateId` остаётся для подписи).
+- `useStatsStore`/`services/stats`: `unplanned` в `TaskStats`, `OverallStats`, `PlacementHistoryEntry`; `StatsSortField += 'unplanned'`.
+- Dexie v2: `db.dayPlans` — алиас физической `dayTemplates` (`&date`), upgrade `plannedTaskIds → plannedPlacements`; `db.dayInstances` индексируется `planId`.
+- Экспорт `2.0` (`tasks`, `dayPlans`, `dayInstances`, `cycleState`, `settings`); импорт `1.0` конвертирует `dayTemplates` в планы без времени.
+- Тесты: `test/services/dayPlans.spec.ts`, `test/stores/dayPlans.spec.ts`, `test/components/dayPlanPage.spec.ts`, `dayPlanForm.spec.ts`; переписаны `cycle`, `dayBoard`, `dayBoardPerf`, `dayCompletion`, `daysFlow`, `daysPage`, `repeat`, `dayValidator`, `db`, `settings`, `tasks`, `stats`.
+
+Журнал правок (приложения А–Ы) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

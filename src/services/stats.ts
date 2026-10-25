@@ -5,7 +5,7 @@ import type { PlacementStatus, Priority } from 'src/models/enums'
 export type StatsPeriod = '7d' | '30d' | 'all'
 
 /** Колонки сортировки таблицы статистики (контракты §4.1). */
-export type StatsSortField = 'title' | 'rate' | 'done' | 'skipped' | 'placed'
+export type StatsSortField = 'title' | 'rate' | 'done' | 'skipped' | 'placed' | 'unplanned'
 
 export interface TaskStats {
   taskId: string
@@ -16,6 +16,8 @@ export interface TaskStats {
   done: number
   skipped: number
   pending: number
+  /** Сколько размещений было внеплановыми (добавлено/изменено/убрано в «Сегодня»). */
+  unplanned?: number
   rate: number | null
 }
 
@@ -23,6 +25,7 @@ export interface OverallStats {
   placed: number
   done: number
   skipped: number
+  unplanned?: number
   rate: number | null
   periodStart: string | null
   periodEnd: string
@@ -34,6 +37,8 @@ export interface PlacementHistoryEntry {
   startMin: number | null
   durationMin: number
   status: PlacementStatus
+  unplanned?: boolean
+  removed?: boolean
   completedAt?: number
 }
 
@@ -66,7 +71,7 @@ export function aggregateStats(
   // Дата и placedAt последнего снимка: при одной дате побеждает больший placedAt (FR-S-2)
   const lastSeen = new Map<string, { date: string; placedAt: number }>()
 
-  let placed = 0, done = 0, skipped = 0
+  let placed = 0, done = 0, skipped = 0, unplanned = 0
 
   for (const inst of instances) {
     // Сравниваем строки 'YYYY-MM-DD' в локальной дате: new Date('2025-09-23')
@@ -82,12 +87,13 @@ export function aggregateStats(
         title: p.taskSnapshot.title,
         color: p.taskSnapshot.color,
         priority: p.taskSnapshot.priority,
-        placed: 0, done: 0, skipped: 0, pending: 0, rate: null,
+        placed: 0, done: 0, skipped: 0, pending: 0, unplanned: 0, rate: null,
       }
       cur.placed++
       if (p.status === 'done') { cur.done++; done++ }
       else if (p.status === 'skipped') { cur.skipped++; skipped++ }
       else cur.pending++
+      if (p.unplanned === true) { cur.unplanned = (cur.unplanned ?? 0) + 1; unplanned++ }
 
       // Снимок подписи: большая дата экземпляра, при равенстве — больший placedAt
       const seen = lastSeen.get(p.taskId)
@@ -115,7 +121,7 @@ export function aggregateStats(
   return {
     perTask,
     overall: {
-      placed, done, skipped,
+      placed, done, skipped, unplanned,
       rate: overallDenom === 0 ? null : done / overallDenom,
       periodStart: startISO,
       periodEnd: today,

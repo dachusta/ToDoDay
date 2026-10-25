@@ -52,6 +52,21 @@
       :title="placement.taskSnapshot.title"
     >{{ placement.taskSnapshot.title }}</span>
     <span
+      v-if="archived"
+      class="placement-card__badge placement-card__badge--muted"
+      data-test="placement-archived"
+    >{{ t('placement.archived') }}</span>
+    <span
+      v-if="unplanned"
+      class="placement-card__badge"
+      data-test="placement-unplanned"
+    >{{ t('placement.unplannedBadge') }}</span>
+    <span
+      v-if="plannedTime"
+      class="placement-card__planned"
+      data-test="placement-planned-time"
+    >{{ t('placement.plannedTime', { time: plannedTime }) }}</span>
+    <span
       v-if="conflict"
       class="placement-card__warning"
       aria-hidden="true"
@@ -82,6 +97,7 @@
       ref="actionsRef"
       :placement="placement"
       :read-only="readOnly"
+      :mode="mode"
       :target="rootEl"
       @action="(id, target) => emit('action', id, target)"
     />
@@ -99,7 +115,9 @@ import {
   placementStatusIcon,
   placementStatusKey,
   type PlacementActionId,
+  type PlacementActionMode,
 } from './placementActions'
+import { formatMinutesOfDay } from 'src/services/dates'
 import type { Placement } from 'src/models/dayInstance'
 import type { TimeFormat } from 'src/models/enums'
 
@@ -121,6 +139,14 @@ const props = withDefaults(
     /** Минуты от начала суток для instance.timeStart. */
     dayStartMin?: number
     timeFormat?: TimeFormat
+    /** Размещение добавлено или изменено в «Сегодня» относительно плана. */
+    unplanned?: boolean
+    /** Плановое время (смещение от начала дня) для подписи «план: HH:mm». */
+    plannedStartMin?: number | null
+    /** Дело в архиве (показывается в редакторе плана). */
+    archived?: boolean
+    /** 'day' — факт дня, 'plan' — редактор плана. */
+    mode?: PlacementActionMode
   }>(),
   {
     variant: 'grid',
@@ -132,6 +158,10 @@ const props = withDefaults(
     dragging: false,
     dayStartMin: 0,
     timeFormat: '24h',
+    unplanned: false,
+    plannedStartMin: null,
+    archived: false,
+    mode: 'day',
   },
 )
 
@@ -164,21 +194,33 @@ const timeLabel = computed(() => {
 
 const statusText = computed(() => t(placementStatusKey(props.placement.status)))
 
+const plannedTime = computed(() => {
+  if (props.plannedStartMin === null || props.plannedStartMin === undefined) return ''
+  if (props.plannedStartMin === props.placement.startMin) return ''
+  return formatMinutesOfDay(props.dayStartMin + props.plannedStartMin, props.timeFormat)
+})
+
 const ariaLabel = computed(() => {
   const title = props.placement.taskSnapshot.title
-  if (range.value === null) {
-    return t('placement.ariaLabelZone', {
-      title,
-      time: t('placement.noTime'),
-      status: statusText.value,
-    })
-  }
-  return t('placement.ariaLabel', {
-    title,
-    from: range.value.from,
-    to: range.value.to,
-    status: statusText.value,
-  })
+  const base =
+    range.value === null
+      ? t('placement.ariaLabelZone', {
+          title,
+          time: t('placement.noTime'),
+          status: statusText.value,
+        })
+      : t('placement.ariaLabel', {
+          title,
+          from: range.value.from,
+          to: range.value.to,
+          status: statusText.value,
+        })
+  const unplanned = props.unplanned ? `, ${t('placement.unplannedBadge')}` : ''
+  const planned = plannedTime.value
+    ? `, ${t('placement.plannedTime', { time: plannedTime.value })}`
+    : ''
+  const archived = props.archived ? `, ${t('placement.archived')}` : ''
+  return `${base}${unplanned}${planned}${archived}`
 })
 
 const menuAria = computed(() =>
@@ -190,6 +232,8 @@ const classes = computed(() => ({
   'placement-card--conflict': props.conflict,
   'placement-card--now': props.now,
   'placement-card--dragging': props.dragging,
+  'placement-card--unplanned': props.unplanned,
+  'placement-card--archived': props.archived,
   [`placement-card--${props.placement.status}`]: true,
 }))
 
@@ -379,6 +423,35 @@ onUnmounted(stopLocalListeners)
   white-space: nowrap;
   font-size: 12px;
   line-height: 16px;
+}
+
+/*
+  Внеплановое/архивное — текстовый бейдж на нейтральной плашке: цвет не является
+  единственным признаком (WCAG 1.4.1), а пара --app-surface-muted/--app-meta
+  проходит AA в обеих темах.
+*/
+.placement-card__badge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--app-surface-muted);
+  color: var(--app-meta);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.placement-card__badge--muted {
+  opacity: 1;
+}
+
+.placement-card__planned {
+  flex: 0 0 auto;
+  color: var(--app-hint);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  text-decoration: line-through;
 }
 
 .placement-card__meta {

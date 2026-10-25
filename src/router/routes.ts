@@ -32,6 +32,13 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: 'nav.days', navKey: 'days' },
       },
       {
+        path: 'days/:id',
+        name: 'day-plan',
+        component: () => import('pages/DayPlanPage.vue'),
+        props: true,
+        meta: { titleKey: 'days.editTitle', navKey: 'days', back: true },
+      },
+      {
         path: 'stats',
         name: 'stats',
         component: () => import('pages/StatsPage.vue'),

@@ -59,7 +59,6 @@ describe('services/db: ensureCycleState достраивает поля стар
     expect(state).toEqual({
       id: 'current',
       activeInstanceId: null,
-      lastCyclicTemplateId: null,
       manualShiftDate: null,
       lastAutoShiftDate: null,
     })
@@ -93,7 +92,6 @@ describe('services/db: ensureCycleState достраивает поля стар
     const full: CycleStateDto = {
       id: 'current',
       activeInstanceId: null,
-      lastCyclicTemplateId: 'tpl-2',
       manualShiftDate: null,
       lastAutoShiftDate: '2025-09-23',
     }

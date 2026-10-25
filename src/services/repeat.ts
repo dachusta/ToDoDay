@@ -1,67 +1,76 @@
 import { addDaysISO } from 'src/services/dates'
-import type { DayTemplate, RepeatRule, ValidationIssue } from 'src/models/day'
+import type { DayPlan, RepeatRule, ValidationIssue } from 'src/models/day'
 import type { ShiftMode } from 'src/models/enums'
 
 /**
- * FR-C-1: выбор шаблона дня для даты 'YYYY-MM-DD'.
- * Приоритет: число месяца → день недели (0 = Пн, формула ТЗ §2.8: (getDay() + 6) % 7) → следующий циклический → null (пустой день).
- * Удаление шаблона-указателя переписывает lastCyclicTemplateId (FR-C-2).
- * Если id всё же не найден — берём первый по order, это запасной путь, не норма.
+ * Выбор плана дня для даты 'YYYY-MM-DD'.
+ *
+ * Приоритет: конкретный день на эту дату → правило числа месяца → правило дня
+ * недели → null (пустой день). Повторяющиеся планы одного типа не пересекаются
+ * (это проверяет validateNoOverlap при сохранении); если конфликт всё же попал
+ * в БД через импорт, побеждает первый по createdAt, затем по id.
+ *
+ * Заготовки «без даты» (date === null, repeatRule.type === 'none') в выборе не
+ * участвуют: они не открываются в «Сегодня».
  */
-export function resolveDayForDate(
+export function resolvePlanForDate(
   date: string,
-  templates: DayTemplate[],
-  lastCyclicTemplateId: string | null = null,
-): DayTemplate | null {
-  // FR-SET-5 / контракты §4.4: «первый по order» — сортируем локально, чтобы
-  // выбор не зависел от порядка, в котором вызывающий передал массив.
-  const sorted = [...templates].sort((a, b) => a.order - b.order)
+  plans: readonly DayPlan[],
+): DayPlan | null {
+  const sorted = [...plans].sort(
+    (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+  )
+
+  const exact = sorted.find(
+    plan => plan.repeatRule.type === 'none' && plan.date === date,
+  )
+  if (exact) return exact
+
   const [year = 0, month = 1, day = 1] = date.split('-').map(Number)
   const local = new Date(year, month - 1, day)
   const dayOfMonth = local.getDate()
   const weekday0 = (local.getDay() + 6) % 7
 
   const byMonthday = sorted.find(
-    t => t.repeatRule.type === 'monthdays' && t.repeatRule.monthdays?.includes(dayOfMonth),
+    plan =>
+      plan.repeatRule.type === 'monthdays' &&
+      plan.repeatRule.monthdays?.includes(dayOfMonth),
   )
   if (byMonthday) return byMonthday
 
   const byWeekday = sorted.find(
-    t => t.repeatRule.type === 'weekdays' && t.repeatRule.weekdays?.includes(weekday0),
+    plan =>
+      plan.repeatRule.type === 'weekdays' &&
+      plan.repeatRule.weekdays?.includes(weekday0),
   )
   if (byWeekday) return byWeekday
 
-  const cyclic = sorted.filter(t => t.repeatRule.type === 'none')
-  if (!cyclic.length) return null
-
-  const idx = lastCyclicTemplateId ? cyclic.findIndex(t => t.id === lastCyclicTemplateId) : -1
-  return cyclic[(idx + 1) % cyclic.length] ?? null
+  return null
 }
 
 /**
- * ТЗ §2.8: единственное место, где считаются даты сдвига.
- * 'early' (только если instanceDate === today): и дата экземпляра, и шаблон — завтра.
- * Иначе обе даты — today. Просроченный и полуночный сдвиг не перескакивают сегодня.
- * Противоречивый 'early' вырождается в 'overdue' + console.warn
- * (единственный warn этого модуля, НФТ ТЗ §7, п. 1 закрытого списка).
+ * Единственное место, где считаются даты сдвига.
+ * 'early' (только если instanceDate === today): целевая дата — завтра.
+ * 'midnight' и 'overdue': целевая дата — today. Просроченный и полуночный
+ * сдвиг не перескакивают сегодня. Противоречивый 'early' вырождается в
+ * 'overdue' + console.warn (единственный warn этого модуля).
  */
 export function resolveShiftTargets(
   instanceDate: string,
   today: string,
   mode: ShiftMode,
-): { mode: ShiftMode; targetDate: string; templateDate: string } {
+): { mode: ShiftMode; targetDate: string } {
   if (mode === 'early' && instanceDate !== today) {
     console.warn('[repeat] shiftMode="early" для просроченного дня — трактуем как "overdue"')
-    return { mode: 'overdue', targetDate: today, templateDate: today }
+    return { mode: 'overdue', targetDate: today }
   }
   if (mode === 'early') {
-    const tomorrow = addDaysISO(instanceDate, 1)
-    return { mode: 'early', targetDate: tomorrow, templateDate: tomorrow }
+    return { mode: 'early', targetDate: addDaysISO(instanceDate, 1) }
   }
-  return { mode, targetDate: today, templateDate: today }
+  return { mode, targetDate: today }
 }
 
-/** FR-D-1: убирает поля, не относящиеся к type; дедуплицирует и сортирует значения. */
+/** Убирает поля, не относящиеся к type; дедуплицирует и сортирует значения. */
 export function normalizeRule(rule: RepeatRule): RepeatRule {
   const uniqSorted = (values: number[] | undefined) =>
     [...new Set(values ?? [])].sort((a, b) => a - b)
@@ -71,7 +80,7 @@ export function normalizeRule(rule: RepeatRule): RepeatRule {
   return { type: 'none' }
 }
 
-/** Валидация самого правила: пустой набор и значения вне диапазона (контракты §2.5). */
+/** Валидация самого правила: пустой набор и значения вне диапазона. */
 export function validateRule(rule: RepeatRule): ValidationIssue[] {
   if (rule.type === 'none') return []
 
@@ -86,7 +95,7 @@ export function validateRule(rule: RepeatRule): ValidationIssue[] {
       {
         code: 'INVALID_RULE',
         message: `Значения правила вне диапазона ${min}..${max}: ${bad.join(', ')}`,
-        conflictingTemplateIds: [],
+        conflictingPlanIds: [],
         values: bad,
       },
     ]
@@ -98,17 +107,17 @@ export function validateRule(rule: RepeatRule): ValidationIssue[] {
         message: isWeekdays
           ? 'Выберите хотя бы один день недели'
           : 'Выберите хотя бы одно число месяца',
-        conflictingTemplateIds: [],
+        conflictingPlanIds: [],
       },
     ]
   }
   return []
 }
 
-/** FR-D-5: пересечения правил. Единый тип ValidationIssue (без OverlapIssue). */
+/** Пересечения правил повторяющихся планов. Один тип — один набор дат. */
 export function validateNoOverlap(
   rule: RepeatRule,
-  templates: DayTemplate[],
+  plans: readonly DayPlan[],
   excludeId?: string,
 ): ValidationIssue[] {
   const own = validateRule(rule)
@@ -118,16 +127,16 @@ export function validateNoOverlap(
   if (own.some(i => i.code === 'EMPTY_RULE' || i.code === 'INVALID_RULE')) return issues
 
   if (normalized.type === 'weekdays' && normalized.weekdays?.length) {
-    for (const t of templates) {
-      if (t.id === excludeId) continue
-      const other = normalizeRule(t.repeatRule)
+    for (const plan of plans) {
+      if (plan.id === excludeId) continue
+      const other = normalizeRule(plan.repeatRule)
       if (other.type !== 'weekdays') continue
       const overlap = (other.weekdays ?? []).filter(w => normalized.weekdays!.includes(w))
       if (overlap.length) {
         issues.push({
           code: 'OVERLAP_WEEKDAYS',
-          message: `Пересечение по дням недели с шаблоном «${t.name}»`,
-          conflictingTemplateIds: [t.id],
+          message: `Пересечение по дням недели с планом «${plan.name}»`,
+          conflictingPlanIds: [plan.id],
           values: overlap,
         })
       }
@@ -135,16 +144,16 @@ export function validateNoOverlap(
   }
 
   if (normalized.type === 'monthdays' && normalized.monthdays?.length) {
-    for (const t of templates) {
-      if (t.id === excludeId) continue
-      const other = normalizeRule(t.repeatRule)
+    for (const plan of plans) {
+      if (plan.id === excludeId) continue
+      const other = normalizeRule(plan.repeatRule)
       if (other.type !== 'monthdays') continue
       const overlap = (other.monthdays ?? []).filter(m => normalized.monthdays!.includes(m))
       if (overlap.length) {
         issues.push({
           code: 'OVERLAP_MONTHDAYS',
-          message: `Пересечение по числам месяца с шаблоном «${t.name}»`,
-          conflictingTemplateIds: [t.id],
+          message: `Пересечение по числам месяца с планом «${plan.name}»`,
+          conflictingPlanIds: [plan.id],
           values: overlap,
         })
       }

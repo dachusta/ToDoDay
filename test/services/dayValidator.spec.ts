@@ -1,242 +1,118 @@
 import { describe, expect, it } from 'vitest'
 import {
-  NAME_MAX_LENGTH,
   isOverlapIssue,
-  overlapTemplateIds,
-  validateDayTemplate,
+  overlapPlanIds,
+  validateDayPlan,
+  validatePlanPlacements,
   validatePlannedTaskRefs,
 } from 'src/services/validators/day'
-import type { DayTemplate, DayTemplateInput, ValidationIssue } from 'src/models/day'
+import type { DayPlan, DayPlanInput, PlannedPlacement, ValidationIssue } from 'src/models/day'
 
-/**
- * Валидатор шаблона дня (ТЗ FR-D-1, FR-D-5; контракты §2.5) — решение по строке
- * «валидатор дня» скаффолда §6: проверки шаблона живут в
- * `services/validators/day.ts`, а стор только делегирует. Здесь проверяются
- * приёмки ТЗ §9 «По дням» про диапазоны полей и перечень конфликтов.
- */
-
-const input = (over: Partial<DayTemplateInput> = {}): DayTemplateInput => ({
-  name: 'Рабочий',
+const plan = (over: Partial<DayPlan> & { id: string }): DayPlan => ({
+  name: `план ${over.id}`,
   accentColor: '#2196F3',
-  timeStart: '08:00',
-  timeEnd: '22:00',
+  date: null,
   repeatRule: { type: 'none' },
-  plannedTaskIds: [],
-  ...over,
-})
-
-const template = (over: Partial<DayTemplate> & { id: string }): DayTemplate => ({
-  name: `шаблон ${over.id}`,
-  order: 0,
   timeStart: '08:00',
   timeEnd: '22:00',
   gridStepMin: 15,
-  accentColor: '#4CAF50',
-  repeatRule: { type: 'none' },
-  plannedTaskIds: [],
+  plannedPlacements: [],
   createdAt: 1,
+  updatedAt: 1,
   ...over,
 })
 
-const codes = (issues: ValidationIssue[]): string[] => issues.map(issue => issue.code)
-
-describe('validateDayTemplate: поля шаблона (FR-D-1)', () => {
-  it('корректный ввод не даёт проблем', () => {
-    expect(validateDayTemplate(input(), [])).toEqual([])
-  })
-
-  it('проверяет название: пустое, из пробелов и длиннее 50 символов', () => {
-    expect(codes(validateDayTemplate(input({ name: '' }), []))).toEqual(['INVALID_NAME'])
-    expect(codes(validateDayTemplate(input({ name: '   ' }), []))).toEqual(['INVALID_NAME'])
-    expect(
-      codes(validateDayTemplate(input({ name: 'Я'.repeat(NAME_MAX_LENGTH + 1) }), [])),
-    ).toEqual(['INVALID_NAME'])
-    // Ровно 50 символов — граница принимается
-    expect(
-      validateDayTemplate(input({ name: 'Я'.repeat(NAME_MAX_LENGTH) }), []),
-    ).toEqual([])
-  })
-
-  it('проверяет акцентный цвет строго как #RRGGBB', () => {
-    for (const accentColor of ['red', '#FFF', '#12345G', '', '2196F3']) {
-      expect(codes(validateDayTemplate(input({ accentColor }), []))).toEqual(['INVALID_COLOR'])
-    }
-    expect(validateDayTemplate(input({ accentColor: '#a1b2c3' }), [])).toEqual([])
-  })
-
-  it('отклоняет время вне HH:mm с минутами 00/15/30/45 и короче часа', () => {
-    // Строка не из формата — INVALID_TIME, а не тихое приведение (FR-D-1)
-    for (const time of ['abc', '99:99', '24:00', '08:07']) {
-      expect(
-        codes(validateDayTemplate(input({ timeStart: time, timeEnd: '22:00' }), [])),
-      ).toContain('INVALID_TIME')
-    }
-    // Конец не позже начала и длина меньше часа
-    expect(
-      codes(validateDayTemplate(input({ timeStart: '22:00', timeEnd: '08:00' }), [])),
-    ).toEqual(['INVALID_TIME'])
-    expect(
-      codes(validateDayTemplate(input({ timeStart: '08:00', timeEnd: '08:00' }), [])),
-    ).toEqual(['INVALID_TIME'])
-    expect(
-      codes(validateDayTemplate(input({ timeStart: '08:00', timeEnd: '08:45' }), [])),
-    ).toEqual(['INVALID_TIME'])
-  })
-
-  it('принимает границы суток 00:00–23:45 (1425 минут) и ровно час', () => {
-    expect(
-      validateDayTemplate(input({ timeStart: '00:00', timeEnd: '23:45' }), []),
-    ).toEqual([])
-    expect(
-      validateDayTemplate(input({ timeStart: '08:00', timeEnd: '09:00' }), []),
-    ).toEqual([])
-  })
-
-  it('собирает все проблемы одним массивом, правило — первым', () => {
-    const issues = validateDayTemplate(
-      input({
-        name: '',
-        accentColor: 'red',
-        timeStart: 'abc',
-        timeEnd: '22:00',
-        repeatRule: { type: 'weekdays', weekdays: [] },
-      }),
-      [],
-    )
-    expect(codes(issues)).toEqual([
-      'EMPTY_RULE',
-      'INVALID_NAME',
-      'INVALID_COLOR',
-      'INVALID_TIME',
-    ])
-  })
+const input = (over: Partial<DayPlanInput> = {}): DayPlanInput => ({
+  name: 'День',
+  accentColor: '#2196F3',
+  date: '2025-09-23',
+  repeatRule: { type: 'none' },
+  timeStart: '08:00',
+  timeEnd: '22:00',
+  ...over,
 })
 
-describe('validateDayTemplate: правило и пересечения (FR-D-1, FR-D-5)', () => {
-  it('пустой набор и значения вне диапазона — ошибки правила', () => {
-    expect(
-      codes(validateDayTemplate(input({ repeatRule: { type: 'weekdays', weekdays: [] } }), [])),
-    ).toEqual(['EMPTY_RULE'])
-    expect(
-      codes(validateDayTemplate(input({ repeatRule: { type: 'monthdays', monthdays: [] } }), [])),
-    ).toEqual(['EMPTY_RULE'])
+const codes = (issues: ValidationIssue[]) => issues.map(issue => issue.code)
 
-    const bad = validateDayTemplate(
-      input({ repeatRule: { type: 'weekdays', weekdays: [0, 7] } }),
-      [],
-    )
-    expect(codes(bad)).toEqual(['INVALID_RULE'])
-    expect(bad[0]?.values).toEqual([7])
-
-    expect(
-      codes(validateDayTemplate(input({ repeatRule: { type: 'monthdays', monthdays: [32] } }), [])),
-    ).toEqual(['INVALID_RULE'])
-    expect(
-      codes(validateDayTemplate(input({ repeatRule: { type: 'monthdays', monthdays: [0] } }), [])),
-    ).toEqual(['INVALID_RULE'])
+describe('validateDayPlan', () => {
+  it('принимает корректный конкретный день', () => {
+    expect(validateDayPlan(input(), [])).toEqual([])
   })
 
-  it('находит пересечение дней недели и отдаёт виновника со значениями', () => {
-    const existing = template({
-      id: 't1',
-      name: 'Спорт',
-      repeatRule: { type: 'weekdays', weekdays: [0, 1] },
-    })
-    const issues = validateDayTemplate(
-      input({ repeatRule: { type: 'weekdays', weekdays: [0] } }),
-      [existing],
-    )
-    expect(codes(issues)).toEqual(['OVERLAP_WEEKDAYS'])
-    expect(issues[0]?.conflictingTemplateIds).toEqual(['t1'])
-    expect(issues[0]?.values).toEqual([0])
-    // Лишние для type поля не мешают: месяц-число нормализуется прочь
+  it('проверяет имя, цвет, время и дату', () => {
+    expect(codes(validateDayPlan(input({ name: '' }), []))).toEqual(['INVALID_NAME'])
+    expect(codes(validateDayPlan(input({ accentColor: 'red' }), []))).toEqual(['INVALID_COLOR'])
+    expect(codes(validateDayPlan(input({ timeStart: '08:07' }), []))).toEqual(['INVALID_TIME'])
+    expect(codes(validateDayPlan(input({ date: '2025-02-30' }), []))).toEqual(['INVALID_DATE'])
+  })
+
+  it('запрещает вторую запись на ту же дату', () => {
+    const existing = plan({ id: 'p', date: '2025-09-23' })
+    const issues = validateDayPlan(input(), [existing])
+    expect(codes(issues)).toEqual(['DATE_TAKEN'])
+    expect(issues[0]?.conflictingPlanIds).toEqual(['p'])
+    expect(validateDayPlan(input(), [existing], 'p')).toEqual([])
+  })
+
+  it('проверяет пустое правило и пересечение повторяющихся дней', () => {
     expect(
-      validateDayTemplate(
-        input({ repeatRule: { type: 'weekdays', weekdays: [5], monthdays: [1] } }),
-        [existing],
+      codes(
+        validateDayPlan(
+          input({ date: null, repeatRule: { type: 'weekdays', weekdays: [] } }),
+          [],
+        ),
       ),
-    ).toEqual([])
-  })
+    ).toEqual(['EMPTY_RULE'])
 
-  it('находит пересечение чисел месяца', () => {
-    const existing = template({
-      id: 't2',
-      name: 'Аванс',
-      repeatRule: { type: 'monthdays', monthdays: [1, 15] },
+    const existing = plan({
+      id: 'wd',
+      repeatRule: { type: 'weekdays', weekdays: [0, 2] },
     })
-    const issues = validateDayTemplate(
-      input({ repeatRule: { type: 'monthdays', monthdays: [15, 20] } }),
+    const issues = validateDayPlan(
+      input({ date: null, repeatRule: { type: 'weekdays', weekdays: [2] } }),
       [existing],
     )
-    expect(codes(issues)).toEqual(['OVERLAP_MONTHDAYS'])
-    expect(issues[0]?.values).toEqual([15])
+    expect(isOverlapIssue(issues[0]!)).toBe(true)
+    expect(overlapPlanIds(issues)).toEqual(['wd'])
   })
 
-  it('дни недели и числа месяца между собой не конфликтуют (приоритет monthdays)', () => {
-    const existing = template({
-      id: 't3',
-      repeatRule: { type: 'monthdays', monthdays: [1] },
-    })
-    expect(
-      validateDayTemplate(input({ repeatRule: { type: 'weekdays', weekdays: [0] } }), [existing]),
-    ).toEqual([])
+  it('разрешает заготовку без даты и правила', () => {
+    expect(validateDayPlan(input({ date: null }), [])).toEqual([])
+  })
+})
+
+describe('validatePlanPlacements', () => {
+  const placement = (over: Partial<PlannedPlacement> = {}): PlannedPlacement => ({
+    id: 'pp',
+    taskId: 't',
+    startMin: 60,
+    durationMin: 30,
+    ...over,
   })
 
-  it('исключает правимый шаблон из проверки (FR-D-3)', () => {
-    const existing = template({
-      id: 't4',
-      repeatRule: { type: 'weekdays', weekdays: [0, 1] },
-    })
-    const rule = { type: 'weekdays' as const, weekdays: [0, 1] }
-    expect(codes(validateDayTemplate(input({ repeatRule: rule }), [existing]))).toEqual([
-      'OVERLAP_WEEKDAYS',
+  it('принимает null-время и помещающееся размещение', () => {
+    expect(validatePlanPlacements([placement({ startMin: null })], '08:00', '22:00')).toEqual([])
+    expect(validatePlanPlacements([placement()], '08:00', '22:00')).toEqual([])
+  })
+
+  it('отклоняет невалидную длительность, смещение и выход за день', () => {
+    expect(codes(validatePlanPlacements([placement({ durationMin: 20 })], '08:00', '22:00'))).toEqual([
+      'INVALID_PLACEMENT',
     ])
-    expect(validateDayTemplate(input({ repeatRule: rule }), [existing], 't4')).toEqual([])
+    expect(codes(validatePlanPlacements([placement({ startMin: 10 })], '08:00', '22:00'))).toEqual([
+      'INVALID_PLACEMENT',
+    ])
+    expect(
+      codes(validatePlanPlacements([placement({ startMin: 840, durationMin: 60 })], '08:00', '22:00')),
+    ).toEqual(['INVALID_PLACEMENT'])
   })
 })
 
-describe('валидатор дня: помощники для Result', () => {
-  it('isOverlapIssue отмечает только OVERLAP_*', () => {
-    expect(
-      isOverlapIssue({
-        code: 'OVERLAP_WEEKDAYS',
-        message: '',
-        conflictingTemplateIds: [],
-      }),
-    ).toBe(true)
-    expect(
-      isOverlapIssue({ code: 'INVALID_TIME', message: '', conflictingTemplateIds: [] }),
-    ).toBe(false)
-  })
-
-  it('overlapTemplateIds собирает виновников без повторов', () => {
-    const issues: ValidationIssue[] = [
-      { code: 'OVERLAP_WEEKDAYS', message: '', conflictingTemplateIds: ['a'] },
-      { code: 'OVERLAP_WEEKDAYS', message: '', conflictingTemplateIds: ['a', 'b'] },
-      { code: 'INVALID_NAME', message: '', conflictingTemplateIds: ['c'] },
-    ]
-    expect(overlapTemplateIds(issues)).toEqual(['a', 'b'])
-    expect(overlapTemplateIds([])).toEqual([])
-  })
-})
-
-describe('валидатор дня: ссылки на дела шаблона (FR-D-7)', () => {
-  it('существующие ссылки проблем не дают', () => {
-    expect(validatePlannedTaskRefs(['a', 'b'], new Set(['a', 'b']))).toEqual([])
-    expect(validatePlannedTaskRefs([], new Set())).toEqual([])
-  })
-
-  it('отсутствующие ссылки попадают в TASK_NOT_FOUND с taskIds', () => {
-    const issues = validatePlannedTaskRefs(['a', 'gone', 'b', 'lost'], new Set(['a', 'b']))
-    expect(issues).toHaveLength(1)
-    expect(issues[0]?.code).toBe('TASK_NOT_FOUND')
-    expect(issues[0]?.taskIds).toEqual(['gone', 'lost'])
-    expect(issues[0]?.conflictingTemplateIds).toEqual([])
-  })
-
-  it('архивное дело не считается ошибкой: оно остаётся в шаблоне', () => {
-    // Архивность проверяется материализацией дня (buildPlannedPlacements), а не
-    // сохранением шаблона: иначе сохранение любой правки требовало бы чистки.
-    expect(validatePlannedTaskRefs(['archived'], new Set(['archived']))).toEqual([])
+describe('validatePlannedTaskRefs', () => {
+  it('возвращает отсутствующие ссылки и не считает архивные ошибкой', () => {
+    expect(validatePlannedTaskRefs(['a'], new Set(['a']))).toEqual([])
+    const issues = validatePlannedTaskRefs(['a', 'b'], new Set(['a']))
+    expect(codes(issues)).toEqual(['TASK_NOT_FOUND'])
+    expect(issues[0]?.taskIds).toEqual(['b'])
   })
 })

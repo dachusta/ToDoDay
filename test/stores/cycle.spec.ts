@@ -1,29 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useCycleStore } from 'src/stores/cycle'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useStatsStore } from 'src/stores/stats'
 import { useTasksStore } from 'src/stores/tasks'
-import { useDaysStore } from 'src/stores/days'
 import { db } from 'src/services/db'
 import { addDaysISO, todayISO } from 'src/services/dates'
-import type { DayInstance, Placement } from 'src/models/dayInstance'
-import type { DayTemplate } from 'src/models/day'
+import type { DayPlanInput } from 'src/models/day'
 import { freshPinia, flush, resetDatabase, resetStorage } from './helpers'
 
-const newTask = async (title: string) => {
+const newTask = async (title: string, durationMin = 30) => {
   const created = await useTasksStore().createTask({
     title,
     priority: 'high',
     color: '#2196F3',
-    durationMin: 30,
+    durationMin,
   })
   if (!created.ok) throw new Error('не удалось создать дело')
   return created.data
 }
 
-/**
- * Ожидание условия: авто-сдвиг, пересчёт статистики и liveQuery идут своими
- * асинхронными ветками, поэтому фиксированные паузы здесь ненадёжны.
- */
 async function waitFor(
   check: () => boolean | Promise<boolean>,
   timeoutMs = 3000,
@@ -32,7 +27,38 @@ async function waitFor(
   while (!(await check()) && Date.now() - start < timeoutMs) await flush(20)
 }
 
-describe('useCycleStore: dayProgress и liveQuery (гэпы скаффолд §6)', () => {
+const weekday0 = (iso: string): number => {
+  const [y = 0, m = 1, d = 1] = iso.split('-').map(Number)
+  return (new Date(y, m - 1, d).getDay() + 6) % 7
+}
+
+async function createPlan(over: Partial<DayPlanInput> = {}) {
+  const store = useDayPlansStore()
+  if (!store.initialized) await store.loadAll()
+  const result = await store.createPlan({
+    name: 'День',
+    accentColor: '#2196F3',
+    date: todayISO(),
+    repeatRule: { type: 'none' },
+    timeStart: '08:00',
+    timeEnd: '22:00',
+    ...over,
+  })
+  if (!result.ok) throw new Error(`plan: ${result.error.message}`)
+  return result.data
+}
+
+async function initializeWithPlan(over: Partial<DayPlanInput> = {}) {
+  await useTasksStore().loadAll()
+  await useDayPlansStore().loadAll()
+  const plan = await createPlan(over)
+  const cycle = useCycleStore()
+  const result = await cycle.initialize()
+  if (!result.ok) throw new Error(result.error.message)
+  return { cycle, plan }
+}
+
+describe('useCycleStore: план на дату и виртуальный день', () => {
   beforeEach(async () => {
     resetStorage()
     freshPinia()
@@ -43,744 +69,350 @@ describe('useCycleStore: dayProgress и liveQuery (гэпы скаффолд §6
     useCycleStore().dispose()
   })
 
-  it('dayProgress считает done/skipped/pending/total текущего дня', async () => {
+  it('без плана открывает виртуальный пустой день 08:00–22:00', async () => {
+    await useTasksStore().loadAll()
+    await useDayPlansStore().loadAll()
     const cycle = useCycleStore()
     expect((await cycle.initialize()).ok).toBe(true)
-    expect(cycle.dayProgress).toEqual({ done: 0, skipped: 0, pending: 0, total: 0 })
-
-    const a = await newTask('A')
-    const b = await newTask('B')
-    const first = await cycle.placeTask(a.id, null)
-    const second = await cycle.placeTask(b.id, 240)
-    expect([first.ok, second.ok]).toEqual([true, true])
-    if (!first.ok || !second.ok) return
-
-    expect(cycle.dayProgress).toEqual({ done: 0, skipped: 0, pending: 2, total: 2 })
-
-    expect((await cycle.setPlacementStatus(first.data.id, 'done')).ok).toBe(true)
-    expect(cycle.dayProgress).toEqual({ done: 1, skipped: 0, pending: 1, total: 2 })
-
-    expect((await cycle.setPlacementStatus(second.data.id, 'skipped')).ok).toBe(true)
-    expect(cycle.dayProgress).toEqual({ done: 1, skipped: 1, pending: 0, total: 2 })
-  })
-
-  it('liveQuery не затирает виртуальный пустой день', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
+    expect(cycle.currentInstance?.date).toBe(todayISO())
+    expect(cycle.currentInstance?.planId).toBeNull()
+    expect(cycle.currentPlan).toBeNull()
     expect(cycle.isCurrentDayEmpty).toBe(true)
-    const virtualId = cycle.currentInstance?.id
-
-    await flush()
-    expect(cycle.currentInstance?.id).toBe(virtualId)
-    expect(cycle.isCurrentDayEmpty).toBe(true)
+    expect(cycle.slots[0]?.label).toBe('08:00')
     expect(cycle.cycleState?.activeInstanceId).toBeNull()
   })
 
-  it('liveQuery подхватывает правки активного дня из другой вкладки', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
+  it('материализует план на сегодня и его размещения', async () => {
+    await useTasksStore().loadAll()
     const task = await newTask('A')
-    const placed = await cycle.placeTask(task.id, null)
-    expect(placed.ok).toBe(true)
-    const instanceId = cycle.currentInstance?.id
-    expect(instanceId).toBeTruthy()
-    if (!instanceId || !placed.ok) return
-
-    // «Вторая вкладка»: пишем размещение напрямую в Dexie
-    const stored = await db.dayInstances.get(instanceId)
-    expect(stored).toBeTruthy()
-    if (!stored) return
-    const extra: Placement = {
-      id: 'from-other-tab',
-      taskId: task.id,
-      startMin: 120,
-      durationMin: 15,
-      status: 'pending',
-      placedAt: 2,
-      taskSnapshot: { title: 'Из другой вкладки', color: '#4CAF50', priority: 'low' },
-    }
-    stored.placements.push(extra)
-    await db.dayInstances.put(stored)
-
-    await flush()
-    expect(cycle.currentInstance?.placements.map(p => p.id)).toContain('from-other-tab')
-    expect(cycle.dayProgress.total).toBe(2)
-
-    // Правка cycleState из другой вкладки тоже видна
-    await db.cycleState.update('current', { lastCyclicTemplateId: 'ptr' })
-    await flush()
-    expect(cycle.cycleState?.lastCyclicTemplateId).toBe('ptr')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      name: 'Рабочий',
+      plannedPlacements: [
+        { id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 },
+        { id: 'pp2', taskId: task.id, startMin: null, durationMin: 30 },
+      ],
+    })
+    const cycle = useCycleStore()
+    expect((await cycle.initialize()).ok).toBe(true)
+    expect(cycle.currentPlan?.name).toBe('Рабочий')
+    expect(cycle.currentInstance?.planId).toBe(cycle.currentPlan?.id)
+    expect(cycle.currentInstance?.placements).toHaveLength(2)
+    expect(cycle.currentInstance?.placements[0]?.plannedId).toBe('pp1')
+    expect(cycle.currentInstance?.placements[0]?.unplanned).toBe(false)
+    expect(cycle.isCurrentDayEmpty).toBe(false)
   })
 
-  it('resetSessionState сбрасывает сессионное состояние (FR-SET-10)', async () => {
+  it('точная дата важнее повторяющегося плана, заготовка не открывается', async () => {
+    await useTasksStore().loadAll()
+    const plans = useDayPlansStore()
+    await plans.loadAll()
+    await plans.createPlan({
+      name: 'Повтор',
+      accentColor: '#2196F3',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [weekday0(todayISO())] },
+      timeStart: '08:00',
+      timeEnd: '22:00',
+    })
+    await createPlan({ name: 'Точный' })
+    await plans.createPlan({
+      name: 'Заготовка',
+      accentColor: '#2196F3',
+      date: null,
+      repeatRule: { type: 'none' },
+      timeStart: '08:00',
+      timeEnd: '22:00',
+    })
     const cycle = useCycleStore()
     await cycle.initialize()
-    const task = await newTask('A')
-    await cycle.placeTask(task.id, null)
-    expect(cycle.currentInstance).not.toBeNull()
+    expect(cycle.currentPlan?.name).toBe('Точный')
+  })
 
+  it('создание плана на сегодня заменяет виртуальный день', async () => {
+    await useTasksStore().loadAll()
+    await useDayPlansStore().loadAll()
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    expect(cycle.isCurrentDayEmpty).toBe(true)
+
+    await createPlan({ name: 'Поздний' })
+    await waitFor(() => cycle.currentPlan?.name === 'Поздний')
+    expect(cycle.isCurrentDayEmpty).toBe(false)
+    expect(cycle.currentInstance?.planId).toBe(cycle.currentPlan?.id)
+  })
+
+  it('невалидный startMin — VALIDATION_ERROR, размещение не меняется', async () => {
+    const { cycle } = await initializeWithPlan()
+    const task = await newTask('A')
+    const before = cycle.currentInstance?.placements.length ?? 0
+    const result = await cycle.placeTask(task.id, 10)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR')
+    expect(cycle.currentInstance?.placements.length).toBe(before)
+  })
+})
+
+describe('useCycleStore: внеплановые изменения и неизменность плана', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  afterEach(() => {
+    useCycleStore().dispose()
+  })
+
+  it('добавление дела в «Сегодня» помечается внеплановым, план не меняется', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    const plan = await createPlan()
+    const cycle = useCycleStore()
+    await cycle.initialize()
+
+    const placed = await cycle.placeTask(task.id, 120)
+    expect(placed.ok).toBe(true)
+    if (!placed.ok) return
+    expect(placed.data.unplanned).toBe(true)
+    expect(placed.data.plannedId).toBeNull()
+    expect((await db.dayPlans.get(plan.id))?.plannedPlacements).toHaveLength(0)
+  })
+
+  it('перемещение и возврат планового дела переключают внеплановый флаг', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    cycle.startCompletion()
+
+    const placement = cycle.currentInstance!.placements[0]!
+    expect(cycle.isUnplanned(placement)).toBe(false)
+
+    expect((await cycle.movePlacement(placement.id, 120)).ok).toBe(true)
+    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(true)
+    expect(cycle.plannedTimeFor(cycle.currentInstance!.placements[0]!)).toBe(60)
+
+    expect((await cycle.movePlacement(placement.id, 60)).ok).toBe(true)
+    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(false)
+  })
+
+  it('изменение длительности и замена дела помечают размещение внеплановым', async () => {
+    await useTasksStore().loadAll()
+    const a = await newTask('A', 30)
+    const b = await newTask('B', 60)
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: a.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+
+    expect((await cycle.changePlacementDuration(placement.id, 60)).ok).toBe(true)
+    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(true)
+
+    expect((await cycle.replacePlacement(placement.id, b.id)).ok).toBe(true)
+    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(true)
+    expect(cycle.currentInstance!.placements[0]!.taskId).toBe(b.id)
+    expect(cycle.dayProgress.pending).toBe(1)
+  })
+
+  it('удаление планового дела уводит его в «Убрано из плана» и возвращает', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    const plan = await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+
+    expect((await cycle.removePlacement(placement.id)).ok).toBe(true)
+    expect(cycle.removedCount).toBe(1)
+    expect(cycle.currentInstance!.placements).toHaveLength(1)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      removed: true,
+      unplanned: true,
+      status: 'skipped',
+    })
+    expect((await db.dayPlans.get(plan.id))?.plannedPlacements).toHaveLength(1)
+
+    expect((await cycle.restorePlacement(placement.id)).ok).toBe(true)
+    expect(cycle.removedCount).toBe(0)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      removed: false,
+      unplanned: false,
+      status: 'pending',
+    })
+  })
+
+  it('правка плана обновляет плановую основу, сохраняя отклонения', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    const plan = await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.movePlacement(placement.id, 120)
+
+    await useDayPlansStore().updatePlan(plan.id, {
+      name: 'Новый',
+      plannedPlacements: [
+        { id: 'pp1', taskId: task.id, startMin: 180, durationMin: 30 },
+        { id: 'pp2', taskId: task.id, startMin: 240, durationMin: 30 },
+      ],
+    })
+    await waitFor(() => cycle.currentPlan?.name === 'Новый')
+
+    expect(cycle.currentInstance!.placements).toHaveLength(2)
+    const first = cycle.currentInstance!.placements.find(p => p.plannedId === 'pp1')
+    expect(first?.startMin).toBe(120)
+    expect(first?.unplanned).toBe(true)
+    const second = cycle.currentInstance!.placements.find(p => p.plannedId === 'pp2')
+    expect(second?.startMin).toBe(240)
+    expect(second?.unplanned).toBe(false)
+  })
+})
+
+describe('useCycleStore: завершение, сдвиг и статистика', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  afterEach(() => {
+    useCycleStore().dispose()
+  })
+
+  it('завершение помечает убранные как skipped и учитывает внеплановые в статистике', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const planned = cycle.currentInstance!.placements[0]!
+    await cycle.removePlacement(planned.id)
+    const extra = await cycle.placeTask(task.id, 120)
+    expect(extra.ok).toBe(true)
+
+    const marks: Record<string, 'done' | 'skipped'> = {}
+    for (const placement of cycle.currentInstance!.placements) {
+      if (!placement.removed) marks[placement.id] = 'done'
+    }
+    expect((await cycle.completeDay(marks)).ok).toBe(true)
+    const stored = await db.dayInstances.get(cycle.lastCompletedInstanceId!)
+    expect(stored?.placements.find(p => p.removed)?.status).toBe('skipped')
+
+    const stats = useStatsStore()
+    await stats.recompute()
+    expect(stats.overallStats?.unplanned).toBe(2)
+  })
+
+  it('завершение со сдвигом открывает план следующей даты, иначе виртуальный день', async () => {
+    await useTasksStore().loadAll()
+    await useDayPlansStore().loadAll()
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await useDayPlansStore().createPlan({
+      name: 'Завтра',
+      accentColor: '#2196F3',
+      date: tomorrow,
+      repeatRule: { type: 'none' },
+      timeStart: '08:00',
+      timeEnd: '22:00',
+    })
+    await createPlan({ name: 'Сегодня' })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    expect(cycle.currentPlan?.name).toBe('Сегодня')
+
+    expect((await cycle.shiftToNextDay()).ok).toBe(true)
+    const marks: Record<string, 'done' | 'skipped'> = {}
+    expect((await cycle.completeDay(marks)).ok).toBe(true)
+    expect(cycle.currentInstance?.date).toBe(tomorrow)
+    expect(cycle.currentPlan?.name).toBe('Завтра')
+    expect(cycle.cycleState?.manualShiftDate).toBe(todayISO())
+  })
+
+  it('отмена завершения возвращает день и удаляет созданный экземпляр', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const id = cycle.currentInstance!.id
+    await cycle.completeDay({})
+    expect(cycle.currentInstance?.status).toBe('completed')
+    expect((await cycle.cancelCompletion()).ok).toBe(true)
+    expect(cycle.currentInstance?.id).toBe(id)
+    expect(cycle.currentInstance?.status).toBe('active')
+    expect(cycle.currentInstance?.placements[0]?.status).toBe('pending')
+  })
+
+  it('resetSessionState очищает сессионное состояние и повторный initialize работает', async () => {
+    const { cycle } = await initializeWithPlan()
     cycle.dispose()
     cycle.resetSessionState()
     expect(cycle.currentInstance).toBeNull()
     expect(cycle.cycleState).toBeNull()
-    expect(cycle.placementsSnapshot).toBeNull()
-    expect(cycle.nextInstanceId).toBeNull()
     expect(cycle.initialized).toBe(false)
-
-    // Повторный initialize разрешает день заново
     expect((await cycle.initialize()).ok).toBe(true)
     expect(cycle.currentInstance).not.toBeNull()
   })
 
-  it('невалидный startMin — VALIDATION_ERROR, размещение не меняется (FR-B-4, приёмка «По доске»)', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
+  it('архивация дела переводит pending фактические размещения в skipped', async () => {
+    await useTasksStore().loadAll()
     const task = await newTask('A')
-
-    // Не целое, не кратно 15 и отрицательное — ошибка валидации, а не snap и не null
-    for (const bad of [7, 15.5, -15]) {
-      const result = await cycle.placeTask(task.id, bad)
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR')
-    }
-    expect(cycle.currentInstance?.placements).toHaveLength(0)
-
-    // Перенос: невалидный слот отклоняется, прежний startMin остаётся
-    const placed = await cycle.placeTask(task.id, 60)
-    expect(placed.ok).toBe(true)
-    if (!placed.ok) return
-    const moved = await cycle.movePlacement(placed.data.id, 7)
-    expect(moved.ok).toBe(false)
-    if (!moved.ok) expect(moved.error.code).toBe('VALIDATION_ERROR')
-    expect(cycle.currentInstance?.placements[0]?.startMin).toBe(60)
-
-    // Валидный, но не помещающийся слот — не ошибка, а нераспределённое (FR-B-4)
-    const late = await cycle.placeTask(task.id, 840)
-    expect(late.ok).toBe(true)
-    if (late.ok) expect(late.data.startMin).toBeNull()
-  })
-})
-
-// --- Завершение дня (этап 6, FR-E-1…FR-E-3) --------------------------------
-
-const placement = (over: Partial<Placement> & { id: string }): Placement => ({
-  taskId: 'a',
-  startMin: 60,
-  durationMin: 30,
-  status: 'pending',
-  placedAt: 1,
-  taskSnapshot: { title: `дело ${over.id}`, color: '#2196F3', priority: 'medium' },
-  ...over,
-})
-
-const template = (over: Partial<DayTemplate> = {}): DayTemplate => ({
-  id: 't1',
-  name: 'Рабочий день',
-  order: 0,
-  timeStart: '08:00',
-  timeEnd: '22:00',
-  gridStepMin: 15,
-  accentColor: '#2196F3',
-  // Циклический шаблон подходит любой дате: он и определяет «шаблон на завтра»
-  repeatRule: { type: 'none' },
-  plannedTaskIds: [],
-  createdAt: 1,
-  ...over,
-})
-
-/** Материализованный экземпляр дня; по умолчанию — сегодняшний и активный. */
-async function seedInstance(
-  over: Partial<DayInstance> = {},
-  placements: Placement[] = [],
-): Promise<DayInstance> {
-  const instance: DayInstance = {
-    id: 'inst-1',
-    templateId: null,
-    date: todayISO(),
-    status: 'active',
-    placements,
-    timeStart: '08:00',
-    timeEnd: '22:00',
-    createdAt: 1,
-    ...over,
-  }
-  await db.dayInstances.add(instance)
-  await db.cycleState.update('current', { activeInstanceId: instance.id })
-  return instance
-}
-
-const activeInstance = async (): Promise<DayInstance | undefined> => {
-  const state = await db.cycleState.get('current')
-  return state?.activeInstanceId ? db.dayInstances.get(state.activeInstanceId) : undefined
-}
-
-describe('useCycleStore: завершение дня (FR-E-1…FR-E-3, приёмки ТЗ §9)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
-  })
-
-  afterEach(() => {
-    useCycleStore().dispose()
-  })
-
-  it('completeDay: неотмеченное становится skipped, день — completed, статистика пересчитана (FR-E-2)', async () => {
-    await seedInstance({}, [
-      placement({ id: 'p1', status: 'done' }),
-      placement({ id: 'p2', status: 'pending' }),
-      placement({ id: 'p3', status: 'skipped' }),
-    ])
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const recompute = vi.spyOn(useStatsStore(), 'recompute')
-
-    // Отметку снимают только с p1: он тоже станет skipped
-    const result = await cycle.completeDay({ p2: 'done' })
-    expect(result.ok).toBe(true)
-
-    const stored = await db.dayInstances.get('inst-1')
-    expect(stored?.status).toBe('completed')
-    expect(typeof stored?.completedAt).toBe('number')
-    expect(stored?.placements.map(p => [p.id, p.status])).toEqual([
-      ['p1', 'skipped'],
-      ['p2', 'done'],
-      ['p3', 'skipped'],
-    ])
-    // Дата дня совпадает с сегодняшней: остаётся текущим, второго экземпляра нет
-    expect(cycle.currentInstance?.id).toBe('inst-1')
-    // После своей записи день берётся из БД заново (журнал, дефект D43): событие
-    // подписки liveQuery приходит асинхронно и снимком «до записи», поэтому
-    // оптимистичная правка в памяти не должна оставаться единственным источником
-    expect(cycle.currentInstance?.placements.map(p => [p.id, p.status])).toEqual([
-      ['p1', 'skipped'],
-      ['p2', 'done'],
-      ['p3', 'skipped'],
-    ])
-    expect(cycle.dayProgress).toMatchObject({ done: 1, skipped: 2, pending: 0, total: 3 })
-    expect(cycle.nextInstanceId).toBeNull()
-    expect(cycle.lastCompletedInstanceId).toBe('inst-1')
-    expect(recompute).toHaveBeenCalled()
-  })
-
-  it('completeDay: подписка liveQuery не откатывает статусы дня из памяти (дефект D43)', async () => {
-    await seedInstance({}, [
-      placement({ id: 'p1', status: 'done' }),
-      placement({ id: 'p2', status: 'pending' }),
-    ])
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const before = cycle.currentInstance
-
-    await cycle.completeDay({ p1: 'done', p2: 'done' })
-
-    // Ссылка заменена на прочитанную из БД: подписка сравнивает по значению и
-    // старый снимок «до записи» уже не может стать текущим днём
-    expect(cycle.currentInstance).not.toBe(before)
-    expect(cycle.currentInstance?.status).toBe('completed')
-    expect(cycle.dayProgress).toMatchObject({ done: 2, skipped: 0, pending: 0 })
-
-    // Реакция на изменение экземпляра из другой вкладки сохраняется: подписка
-    // по-прежнему пишет прочитанный день в стор
-    const stored = await db.dayInstances.get('inst-1')
-    expect(stored?.placements.map(p => [p.id, p.status])).toEqual([
-      ['p1', 'done'],
-      ['p2', 'done'],
-    ])
-  })
-
-  it('completeDay на виртуальном пустом дне сохраняет экземпляр в историю (FR-D-6)', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect(cycle.isVirtualInstance).toBe(true)
-    expect(await db.dayInstances.count()).toBe(0)
-
-    const result = await cycle.completeDay({})
-    expect(result.ok).toBe(true)
-
-    const stored = await activeInstance()
-    expect(stored).toMatchObject({ status: 'completed', placements: [], date: todayISO() })
-    expect(await db.dayInstances.count()).toBe(1)
-    // Экземпляр стал материальным: activeInstanceId указывает на него
-    expect(cycle.isVirtualInstance).toBe(false)
-  })
-
-  it('completeDay по просроченному дню открывает сегодняшний без диалога и отметок (FR-E-2)', async () => {
-    await seedInstance({ date: addDaysISO(todayISO(), -1) }, [
-      placement({ id: 'p1', status: 'done' }),
-    ])
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect(cycle.currentInstance?.date).toBe(addDaysISO(todayISO(), -1))
-
-    const result = await cycle.completeDay({ p1: 'done' })
-    expect(result.ok).toBe(true)
-
-    expect((await db.dayInstances.get('inst-1'))?.status).toBe('completed')
-    // Новый день — сегодняшний; шаблона нет, значит он виртуален (FR-D-6)
-    expect(cycle.currentInstance?.date).toBe(todayISO())
-    expect(cycle.currentInstance?.status).toBe('active')
-    expect(cycle.currentInstance?.placements).toHaveLength(0)
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBeNull()
-    // Его id записан: отмена удалит созданный экземпляр, даже будучи виртуальным
-    expect(cycle.nextInstanceId).toBe(cycle.currentInstance?.id)
-  })
-
-  it('shiftToNextDay + completeDay (early): завтрашний экземпляр, manualShiftDate, повторный сдвиг отклонён (FR-C-3)', async () => {
-    await seedInstance()
-    await db.dayTemplates.add(template())
-    const cycle = useCycleStore()
-    await cycle.initialize()
-
-    const shift = await cycle.shiftToNextDay()
-    expect(shift.ok).toBe(true)
-    expect(cycle.completing).toBe(true)
-    expect(cycle.shiftMode).toBe('early')
-    // manualShiftDate пишется только подтверждением, а не открытием диалога
-    expect((await db.cycleState.get('current'))?.manualShiftDate).toBeNull()
-
-    await cycle.completeDay({})
-    const next = await activeInstance()
-    expect(next?.date).toBe(addDaysISO(todayISO(), 1))
-    expect(next?.templateId).toBe('t1')
-    expect((await db.cycleState.get('current'))?.manualShiftDate).toBe(todayISO())
-    expect((await db.dayInstances.get('inst-1'))?.status).toBe('completed')
-    expect(cycle.completing).toBe(false)
-    expect(cycle.shiftPending).toBe(false)
-    expect(cycle.shiftMode).toBeNull()
-    expect(cycle.canShiftNext).toBe(false)
-
-    // Сдвиг в те же сутки уже сделан: повторный отклоняется (правило 12)
-    const again = await cycle.shiftToNextDay()
-    expect(again.ok).toBe(false)
-    if (!again.ok) expect(again.error.code).toBe('SHIFT_ALREADY_DONE_TODAY')
-  })
-
-  it('cancelCompletion возвращает день и удаляет созданный экземпляр вместе с делами (FR-E-3)', async () => {
-    // Завершаемый день идёт по циклическому шаблону: completeDay двигает указатель цикла
-    await seedInstance({ templateId: 't0' }, [placement({ id: 'p1', status: 'done' })])
-    await db.dayTemplates.bulkAdd([template({ id: 't0', order: 0 }), template({ id: 't1', order: 1 })])
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const task = await newTask('Зарядка')
-    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBeNull()
-
-    await cycle.shiftToNextDay()
-    await cycle.completeDay({ p1: 'done' })
-    const createdId = cycle.nextInstanceId ?? ''
-    expect(createdId).not.toBe('')
-    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBe('t0')
-
-    // Пользователь успел положить дело в новый день: placeTask материализует тот же id
-    const placed = await cycle.placeTask(task.id, 0)
-    expect(placed.ok).toBe(true)
-    expect((await db.dayInstances.get(createdId))?.placements).toHaveLength(1)
-
-    const recompute = vi.spyOn(useStatsStore(), 'recompute')
-    const cancelled = await cycle.cancelCompletion()
-    expect(cancelled.ok).toBe(true)
-
-    expect(await db.dayInstances.get(createdId)).toBeUndefined()
-    const restored = await db.dayInstances.get('inst-1')
-    expect(restored?.status).toBe('active')
-    expect(restored?.completedAt).toBeUndefined()
-    expect(restored?.placements.map(p => [p.id, p.status])).toEqual([['p1', 'done']])
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBe('inst-1')
-    expect((await db.cycleState.get('current'))?.manualShiftDate).toBeNull()
-    // Указатель цикла вернулся к снимку: завершение его продвинуло, отмена — нет (FR-E-3)
-    expect((await db.cycleState.get('current'))?.lastCyclicTemplateId).toBeNull()
-    expect(cycle.lastCompletedInstanceId).toBeNull()
-    expect(cycle.nextInstanceId).toBeNull()
-    // Повторная отмена невозможна: снапшота сессии больше нет
-    const twice = await cycle.cancelCompletion()
-    expect(twice.ok).toBe(false)
-    if (!twice.ok) expect(twice.error.code).toBe('NOT_FOUND')
-    expect(recompute).toHaveBeenCalled()
-  })
-
-  it('авто-сдвиг в полночь сохраняет done, не пишет manualShiftDate и не повторяется (FR-C-4)', async () => {
-    localStorage.setItem('tododay:autoShift', 'true')
-    await seedInstance({ date: addDaysISO(todayISO(), -1) }, [
-      placement({ id: 'p1', status: 'done' }),
-      placement({ id: 'p2', status: 'pending' }),
-    ])
-    const cycle = useCycleStore()
-
-    await cycle.initialize()
-    // Авто-сдвиг идёт своей асинхронной веткой: ждём его результата, а не паузы
-    await waitFor(() => cycle.currentInstance?.date === todayISO())
-    await waitFor(async () => (await db.dayInstances.get('inst-1'))?.status === 'completed')
-
-    const state = await db.cycleState.get('current')
-    expect(state?.lastAutoShiftDate).toBe(todayISO())
-    // manualShiftDate авто-сдвиг не трогает: ручной сдвиг в те же сутки доступен
-    expect(state?.manualShiftDate).toBeNull()
-    expect(cycle.canShiftNext).toBe(true)
-    expect(cycle.currentInstance?.date).toBe(todayISO())
-
-    const before = await db.dayInstances.get('inst-1')
-    expect(before?.status).toBe('completed')
-    expect(before?.placements.map(p => [p.id, p.status])).toEqual([
-      ['p1', 'done'], // уже выполненное не превращается в пропущенное (сценарий 2)
-      ['p2', 'skipped'],
-    ])
-    expect(await db.dayInstances.count()).toBe(1)
-
-    // Второй авто-сдвиг в те же сутки не выполняется
-    cycle.checkDayChange()
-    await flush()
-    expect(await db.dayInstances.count()).toBe(1)
-    expect((await db.cycleState.get('current'))?.lastAutoShiftDate).toBe(todayISO())
-  })
-})
-
-// --- Смена даты и ранний сдвиг (ТЗ §2.9, §2.10 сценарии 5, 6, 8, 9) ---------
-
-/** Материализованный экземпляр без шаблона: «без шаблона» на доске дня. */
-const bareInstance = (over: Partial<DayInstance> & { id: string }): DayInstance => ({
-  templateId: null,
-  date: todayISO(),
-  status: 'active',
-  placements: [],
-  timeStart: '08:00',
-  timeEnd: '22:00',
-  createdAt: 1,
-  ...over,
-})
-
-describe('useCycleStore: смена даты и ранний сдвиг (ТЗ §2.10)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
-  })
-
-  afterEach(() => {
-    useCycleStore().dispose()
-    useDaysStore().unsubscribe()
-  })
-
-  it('сценарий 8: после раннего сдвига смена даты не создаёт вторую копию', async () => {
-    await seedInstance()
-    await db.dayTemplates.add(template())
-    const cycle = useCycleStore()
-    await cycle.initialize()
-
-    await cycle.shiftToNextDay()
-    await cycle.completeDay({})
-
-    const tomorrow = addDaysISO(todayISO(), 1)
-    const afterShift = await activeInstance()
-    expect(afterShift?.date).toBe(tomorrow)
-    // Сдвиг ручной: в эти же сутки кнопка «Следующий день» гаснет (правило 12)
-    expect(cycle.canShiftNext).toBe(false)
-    expect((await db.cycleState.get('current'))?.manualShiftDate).toBe(todayISO())
-    expect(await db.dayInstances.count()).toBe(2)
-
-    // Наступили следующие сутки: экземпляр уже датирован этой датой
-    cycle.checkDayChange()
-    await flush()
-
-    expect(await db.dayInstances.count()).toBe(2)
-    expect(cycle.currentInstance?.id).toBe(afterShift?.id)
-    expect(cycle.currentInstance?.date).toBe(tomorrow)
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBe(afterShift?.id)
-    expect(cycle.completing).toBe(false)
-  })
-
-  it('сценарий 9: перезапуск до полуночи сохраняет завтрашний экземпляр текущим', async () => {
-    await seedInstance()
-    await db.dayTemplates.add(template())
-    const cycle = useCycleStore()
-    await cycle.initialize()
-
-    await cycle.shiftToNextDay()
-    await cycle.completeDay({})
-    const shiftedId = cycle.nextInstanceId
-    const shiftedDate = cycle.currentInstance?.date
-    expect(shiftedDate).toBe(addDaysISO(todayISO(), 1))
-    expect(shiftedId).not.toBeNull()
-
-    // Перезапуск приложения в те же сутки: сессия сторов сбрасывается, БД — нет
-    cycle.dispose()
-    cycle.resetSessionState()
-    expect((await cycle.initialize()).ok).toBe(true)
-    await flush()
-
-    expect(cycle.currentInstance?.id).toBe(shiftedId)
-    expect(cycle.currentInstance?.date).toBe(shiftedDate)
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBe(shiftedId)
-    expect(await db.dayInstances.count()).toBe(2)
-  })
-
-  it('сценарий 5: два initialize дают пустой день на ту же дату с новым id', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect(cycle.isVirtualInstance).toBe(true)
-    const firstId = cycle.currentInstance?.id
-    const firstDate = cycle.currentInstance?.date
-
-    // Перезагрузка до первого дела: экземпляр собирается в память заново
-    cycle.dispose()
-    cycle.resetSessionState()
-    await cycle.initialize()
-
-    expect(cycle.isVirtualInstance).toBe(true)
-    expect(cycle.currentInstance?.date).toBe(firstDate)
-    expect(cycle.currentInstance?.id).not.toBe(firstId)
-    expect(await db.dayInstances.count()).toBe(0)
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBeNull()
-  })
-
-  it('сценарий 6: пустой день при смене даты становится днём по шаблону новой даты', async () => {
-    const stale = bareInstance({ id: 'virtual-old', date: addDaysISO(todayISO(), -1) })
-    await db.dayInstances.add(stale)
-    // activeInstanceId = null: экземпляр из прошлой сессии — уже не текущий
-    await db.dayTemplates.add(template({ id: 'tpl-today', name: 'Новый день' }))
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-
-    expect(cycle.currentInstance?.date).toBe(todayISO())
-    expect(cycle.currentInstance?.templateId).toBe('tpl-today')
-    expect(cycle.isVirtualInstance).toBe(false)
-    // Старый пустой день в истории не участвует и новым экземпляром не считается
-    expect(cycle.currentInstance?.id).not.toBe('virtual-old')
-    expect(await db.dayInstances.count()).toBe(2)
-  })
-
-  it('сценарий 6: повторный checkDayChange по тому же пути ничего не создаёт', async () => {
-    const stale = bareInstance({ id: 'virtual-old', date: addDaysISO(todayISO(), -1) })
-    await db.dayInstances.add(stale)
-    await db.dayTemplates.add(template({ id: 'tpl-today' }))
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const resolvedId = cycle.currentInstance?.id
-
-    cycle.checkDayChange()
-    await flush()
-    cycle.checkDayChange()
-    await flush()
-
-    expect(cycle.currentInstance?.id).toBe(resolvedId)
-    expect(await db.dayInstances.count()).toBe(2)
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBe(resolvedId)
-  })
-
-  it('два параллельных checkDayChange на виртуальном дне не создают два экземпляра', async () => {
-    const stale = bareInstance({ id: 'virtual-old', date: addDaysISO(todayISO(), -1) })
-    await db.dayInstances.add(stale)
-    await db.dayTemplates.add(template({ id: 'tpl-today' }))
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    // День разрешён для сегодня; возвращаем состояние «до смены даты»: экземпляр
-    // прошлых суток лежит в БД, но активного id у него уже нет (виртуальный день)
-    await db.dayInstances.clear()
-    await db.dayInstances.add(stale)
-    cycle.currentInstance = stale
-    cycle.cycleState = {
-      id: 'current',
-      activeInstanceId: null,
-      lastCyclicTemplateId: null,
-      manualShiftDate: null,
-      lastAutoShiftDate: null,
-    }
-
-    // Второй вход идёт, пока первый ещё пишет в Dexie: выходит по dayChangeInFlight.
-    // Без гвардии на сегодня появился бы второй экземпляр.
-    cycle.checkDayChange()
-    cycle.checkDayChange()
-    await waitFor(() => cycle.currentInstance?.date === todayISO())
-    await flush()
-
-    const stored = await db.dayInstances.toArray()
-    const today = stored.filter(instance => instance.date === todayISO())
-    expect(cycle.currentInstance?.id).not.toBe('virtual-old')
-    expect(today).toHaveLength(1)
-    expect(cycle.currentInstance?.id).toBe(today[0]?.id)
-    // Старый виртуальный день остался в БД, но активным не стал
-    expect(stored.map(instance => instance.id).sort()).toEqual(['virtual-old', today[0]?.id].sort())
-  })
-
-  it('checkDayChange на завершённом вчерашнем дне открывает сегодняшний без диалога', async () => {
-    await seedInstance({ date: addDaysISO(todayISO(), -1), status: 'completed' }, [
-      placement({ id: 'p1', status: 'done' }),
-    ])
-    const cycle = useCycleStore()
-    await cycle.initialize()
-
-    // Завершённый вчерашний день не переиспользуется: на сегодня разрешён новый
-    expect(cycle.currentInstance?.date).toBe(todayISO())
-    expect(cycle.currentInstance?.status).toBe('active')
-    expect(cycle.isVirtualInstance).toBe(true) // шаблонов нет — пустой день
-    expect(cycle.completing).toBe(false)
-    expect(cycle.lastCompletedInstanceId).toBeNull()
-    expect((await db.dayInstances.get('inst-1'))?.status).toBe('completed')
-    expect(await db.dayInstances.count()).toBe(1)
-  })
-})
-
-describe('useCycleStore: resolveCurrentDay и размещение архивного дела (FR-D-6, FR-T-3)', () => {
-  beforeEach(async () => {
-    resetStorage()
-    freshPinia()
-    await resetDatabase()
-  })
-
-  afterEach(() => {
-    useCycleStore().dispose()
-    useDaysStore().unsubscribe()
-  })
-
-  it('resolveCurrentDay({ force: true }) заменяет виртуальный день днём по шаблону (FR-D-6)', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect(cycle.isVirtualInstance).toBe(true)
-    const virtualId = cycle.currentInstance?.id
-
-    // Шаблон появился (например, его создали на экране «Дни»)
-    const stored = template({ id: 'tpl-now', name: 'Появился' })
-    await db.dayTemplates.add(stored)
-    await useDaysStore().refresh()
-
-    const resolved = await cycle.resolveCurrentDay({ force: true })
-    expect(resolved.ok).toBe(true)
-    if (!resolved.ok) return
-
-    expect(resolved.data.id).not.toBe(virtualId)
-    expect(cycle.currentInstance?.templateId).toBe(stored.id)
-    expect(cycle.currentInstance?.date).toBe(todayISO())
-    expect(cycle.isVirtualInstance).toBe(false)
-    expect(await db.dayInstances.count()).toBe(1)
-    expect((await db.cycleState.get('current'))?.activeInstanceId).toBe(cycle.currentInstance?.id)
-  })
-
-  it('resolveCurrentDay({ force: true }) материализованный день не пересоздаёт (FR-D-6)', async () => {
-    await seedInstance()
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const before = cycle.currentInstance?.id
-    expect(before).toBe('inst-1')
-
-    const resolved = await cycle.resolveCurrentDay({ force: true })
-    expect(resolved.ok).toBe(true)
-    if (resolved.ok) expect(resolved.data.id).toBe('inst-1')
-    expect(cycle.currentInstance?.id).toBe('inst-1')
-    expect(await db.dayInstances.count()).toBe(1)
-  })
-
-  it('placeTask архивного дела → CONSTRAINT_VIOLATION, доска не меняется (FR-T-3)', async () => {
-    const tasks = useTasksStore()
-    const created = await tasks.createTask({
-      title: 'Архивное',
-      priority: 'low',
-      color: '#795548',
-      durationMin: 30,
+    const { cycle } = await initializeWithPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
     })
-    expect(created.ok).toBe(true)
-    if (!created.ok) return
-    expect((await tasks.archiveTask(created.data.id)).ok).toBe(true)
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const result = await cycle.placeTask(created.data.id, 60)
-
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error.code).toBe('CONSTRAINT_VIOLATION')
-    expect(cycle.currentInstance?.placements).toHaveLength(0)
-    expect(await db.dayInstances.count()).toBe(0) // виртуальный день не материализован
+    const placement = cycle.currentInstance!.placements[0]!
+    expect(placement.status).toBe('pending')
+    await useTasksStore().archiveTask(task.id)
+    await waitFor(() => cycle.currentInstance?.placements[0]?.status === 'skipped')
+    expect(cycle.currentInstance?.placements[0]?.status).toBe('skipped')
   })
 
-  it('archiveTask переводит pending-размещение активного дня в skipped (FR-T-3)', async () => {
-    const tasks = useTasksStore()
-    await tasks.loadAll()
-    const created = await tasks.createTask({
-      title: 'Зарядка',
+  it('живая синхронизация плана не откатывает статусы после завершения (D43)', async () => {
+    await useTasksStore().loadAll()
+    await useDayPlansStore().loadAll()
+    await useTasksStore().createTask({
+      title: 'A',
       priority: 'medium',
       color: '#2196F3',
       durationMin: 30,
     })
-    expect(created.ok).toBe(true)
-    if (!created.ok) return
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const placed = await cycle.placeTask(created.data.id, 60)
-    expect(placed.ok).toBe(true)
-    if (!placed.ok) return
-    const instanceId = cycle.currentInstance?.id ?? ''
-
-    expect((await tasks.archiveTask(created.data.id)).ok).toBe(true)
-    await waitFor(
-      async () => (await db.dayInstances.get(instanceId))?.placements[0]?.status === 'skipped',
-    )
-
-    const stored = await db.dayInstances.get(instanceId)
-    // Размещение остаётся в дне, меняется только статус
-    expect(stored?.placements.map(p => [p.id, p.status])).toEqual([[placed.data.id, 'skipped']])
-    // Снимок размещения архивация не трогает: история статистики — по нему
-    expect(stored?.placements[0]?.taskSnapshot.title).toBe('Зарядка')
-  })
-
-  it('архивация дела без размещений день не переписывает', async () => {
-    const tasks = useTasksStore()
-    await tasks.loadAll()
-    const created = await tasks.createTask({
-      title: 'Без размещений',
-      priority: 'medium',
-      color: '#2196F3',
-      durationMin: 15,
+    const task = useTasksStore().tasks[0]!
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
     })
-    expect(created.ok).toBe(true)
-    if (!created.ok) return
-
     const cycle = useCycleStore()
     await cycle.initialize()
-    const virtualId = cycle.currentInstance?.id
-
-    expect((await tasks.archiveTask(created.data.id)).ok).toBe(true)
-    await flush()
-
-    // Пустой день остаётся виртуальным: писать в БД нечего
-    expect(cycle.currentInstance?.id).toBe(virtualId)
-    expect(cycle.isVirtualInstance).toBe(true)
-    expect(await db.dayInstances.count()).toBe(0)
-  })
-
-  it('одно дело можно разместить в дне дважды: это два разных размещения', async () => {
-    const tasks = useTasksStore()
-    await tasks.loadAll()
-    const created = await tasks.createTask({
-      title: 'Дважды',
-      priority: 'high',
-      color: '#4CAF50',
-      durationMin: 30,
-    })
-    expect(created.ok).toBe(true)
-    if (!created.ok) return
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    const first = await cycle.placeTask(created.data.id, 60)
-    const second = await cycle.placeTask(created.data.id, 120)
-    expect([first.ok, second.ok]).toEqual([true, true])
-    if (!first.ok || !second.ok) return
-
-    expect(first.data.id).not.toBe(second.data.id)
-    expect(cycle.currentInstance?.placements.map(p => p.id)).toEqual([
-      first.data.id,
-      second.data.id,
-    ])
-    expect(cycle.currentInstance?.placements.map(p => p.startMin)).toEqual([60, 120])
-    expect((await db.dayInstances.get(cycle.currentInstance?.id ?? ''))?.placements).toHaveLength(2)
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.setPlacementStatus(placement.id, 'done')
+    await flush(30)
+    expect(cycle.currentInstance?.placements[0]?.status).toBe('done')
+    expect(cycle.dayProgress).toMatchObject({ done: 1, pending: 0 })
   })
 })
 
-// --- Подготовленный список дел шаблона (FR-D-7) ----------------------------
-
-describe('useCycleStore: дела шаблона при открытии дня (FR-D-7)', () => {
+describe('useCycleStore: гонки инициализации', () => {
   beforeEach(async () => {
     resetStorage()
     freshPinia()
@@ -791,95 +423,15 @@ describe('useCycleStore: дела шаблона при открытии дня 
     useCycleStore().dispose()
   })
 
-  it('resolveCurrentDay материализует дела шаблона в нераспределённые', async () => {
-    const first = await newTask('Первое')
-    const second = await newTask('Второе')
-    await db.dayTemplates.add(template({ plannedTaskIds: [second.id, first.id] }))
-
+  it('два параллельных initialize дают один экземпляр дня', async () => {
+    await useTasksStore().loadAll()
+    await useDayPlansStore().loadAll()
+    await createPlan({ name: 'Один' })
     const cycle = useCycleStore()
-    expect((await cycle.initialize()).ok).toBe(true)
-
-    const placements = cycle.currentInstance?.placements ?? []
-    expect(placements.map(placement => placement.taskId)).toEqual([second.id, first.id])
-    expect(placements.every(placement => placement.startMin === null)).toBe(true)
-    expect(placements.every(placement => placement.status === 'pending')).toBe(true)
-    expect(placements[1]?.durationMin).toBe(30)
-    expect(placements[1]?.taskSnapshot.title).toBe('Первое')
-
-    // Заготовки действительно записаны в экземпляр, а не только в память
-    const stored = await db.dayInstances.get(cycle.currentInstance?.id ?? '')
-    expect(stored?.placements).toHaveLength(2)
-  })
-
-  it('правка списка шаблона не переписывает уже открытый день (FR-D-3)', async () => {
-    const task = await newTask('Дело')
-    const other = await newTask('Второе')
-    const tpl = template({ plannedTaskIds: [task.id] })
-    await db.dayTemplates.add(tpl)
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect(cycle.currentInstance?.placements).toHaveLength(1)
-
-    await db.dayTemplates.put({ ...tpl, plannedTaskIds: [other.id] })
-    await flush()
-    await cycle.resolveCurrentDay()
-    await flush()
-
-    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([task.id])
-  })
-
-  it('сдвиг дня сеет дела следующего шаблона', async () => {
-    const task = await newTask('После сдвига')
-    await db.dayTemplates.add(template({ plannedTaskIds: [task.id] }))
-
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect((await cycle.shiftToNextDay()).ok).toBe(true)
-
-    expect((await cycle.completeDay({})).ok).toBe(true)
-    expect(cycle.currentInstance?.date).toBe(addDaysISO(todayISO(), 1))
-    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([task.id])
-    expect(cycle.currentInstance?.placements[0]?.startMin).toBeNull()
-  })
-
-  it('архивные и отсутствующие дела пропускаются', async () => {
-    const alive = await newTask('Живое')
-    const archived = await newTask('Архивное')
-    expect((await useTasksStore().archiveTask(archived.id)).ok).toBe(true)
-
-    await db.dayTemplates.add(
-      template({ plannedTaskIds: [alive.id, archived.id, 'missing-task'] }),
-    )
-
-    const cycle = useCycleStore()
-    expect((await cycle.initialize()).ok).toBe(true)
-    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([
-      alive.id,
-    ])
-  })
-
-  it('force на виртуальном дне заменяет день и добавляет дела шаблона', async () => {
-    const cycle = useCycleStore()
-    await cycle.initialize()
-    expect(cycle.isVirtualInstance).toBe(true)
-    expect(cycle.currentInstance?.placements).toHaveLength(0)
-
-    const task = await newTask('Появилось')
-    const days = useDaysStore()
-    const created = await days.createTemplate({
-      name: 'Сегодняшний',
-      accentColor: '#2196F3',
-      timeStart: '08:00',
-      timeEnd: '22:00',
-      repeatRule: { type: 'none' },
-      plannedTaskIds: [task.id],
-    })
-    expect(created.ok).toBe(true)
-
-    expect((await cycle.resolveCurrentDay({ force: true })).ok).toBe(true)
-    expect(cycle.isVirtualInstance).toBe(false)
-    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([task.id])
+    const [a, b] = await Promise.all([cycle.initialize(), cycle.initialize()])
+    expect(a.ok && b.ok).toBe(true)
+    const rows = await db.dayInstances.toArray()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.date).toBe(todayISO())
   })
 })
-

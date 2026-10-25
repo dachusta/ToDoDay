@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useTasksStore } from 'src/stores/tasks'
 import { useCycleStore } from 'src/stores/cycle'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { db } from 'src/services/db'
 import type { Task } from 'src/models/task'
 import type { DayInstance, Placement } from 'src/models/dayInstance'
@@ -26,6 +27,8 @@ describe('useTasksStore: гэпы скаффолд §6', () => {
   })
 
   afterEach(() => {
+    useCycleStore().dispose()
+    useDayPlansStore().unsubscribe()
     useTasksStore().unsubscribe()
   })
 
@@ -113,6 +116,8 @@ describe('useTasksStore: приёмки ТЗ §9 «По делам»', () => {
   })
 
   afterEach(() => {
+    useCycleStore().dispose()
+    useDayPlansStore().unsubscribe()
     useTasksStore().unsubscribe()
   })
 
@@ -325,35 +330,42 @@ describe('useTasksStore: приёмки ТЗ §9 «По делам»', () => {
     })
   })
 
-  it('FR-D-7: hard delete вычищает ссылку из шаблонов, архивация — нет', async () => {
+  it('FR-D-7: hard delete вычищает ссылку из планов, архивация — нет', async () => {
     await db.tasks.bulkAdd([
       seedTask({ id: 'a', archived: true }),
       seedTask({ id: 'b' }),
     ])
-    await db.dayTemplates.bulkAdd([
+    await db.dayPlans.bulkAdd([
       {
         id: 't1',
         name: 'Первый',
-        order: 0,
+        accentColor: '#4CAF50',
+        date: null,
+        repeatRule: { type: 'none' },
         timeStart: '08:00',
         timeEnd: '22:00',
         gridStepMin: 15,
-        accentColor: '#4CAF50',
-        repeatRule: { type: 'none' },
-        plannedTaskIds: ['a', 'b'],
+        plannedPlacements: [
+          { id: 'p1', taskId: 'a', startMin: null, durationMin: 30 },
+          { id: 'p2', taskId: 'b', startMin: null, durationMin: 30 },
+        ],
         createdAt: 1,
+        updatedAt: 1,
       },
       {
         id: 't2',
         name: 'Второй',
-        order: 1,
+        accentColor: '#4CAF50',
+        date: null,
+        repeatRule: { type: 'none' },
         timeStart: '08:00',
         timeEnd: '22:00',
         gridStepMin: 15,
-        accentColor: '#4CAF50',
-        repeatRule: { type: 'none' },
-        plannedTaskIds: ['b'],
-        createdAt: 1,
+        plannedPlacements: [
+          { id: 'p3', taskId: 'b', startMin: null, durationMin: 30 },
+        ],
+        createdAt: 2,
+        updatedAt: 2,
       },
     ])
 
@@ -362,10 +374,16 @@ describe('useTasksStore: приёмки ТЗ §9 «По делам»', () => {
 
     // Архивация ссылку не трогает: дело можно вернуть из архива (FR-T-3)
     expect((await store.archiveTask('b')).ok).toBe(true)
-    expect((await db.dayTemplates.get('t1'))?.plannedTaskIds).toEqual(['a', 'b'])
+    expect(
+      (await db.dayPlans.get('t1'))?.plannedPlacements.map(p => p.taskId),
+    ).toEqual(['a', 'b'])
 
     expect((await store.deleteTask('a')).ok).toBe(true)
-    expect((await db.dayTemplates.get('t1'))?.plannedTaskIds).toEqual(['b'])
-    expect((await db.dayTemplates.get('t2'))?.plannedTaskIds).toEqual(['b'])
+    expect(
+      (await db.dayPlans.get('t1'))?.plannedPlacements.map(p => p.taskId),
+    ).toEqual(['b'])
+    expect(
+      (await db.dayPlans.get('t2'))?.plannedPlacements.map(p => p.taskId),
+    ).toEqual(['b'])
   })
 })

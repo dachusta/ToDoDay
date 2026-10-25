@@ -30,6 +30,7 @@ function compareStats(a: TaskStats, b: TaskStats, field: StatsSortField): number
     case 'done': return a.done - b.done
     case 'skipped': return a.skipped - b.skipped
     case 'placed': return a.placed - b.placed
+    case 'unplanned': return (a.unplanned ?? 0) - (b.unplanned ?? 0)
     default: return a.title.localeCompare(b.title)
   }
 }
@@ -87,6 +88,7 @@ export const useStatsStore = defineStore('stats', () => {
       prev.placed === next.placed &&
       prev.done === next.done &&
       prev.skipped === next.skipped &&
+      prev.unplanned === next.unplanned &&
       taskStats.value.size === taskCount
     )
   }
@@ -179,6 +181,8 @@ export const useStatsStore = defineStore('stats', () => {
               startMin: p.startMin,
               durationMin: p.durationMin,
               status: p.status,
+              unplanned: p.unplanned === true,
+              removed: p.removed === true,
               // exactOptionalPropertyTypes: необязательное поле не принимает явный undefined
               ...(inst.completedAt === undefined ? {} : { completedAt: inst.completedAt }),
             })

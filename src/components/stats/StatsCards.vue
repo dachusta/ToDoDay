@@ -40,6 +40,9 @@
           :data-test="`stats-counters-${row.taskId}`"
         >
           {{ t('stats.counters', { done: row.done, skipped: row.skipped }) }}
+          <template v-if="(row.unplanned ?? 0) > 0">
+            · {{ t('stats.countersUnplanned', { n: row.unplanned ?? 0 }) }}
+          </template>
         </div>
 
         <StatsProgress

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore, EXPORT_VERSION } from 'src/stores/settings'
 import { useCycleStore } from 'src/stores/cycle'
 import { useTasksStore } from 'src/stores/tasks'
-import { useDaysStore } from 'src/stores/days'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useStatsStore } from 'src/stores/stats'
 import { db } from 'src/services/db'
 import { i18n } from 'src/boot/i18n'
@@ -24,16 +24,20 @@ const seedTask = (id: string, title: string): Task => ({
 const cycleState = (over: Partial<CycleStateDto> = {}): CycleStateDto => ({
   id: 'current',
   activeInstanceId: null,
-  lastCyclicTemplateId: null,
   manualShiftDate: null,
   lastAutoShiftDate: null,
   ...over,
 })
 
-const payload = (mutate: (data: Record<string, unknown>) => void = () => {}) => {
+const payload = (
+  mutate: (data: Record<string, unknown>) => void = () => {},
+  version = EXPORT_VERSION,
+) => {
   const data: Record<string, unknown> = {
     tasks: [seedTask('imported', 'Импортированное')],
-    dayTemplates: [],
+    ...(version === EXPORT_VERSION
+      ? { dayPlans: [] }
+      : { dayTemplates: [] }),
     dayInstances: [],
     cycleState: cycleState(),
     settings: {
@@ -48,7 +52,7 @@ const payload = (mutate: (data: Record<string, unknown>) => void = () => {}) => 
     },
   }
   mutate(data)
-  return { version: EXPORT_VERSION, exportedAt: '2025-09-23T12:00:00.000Z', data }
+  return { version, exportedAt: '2025-09-23T12:00:00.000Z', data }
 }
 
 const asFile = (value: unknown, text?: string) =>
@@ -75,28 +79,32 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
   afterEach(() => {
     useCycleStore().dispose()
     useTasksStore().unsubscribe()
-    useDaysStore().unsubscribe()
+    useDayPlansStore().unsubscribe()
     useStatsStore().unsubscribe()
     vi.restoreAllMocks()
   })
 
-  it('FR-SET-4: exportAll отдаёт JSON версии 1.0 со всеми блоками и обновляет lastBackupAt', async () => {
+  it('FR-SET-4: exportAll отдаёт JSON версии 2.0 со всеми блоками и обновляет lastBackupAt', async () => {
     await db.tasks.add(seedTask('t1', 'Дело'))
-    await db.dayTemplates.add({
-      id: 'tpl',
+    await db.dayPlans.add({
+      id: 'plan',
       name: 'Рабочий',
-      order: 0,
+      accentColor: '#4CAF50',
+      date: '2025-09-23',
+      repeatRule: { type: 'none' },
       timeStart: '08:00',
       timeEnd: '22:00',
       gridStepMin: 15,
-      accentColor: '#4CAF50',
-      repeatRule: { type: 'none' },
-      plannedTaskIds: ['t1'],
+      plannedPlacements: [
+        { id: 'pp', taskId: 't1', startMin: null, durationMin: 30 },
+      ],
       createdAt: 1,
+      updatedAt: 1,
     })
     await db.dayInstances.add({
       id: 'i1',
-      templateId: 'tpl',
+      planId: 'plan',
+      templateId: null,
       date: '2025-09-23',
       status: 'completed',
       placements: [],
@@ -121,16 +129,17 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
       exportedAt: string
       data: Record<string, unknown>
     }
-    expect(file.version).toBe('1.0')
+    expect(file.version).toBe('2.0')
     expect(Number.isNaN(Date.parse(file.exportedAt))).toBe(false)
     expect(Object.keys(file.data).sort()).toEqual(
-      ['cycleState', 'dayInstances', 'dayTemplates', 'settings', 'tasks'].sort(),
+      ['cycleState', 'dayInstances', 'dayPlans', 'settings', 'tasks'].sort(),
     )
     expect((file.data.tasks as Task[]).map(t => t.id)).toEqual(['t1'])
-    expect((file.data.dayTemplates as { id: string }[]).map(t => t.id)).toEqual(['tpl'])
+    expect((file.data.dayPlans as { id: string }[]).map(p => p.id)).toEqual(['plan'])
     expect(
-      (file.data.dayTemplates as { plannedTaskIds: string[] }[])[0]?.plannedTaskIds,
-    ).toEqual(['t1'])
+      (file.data.dayPlans as { plannedPlacements: Array<{ taskId: string }> }[])[0]
+        ?.plannedPlacements[0]?.taskId,
+    ).toBe('t1')
     expect((file.data.dayInstances as { id: string }[]).map(t => t.id)).toEqual(['i1'])
     expect((file.data.cycleState as CycleStateDto).id).toBe('current')
     expect(file.data.settings).toMatchObject({
@@ -177,7 +186,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     expect(useCycleStore().cycleState?.activeInstanceId).toBeNull()
   })
 
-  it('FR-D-7: импорт старого файла без plannedTaskIds даёт пустой список', async () => {
+  it('FR-SET-5: импорт файла 1.0 превращает шаблоны в планы без времени', async () => {
     const store = useSettingsStore()
     const legacyTemplate = {
       id: 'tpl',
@@ -188,6 +197,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
       gridStepMin: 15,
       accentColor: '#4CAF50',
       repeatRule: { type: 'none' },
+      plannedTaskIds: ['imported'],
       createdAt: 1,
     }
 
@@ -195,35 +205,40 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
       asFile(
         payload(data => {
           data.dayTemplates = [legacyTemplate]
-        }),
+        }, '1.0'),
       ),
     )
     expect(result.ok).toBe(true)
     await flush()
 
-    expect((await db.dayTemplates.get('tpl'))?.plannedTaskIds).toEqual([])
-    expect(
-      useDaysStore().templates.find(t => t.id === 'tpl')?.plannedTaskIds,
-    ).toEqual([])
+    const stored = await db.dayPlans.get('tpl')
+    expect(stored?.plannedPlacements).toHaveLength(1)
+    expect(stored?.plannedPlacements[0]?.taskId).toBe('imported')
+    expect(stored?.plannedPlacements[0]?.startMin).toBeNull()
+    expect(stored?.date).toBeNull()
+    expect(useDayPlansStore().plans.find(p => p.id === 'tpl')?.plannedPlacements).toHaveLength(1)
   })
 
-  it('FR-D-7: импорт нового файла сохраняет plannedTaskIds', async () => {
+  it('FR-SET-5: импорт файла 2.0 сохраняет планы и размещения', async () => {
     const store = useSettingsStore()
     const result = await store.importAll(
       asFile(
         payload(data => {
-          data.dayTemplates = [
+          data.dayPlans = [
             {
-              id: 'tpl',
+              id: 'plan',
               name: 'Новый',
-              order: 0,
+              accentColor: '#4CAF50',
+              date: '2025-09-23',
+              repeatRule: { type: 'none' },
               timeStart: '08:00',
               timeEnd: '22:00',
               gridStepMin: 15,
-              accentColor: '#4CAF50',
-              repeatRule: { type: 'none' },
-              plannedTaskIds: ['imported'],
+              plannedPlacements: [
+                { id: 'pp', taskId: 'imported', startMin: 60, durationMin: 30 },
+              ],
               createdAt: 1,
+              updatedAt: 1,
             },
           ]
         }),
@@ -232,7 +247,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     expect(result.ok).toBe(true)
     await flush()
 
-    expect((await db.dayTemplates.get('tpl'))?.plannedTaskIds).toEqual(['imported'])
+    expect((await db.dayPlans.get('plan'))?.plannedPlacements[0]?.startMin).toBe(60)
   })
 
   it('FR-SET-5: повреждённый JSON отклоняется без изменения данных', async () => {
@@ -253,7 +268,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     await db.tasks.add(seedTask('keep', 'Старое'))
     const store = useSettingsStore()
 
-    const version = await store.importAll(asFile({ ...payload(), version: '2.0' }))
+    const version = await store.importAll(asFile({ ...payload(), version: '3.0' }))
     expect(version.ok).toBe(false)
     if (!version.ok) {
       expect(version.error.code).toBe('VALIDATION_ERROR')
@@ -319,21 +334,22 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
 
   it('FR-SET-10: clearAll чистит Dexie, cycleState, localStorage и сессию сторов', async () => {
     await db.tasks.add(seedTask('t1', 'Дело'))
-    await db.dayTemplates.add({
-      id: 'tpl',
+    await db.dayPlans.add({
+      id: 'plan',
       name: 'Рабочий',
-      order: 0,
+      accentColor: '#4CAF50',
+      date: '2025-09-23',
+      repeatRule: { type: 'none' },
       timeStart: '08:00',
       timeEnd: '22:00',
       gridStepMin: 15,
-      accentColor: '#4CAF50',
-      repeatRule: { type: 'none' },
-      plannedTaskIds: [],
+      plannedPlacements: [],
       createdAt: 1,
+      updatedAt: 1,
     })
     await db.dayInstances.add({
       id: 'i1',
-      templateId: 'tpl',
+      templateId: 'plan',
       date: '2025-09-23',
       status: 'active',
       placements: [],
@@ -343,7 +359,6 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     })
     await db.cycleState.update('current', {
       activeInstanceId: 'i1',
-      lastCyclicTemplateId: 'tpl',
       manualShiftDate: '2025-09-23',
       lastAutoShiftDate: '2025-09-23',
     })
@@ -362,7 +377,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     await flush()
 
     expect(await db.tasks.count()).toBe(0)
-    expect(await db.dayTemplates.count()).toBe(0)
+    expect(await db.dayPlans.count()).toBe(0)
     expect(await db.dayInstances.count()).toBe(0)
     expect(await db.cycleState.get('current')).toEqual(cycleState())
 

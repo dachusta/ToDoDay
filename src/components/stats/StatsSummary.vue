@@ -9,7 +9,7 @@
     <div
       v-for="tile in tiles"
       :key="tile.id"
-      class="col-6 col-md-3"
+      class="col-6 col-md"
     >
       <q-card
         flat
@@ -44,6 +44,7 @@ export interface StatsTotals {
   placed: number
   done: number
   skipped: number
+  unplanned?: number
   rate: number | null
 }
 
@@ -62,6 +63,7 @@ const tiles = computed(() => [
   { id: 'placed', value: String(props.stats?.placed ?? 0), label: t('stats.placed') },
   { id: 'done', value: String(props.stats?.done ?? 0), label: t('stats.done') },
   { id: 'skipped', value: String(props.stats?.skipped ?? 0), label: t('stats.skipped') },
+  { id: 'unplanned', value: String(props.stats?.unplanned ?? 0), label: t('stats.unplanned') },
   { id: 'rate', value: rateText(props.stats?.rate ?? null), label: t('stats.rate') },
 ])
 </script>

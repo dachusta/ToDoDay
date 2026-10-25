@@ -82,6 +82,10 @@
           :read-only="readOnly"
           :day-start-min="dayStartMin"
           :time-format="timeFormat"
+          :unplanned="placement.unplanned === true"
+          :planned-start-min="plannedStarts?.get(placement.id) ?? null"
+          :archived="archivedIds?.has(placement.id) === true"
+          :mode="mode"
           @action="(id, target) => emit('placement-action', id, target)"
           @drag-start="(target, event) => emit('placement-drag-start', target, event)"
           @drag-end="emit('placement-drag-end')"
@@ -125,22 +129,31 @@ import type { Placement } from 'src/models/dayInstance'
 import type { TimeFormat } from 'src/models/enums'
 import type { PlacementActionId } from './placementActions'
 
-const props = defineProps<{
-  slots: Slot[]
-  /** Все размещения текущего дня: со слотом и без (нераспределённые отсеиваются). */
-  placements: Placement[]
-  /** id размещений, участвующих в пересечениях (FR-B-3); пусто — подсветки нет. */
-  conflictIds: Set<string>
-  /** День завершён: drop и действия карточек недоступны (DAY_NOT_ACTIVE). */
-  readOnly: boolean
-  hoveredSlot: number | null
-  /** Смещение текущего времени от timeStart в минутах; null — день не сегодня. */
-  nowStartMin: number | null
-  /** Минуты от начала суток для instance.timeStart (startMin — смещение от него). */
-  dayStartMin: number
-  timeFormat: TimeFormat
-  draggingId: string | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    slots: Slot[]
+    /** Все размещения текущего дня: со слотом и без (нераспределённые отсеиваются). */
+    placements: Placement[]
+    /** id размещений, участвующих в пересечениях (FR-B-3); пусто — подсветки нет. */
+    conflictIds: Set<string>
+    /** День завершён: drop и действия карточек недоступны (DAY_NOT_ACTIVE). */
+    readOnly: boolean
+    hoveredSlot: number | null
+    /** Смещение текущего времени от timeStart в минутах; null — день не сегодня. */
+    nowStartMin: number | null
+    /** Минуты от начала суток для instance.timeStart (startMin — смещение от него). */
+    dayStartMin: number
+    timeFormat: TimeFormat
+    draggingId: string | null
+    /** 'day' — факт дня, 'plan' — редактор плана. */
+    mode?: 'day' | 'plan'
+    /** Плановое время для подписи «план: HH:mm» (сегодня). */
+    plannedStarts?: ReadonlyMap<string, number | null>
+    /** id размещений, чьи дела в архиве (редактор плана). */
+    archivedIds?: ReadonlySet<string>
+  }>(),
+  { mode: 'day', plannedStarts: () => new Map<string, number | null>(), archivedIds: () => new Set<string>() },
+)
 
 const emit = defineEmits<{
   'drop-task': [taskId: string, slot: Slot]
@@ -184,7 +197,10 @@ const visibleSlots = computed(() => {
 
 /** Размещения со слотом: нераспределённые живут в UnallocatedZone (FR-B-5). */
 const placed = computed(() =>
-  props.placements.filter((p): p is Placement & { startMin: number } => p.startMin !== null),
+  props.placements.filter(
+    (p): p is Placement & { startMin: number } =>
+      p.startMin !== null && p.removed !== true,
+  ),
 )
 
 /**

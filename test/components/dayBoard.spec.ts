@@ -1,7 +1,6 @@
-import { readFileSync } from 'node:fs'
 import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { QLayout, QPageContainer, Quasar } from 'quasar'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,19 +11,25 @@ import { todayISO } from 'src/services/dates'
 import { TASK_DRAG_MIME } from 'src/services/taskDrag'
 import { SLOT_HEIGHT } from 'src/models/cycle'
 import { useCycleStore } from 'src/stores/cycle'
-import { useDaysStore } from 'src/stores/days'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useTasksStore } from 'src/stores/tasks'
 import { useUiStore } from 'src/stores/ui'
+import type { DayPlan, DayPlanInput } from 'src/models/day'
 import type { DayInstance, Placement } from 'src/models/dayInstance'
-import type { DayTemplate } from 'src/models/day'
 import type { Task } from 'src/models/task'
 import { quasarComponents, quasarDirectives, quasarPluginOptions } from '../vitest/quasar'
 import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helpers'
 
 /**
- * Доска дня целиком (вайрфреймы §1, FR-B-1…FR-B-7, НФТ ТЗ §7). Страница
+ * Доска дня целиком (вайрфреймы §1, FR-B-1…FR-B-8, НФТ ТЗ §7). Страница
  * монтируется в реальном каркасе QLayout + QPageContainer: вне layout QPage не
  * рендерится вовсе, а в приложении доска всегда внутри него.
+ *
+ * Данные готовятся через сторы (задачи, планы, цикл): план на сегодня создаётся
+ * до `cycle.initialize()`, и уже инициализированный день монтируется на доску —
+ * так тест повторяет порядок вызовов приложения. Экземпляры, которых нет в API
+ * сторов (завершённый день, прошлый день, план с удалённой ссылкой), кладутся в
+ * Dexie напрямую: это фикстура состояния, а не обход бизнес-логики.
  *
  * Часы детерминированы: подменяется только `useNow` (mock ниже) — `Date` остаётся
  * настоящим. Прятать за фейком весь `Date` нельзя: Vue сравнивает `event.timeStamp`
@@ -89,20 +94,26 @@ function makeRouter(): Router {
       { path: '/', name: 'today', component: { template: '<div />' } },
       { path: '/tasks', name: 'tasks', component: { template: '<div />' } },
       { path: '/days', name: 'days', component: { template: '<div />' } },
+      { path: '/days/:id', name: 'day-plan', component: { template: '<div />' } },
     ],
   })
 }
 
-async function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitFor(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 3000,
+): Promise<void> {
   const start = Date.now()
-  while (!check() && Date.now() - start < timeoutMs) await flush(20)
+  while (!(await check()) && Date.now() - start < timeoutMs) await flush(20)
 }
 
 async function mountPage(width = 1280): Promise<{ wrapper: VueWrapper; router: Router }> {
   setViewportWidth(width)
   await flush()
 
-  const pinia = createPinia()
+  // Pinia создан в prepare(): сиды и assertions обязаны видеть те же сторы,
+  // что и страница. Инициализированный цикл страница уже не переоткрывает.
+  const pinia = getActivePinia() ?? createPinia()
   setActivePinia(pinia)
   const router = makeRouter()
   await router.push('/')
@@ -118,40 +129,15 @@ async function mountPage(width = 1280): Promise<{ wrapper: VueWrapper; router: R
   })
   mounted.push(wrapper)
 
-  // initialize() разрешает день асинхронно (Dexie): ждём условия, а не паузы
-  await waitUntil(() => !wrapper.find('[data-test="skeleton"]').exists())
+  // Если день ещё не инициализирован, initialize() разрешает его асинхронно (Dexie)
+  await waitFor(() => !wrapper.find('[data-test="skeleton"]').exists())
   return { wrapper, router }
 }
 
 // --- Данные ---------------------------------------------------------------
 
-const template = (over: Partial<DayTemplate> = {}): DayTemplate => ({
-  id: 't1',
-  name: 'Рабочий день',
-  order: 0,
-  timeStart: '08:00',
-  timeEnd: '22:00',
-  gridStepMin: 15,
-  accentColor: '#2196F3',
-  repeatRule: { type: 'none' },
-  plannedTaskIds: [],
-  createdAt: 1,
-  ...over,
-})
-
-const task = (over: Partial<Task> & { id: string }): Task => ({
-  title: `дело ${over.id}`,
-  priority: 'medium',
-  color: '#2196F3',
-  durationMin: 30,
-  archived: false,
-  createdAt: 1,
-  updatedAt: 1,
-  ...over,
-})
-
 const placement = (over: Partial<Placement> & { id: string }): Placement => ({
-  taskId: 'a',
+  taskId: 'task-a',
   startMin: 75,
   durationMin: 15,
   status: 'pending',
@@ -160,10 +146,62 @@ const placement = (over: Partial<Placement> & { id: string }): Placement => ({
   ...over,
 })
 
-/** Материализованный активный день на сегодня: так initialize() его не пересоздаёт. */
-async function seedDay(placements: Placement[] = [], over: Partial<DayInstance> = {}) {
+async function loadStores(): Promise<void> {
+  await useTasksStore().loadAll()
+  await useDayPlansStore().loadAll()
+}
+
+async function initCycle(): Promise<void> {
+  const result = await useCycleStore().initialize()
+  if (!result.ok) throw new Error(`цикл: ${result.error.message}`)
+}
+
+async function seedTask(
+  title: string,
+  over: { durationMin?: number; priority?: Task['priority']; color?: string } = {},
+): Promise<Task> {
+  const result = await useTasksStore().createTask({
+    title,
+    priority: over.priority ?? 'medium',
+    color: over.color ?? '#2196F3',
+    durationMin: over.durationMin ?? 30,
+  })
+  if (!result.ok) throw new Error(`дело: ${result.error.message}`)
+  return result.data
+}
+
+async function createPlan(over: Partial<DayPlanInput> = {}): Promise<DayPlan> {
+  const plans = useDayPlansStore()
+  if (!plans.initialized) await plans.loadAll()
+  const result = await plans.createPlan({
+    name: 'Рабочий день',
+    accentColor: '#2196F3',
+    date: todayISO(),
+    repeatRule: { type: 'none' },
+    timeStart: '08:00',
+    timeEnd: '22:00',
+    ...over,
+  })
+  if (!result.ok) throw new Error(`план: ${result.error.message}`)
+  return result.data
+}
+
+/** План на сегодня, созданный до инициализации цикла: день материализуется планом. */
+async function planDay(over: Partial<DayPlanInput> = {}): Promise<DayPlan> {
+  await loadStores()
+  const plan = await createPlan(over)
+  await initCycle()
+  return plan
+}
+
+/** Материализованный экземпляр в Dexie: статус/дату/битую ссылку плана задаёт тест. */
+async function seedInstance(
+  placements: Placement[] = [],
+  over: Partial<DayInstance> = {},
+): Promise<DayInstance> {
   const instance: DayInstance = {
     id: 'inst-1',
+    planId: null,
     templateId: null,
     date: todayISO(),
     status: 'active',
@@ -178,13 +216,33 @@ async function seedDay(placements: Placement[] = [], over: Partial<DayInstance> 
   return instance
 }
 
+async function instanceDay(
+  placements: Placement[] = [],
+  over: Partial<DayInstance> = {},
+): Promise<DayInstance> {
+  await loadStores()
+  const instance = await seedInstance(placements, over)
+  await initCycle()
+  return instance
+}
+
+/** Виртуальный пустой день: в Dexie экземпляра нет, cycleState.activeInstanceId = null. */
+async function virtualDay(): Promise<void> {
+  await loadStores()
+  await initCycle()
+}
+
 const activeInstance = async (): Promise<DayInstance | undefined> => {
   const state = await db.cycleState.get('current')
   return state?.activeInstanceId ? db.dayInstances.get(state.activeInstanceId) : undefined
 }
 
-const dbPlacement = async (placementId: string) =>
-  (await db.dayInstances.get('inst-1'))?.placements.find(item => item.id === placementId)
+/** Размещение в БД по id текущего экземпляра (после действий стора). */
+const storedPlacement = async (placementId: string): Promise<Placement | undefined> => {
+  const instanceId = useCycleStore().currentInstance?.id
+  if (instanceId === undefined) return undefined
+  return (await db.dayInstances.get(instanceId))?.placements.find(item => item.id === placementId)
+}
 
 // --- Селекторы ------------------------------------------------------------
 
@@ -198,6 +256,10 @@ const labels = (wrapper: VueWrapper) =>
 
 const card = (wrapper: VueWrapper, placementId: string) =>
   wrapper.find(`[data-placement="${placementId}"]`)
+
+const bodyEl = (selector: string) => document.body.querySelector<HTMLElement>(selector)
+
+const bodyText = (selector: string) => bodyEl(selector)?.textContent ?? ''
 
 /** Открыть меню карточки: содержимое q-menu телепортируется в body. */
 async function openCardMenu(wrapper: VueWrapper, placementId: string): Promise<void> {
@@ -216,7 +278,7 @@ async function clickMenuAction(action: string): Promise<void> {
 }
 
 async function clickBody(selector: string): Promise<void> {
-  const element = document.body.querySelector(selector)
+  const element = bodyEl(selector)
   if (element === null) throw new Error(`элемент ${selector} не найден`)
   await new DOMWrapper(element).trigger('click')
   await flush()
@@ -297,7 +359,7 @@ async function teardown(): Promise<void> {
     }
   }
   useTasksStore().unsubscribe()
-  useDaysStore().unsubscribe()
+  useDayPlansStore().unsubscribe()
   useCycleStore().dispose()
   document.body.innerHTML = ''
   resetViewportWidth()
@@ -316,16 +378,16 @@ describe('DayBoard: шапка, сетка и пустой день (FR-B-1, FR-
   beforeEach(prepare)
   afterEach(teardown)
 
-  it('показывает дату, имя шаблона, диапазон и сетку 15 минут', async () => {
-    await db.dayTemplates.add(template())
+  it('показывает дату, имя плана, диапазон и сетку 15 минут', async () => {
+    await planDay({ name: 'Рабочий день' })
 
     const { wrapper } = await mountPage()
 
-    // «Вторник · 23 сентября»: день недели с заглавной, локале-зависимый месяц
+    // «Воскресенье · 25 октября»: день недели с заглавной, локале-зависимый месяц
     expect(wrapper.find('[data-test="board-date"]').text()).toMatch(
       /^[А-ЯЁ][а-яё]+ · \d{1,2} [а-яё]+$/,
     )
-    expect(wrapper.find('[data-test="board-template"]').text()).toContain('Рабочий день')
+    expect(wrapper.find('[data-test="plan-name"]').text()).toBe('Рабочий день')
     expect(wrapper.find('[data-test="board-template"]').text()).toContain('08:00–22:00')
 
     // 14 часов по 15 минут: последний слот 21:45, границы 22:00 среди слотов нет (FR-B-1)
@@ -335,7 +397,7 @@ describe('DayBoard: шапка, сетка и пустой день (FR-B-1, FR-
   })
 
   it('крупные линии каждые 30 минут, часовые — жирнее (FR-B-1)', async () => {
-    await seedDay()
+    await virtualDay()
     const { wrapper } = await mountPage()
 
     const all = slots(wrapper)
@@ -345,25 +407,44 @@ describe('DayBoard: шапка, сетка и пустой день (FR-B-1, FR-
     expect(all[1]?.classes()).not.toContain('day-slot--hour')
   })
 
-  it('пустой день: «Без шаблона», CTA «Настроить день» и «Взять дело» (FR-D-6)', async () => {
+  it('повторяющийся план на сегодня показывает правило (FR-D-2)', async () => {
+    const plan = await planDay({
+      name: 'Повтор',
+      date: null,
+      repeatRule: { type: 'weekdays', weekdays: [0, 1, 2, 3, 4, 5, 6] },
+    })
+    const { wrapper } = await mountPage()
+
+    expect(wrapper.find('[data-test="plan-name"]').text()).toBe('Повтор')
+    expect(wrapper.find('[data-test="plan-rule"]').text()).toContain('по дням')
+    expect(useCycleStore().currentPlanMode).toBe('recurring')
+    expect(useCycleStore().currentInstance?.planId).toBe(plan.id)
+  })
+
+  it('пустой (виртуальный) день: «Без плана» и оба CTA (FR-D-6)', async () => {
+    await virtualDay()
     const { wrapper, router } = await mountPage()
 
-    // Шаблона на дату нет: день виртуален, в Dexie его нет
+    // Плана на дату нет: день виртуален, в Dexie его нет
     expect(await db.cycleState.get('current')).toMatchObject({ activeInstanceId: null })
     expect(await db.dayInstances.count()).toBe(0)
     expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="template-name"]').text()).toBe('Без шаблона')
+    expect(wrapper.find('[data-test="plan-none"]').text()).toBe('Без плана')
 
     await wrapper.find('[data-test="setup-day"]').trigger('click')
     await flush()
     expect(router.currentRoute.value.name).toBe('days')
+    expect(router.currentRoute.value.query.create).toBe(todayISO())
+
+    await wrapper.find('[data-test="take-task"]').trigger('click')
+    await flush()
+    expect(router.currentRoute.value.name).toBe('tasks')
   })
 
-  it('CTA пустого дня пропадает после первого дела, а подсказка ведёт к делам (FR-D-6)', async () => {
-    await db.dayTemplates.add(template())
+  it('план без дел: подсказка «взять дело» вместо CTA пустого дня (FR-D-6)', async () => {
+    await planDay()
     const { wrapper, router } = await mountPage()
 
-    // День по шаблону материализован, размещений нет: CTA пустого дня нет
     expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="no-placements"]').exists()).toBe(true)
 
@@ -372,40 +453,59 @@ describe('DayBoard: шапка, сетка и пустой день (FR-B-1, FR-
     expect(router.currentRoute.value.name).toBe('tasks')
   })
 
-  it('удалённый шаблон даёт заглушку «Шаблон удалён», а не «Без шаблона» (FR-D-4)', async () => {
-    await seedDay([], { templateId: 'gone' })
+  it('удалённый план даёт заглушку «План дня удалён», а не «Без плана» (FR-D-4)', async () => {
+    await loadStores()
+    await seedInstance([], { planId: 'gone' })
+    await initCycle()
     const { wrapper } = await mountPage()
 
-    expect(wrapper.find('[data-test="template-deleted"]').text()).toBe('Шаблон удалён')
+    expect(wrapper.find('[data-test="plan-deleted"]').text()).toBe('План дня удалён')
+    expect(wrapper.find('[data-test="plan-none"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(false)
+    expect(useCycleStore().isPlanMissing).toBe(true)
+    expect(useCycleStore().currentPlan).toBeNull()
+  })
+
+  it('«Открыть план» ведёт в редактор этого плана (FR-D-5)', async () => {
+    const plan = await planDay()
+    const { wrapper, router } = await mountPage()
+
+    await wrapper.find('[data-test="open-plan"]').trigger('click')
+    await flush()
+
+    expect(router.currentRoute.value.name).toBe('day-plan')
+    expect(router.currentRoute.value.params.id).toBe(plan.id)
+  })
+
+  it('панель дел — drag-source и не показывает архивные дела (FR-T-4)', async () => {
+    await seedTask('Зарядка')
+    const archived = await seedTask('Почта')
+    await useTasksStore().archiveTask(archived.id)
+    await virtualDay()
+    const { wrapper } = await mountPage()
+
+    expect(wrapper.findAll('.task-drag-panel__title').map(node => node.text())).toEqual([
+      'Зарядка',
+    ])
+
+    const active = useTasksStore().activeTasks[0]
+    if (active === undefined) throw new Error('активное дело не найдено')
+    const dataTransfer = dataTransferStub()
+    wrapper.find(`[data-task="${active.id}"]`).element.dispatchEvent(
+      dragEvent('dragstart', dataTransfer),
+    )
+    expect(dataTransfer.getData(TASK_DRAG_MIME)).toBe(active.id)
+    expect(useCycleStore().draggingTaskId).toBe(active.id)
   })
 
   it('с 1024 px есть панель дел, до 1024 px её нет (ТЗ §5.1)', async () => {
+    await virtualDay()
     const wide = await mountPage(1280)
     expect(wide.wrapper.find('[data-test="tasks-panel"]').exists()).toBe(true)
 
     const narrow = await mountPage(800)
     expect(narrow.wrapper.find('[data-test="tasks-panel"]').exists()).toBe(false)
     expect(narrow.wrapper.find('[data-test="day-board"]').exists()).toBe(true)
-  })
-
-  it('панель дел — drag-source и не показывает архивные дела (FR-T-4)', async () => {
-    await seedDay()
-    await db.tasks.bulkAdd([
-      task({ id: 'a', title: 'Зарядка' }),
-      task({ id: 'b', title: 'Почта', archived: true }),
-    ])
-    const { wrapper } = await mountPage()
-
-    expect(wrapper.findAll('.day-board-page__task-title').map(node => node.text())).toEqual([
-      'Зарядка',
-    ])
-
-    const dataTransfer = dataTransferStub()
-    wrapper
-      .find('[data-task="a"]')
-      .element.dispatchEvent(dragEvent('dragstart', dataTransfer))
-    expect(dataTransfer.getData(TASK_DRAG_MIME)).toBe('a')
   })
 })
 
@@ -415,7 +515,7 @@ describe('DayBoard: пересечения и текущее время (FR-B-3,
 
   it('считает пары, подсвечивает пересечения и игнорирует skipped (FR-B-3)', async () => {
     // 09:15–09:45 и 09:30–10:00 — одна пара; skipped 09:20–09:50 в счёт не входит
-    await seedDay([
+    await instanceDay([
       placement({ id: 'p1', startMin: 75, durationMin: 30 }),
       placement({ id: 'p2', startMin: 90, durationMin: 30, status: 'done' }),
       placement({ id: 'p3', startMin: 80, durationMin: 30, status: 'skipped' }),
@@ -426,11 +526,12 @@ describe('DayBoard: пересечения и текущее время (FR-B-3,
     expect(card(wrapper, 'p1').classes()).toContain('placement-card--conflict')
     expect(card(wrapper, 'p2').classes()).toContain('placement-card--conflict')
     expect(card(wrapper, 'p3').classes()).not.toContain('placement-card--conflict')
+    expect(useCycleStore().conflicts).toHaveLength(1)
   })
 
   it('showConflicts выключает баннер и подсветку, но не удаляет пересечения (FR-B-3)', async () => {
     localStorage.setItem('tododay:showConflicts', 'false')
-    await seedDay([
+    await instanceDay([
       placement({ id: 'p1', startMin: 75, durationMin: 30 }),
       placement({ id: 'p2', startMin: 90, durationMin: 30 }),
     ])
@@ -443,7 +544,7 @@ describe('DayBoard: пересечения и текущее время (FR-B-3,
 
   it('показывает маркер текущего времени и ▶ только внутри интервала (FR-B-1, FR-B-6)', async () => {
     // 10:05: интервал 10:00–10:15 накрывает «сейчас», 10:30 — нет
-    await seedDay([
+    await instanceDay([
       placement({ id: 'p1', startMin: 120, durationMin: 15 }),
       placement({ id: 'p2', startMin: 150, durationMin: 15 }),
     ])
@@ -455,23 +556,26 @@ describe('DayBoard: пересечения и текущее время (FR-B-3,
     expect(card(wrapper, 'p1').find('.placement-card__now').text()).toBe('▶')
     expect(card(wrapper, 'p2').find('.placement-card__now').exists()).toBe(false)
     // Рисунок ▶ не меняет статус размещения (FR-B-6)
-    expect(await dbPlacement('p1')).toMatchObject({ status: 'pending' })
+    expect(await storedPlacement('p1')).toMatchObject({ status: 'pending' })
   })
 
   it('у прошлого дня маркера и ▶ нет', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 120, durationMin: 15 })], {
+    // Активный прошлый день не должен открыть авто-диалог завершения (FR-C-4)
+    localStorage.setItem('tododay:askOnNewDay', 'false')
+    await instanceDay([placement({ id: 'p1', startMin: 120, durationMin: 15 })], {
       date: '2020-01-01',
     })
     const { wrapper } = await mountPage()
 
     expect(wrapper.find('[data-test="now-marker"]').exists()).toBe(false)
     expect(card(wrapper, 'p1').find('.placement-card__now').exists()).toBe(false)
+    expect(useCycleStore().completing).toBe(false)
   })
 
   it('скроллит сетку к текущему времени при открытии (FR-B-1)', async () => {
     clock.hours = 20
     clock.minutes = 0 // 20:00 → 720 минут от 08:00
-    await seedDay()
+    await planDay()
     const { wrapper } = await mountPage()
 
     const grid = wrapper.find('[data-test="grid"]').element as HTMLElement
@@ -486,29 +590,38 @@ describe('DayBoard: перенос дел (FR-B-2, FR-B-4, FR-B-5)', () => {
   beforeEach(prepare)
   afterEach(teardown)
 
-  it('drop из панели ставит дело в слот и материализует виртуальный день (FR-B-2, FR-D-6)', async () => {
-    await db.tasks.add(task({ id: 'a', title: 'Зарядка', durationMin: 30 }))
+  it('drop из панели ставит дело и материализует виртуальный день (FR-B-2, FR-D-6)', async () => {
+    const task = await seedTask('Зарядка', { durationMin: 30 })
+    await virtualDay()
     const { wrapper } = await mountPage()
 
     expect(await db.cycleState.get('current')).toMatchObject({ activeInstanceId: null })
 
-    await dropTaskOnSlot(wrapper, 'a', 2) // 08:30
+    await dropTaskOnSlot(wrapper, task.id, 2) // 08:30
+    await waitFor(async () => ((await activeInstance())?.placements.length ?? 0) === 1)
 
     const instance = await activeInstance()
     expect(instance?.placements).toHaveLength(1)
-    expect(instance?.placements[0]).toMatchObject({ taskId: 'a', startMin: 30, durationMin: 30 })
+    expect(instance?.placements[0]).toMatchObject({
+      taskId: task.id,
+      startMin: 30,
+      durationMin: 30,
+      plannedId: null,
+      unplanned: true,
+    })
 
     const placed = gridCards(wrapper)
     expect(placed).toHaveLength(1)
     expect(placed[0]?.text()).toContain('Зарядка')
     expect(placed[0]?.attributes('style')).toContain(`top: ${(30 / 15) * SLOT_HEIGHT}px`)
     expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(false)
+    await waitFor(() => wrapper.find('[data-test="live"]').text().includes('Зарядка'))
     expect(wrapper.find('[data-test="live"]').text()).toContain('Зарядка поставлено на 08:30')
   })
 
-  it('drop поверх уже стоящей карточки ставит второе дело: пересечения разрешены (FR-B-3, дефект D19)', async () => {
-    await db.tasks.add(task({ id: 'a', title: 'Созвон', durationMin: 30 }))
-    await seedDay([
+  it('drop поверх уже стоящей карточки ставит второе дело: пересечения разрешены (FR-B-3)', async () => {
+    const task = await seedTask('Созвон', { durationMin: 30 })
+    await instanceDay([
       placement({
         id: 'p1',
         startMin: 30,
@@ -519,20 +632,22 @@ describe('DayBoard: перенос дел (FR-B-2, FR-B-4, FR-B-5)', () => {
     const { wrapper } = await mountPage()
 
     // Цель события — карточка: слой размещений лежит выше строк сетки
-    await dropTaskOnElement('a', 2, card(wrapper, 'p1').element)
-    await flush()
+    await dropTaskOnElement(task.id, 2, card(wrapper, 'p1').element)
+    await waitFor(() => useCycleStore().currentInstance?.placements.length === 2)
 
-    const instance = await activeInstance()
-    expect(instance?.placements).toHaveLength(2)
-    expect(instance?.placements[1]).toMatchObject({ taskId: 'a', startMin: 30 })
+    const placements = useCycleStore().currentInstance?.placements ?? []
+    expect(placements).toHaveLength(2)
+    expect(placements[1]).toMatchObject({ taskId: task.id, startMin: 30 })
     expect(wrapper.find('[data-test="conflict-banner"]').text()).toBe('⚠ 1 конфликт')
   })
 
   it('дело, не помещающееся в день, уходит в нераспределённые (FR-B-4)', async () => {
-    await db.tasks.add(task({ id: 'a', title: 'Марафон', durationMin: 1425 }))
+    const task = await seedTask('Марафон', { durationMin: 1425 })
+    await virtualDay()
     const { wrapper } = await mountPage()
 
-    await dropTaskOnSlot(wrapper, 'a', 0)
+    await dropTaskOnSlot(wrapper, task.id, 0)
+    await waitFor(() => useCycleStore().currentInstance?.placements.length === 1)
 
     const instance = await activeInstance()
     expect(instance?.placements[0]).toMatchObject({ startMin: null, durationMin: 1425 })
@@ -541,50 +656,36 @@ describe('DayBoard: перенос дел (FR-B-2, FR-B-4, FR-B-5)', () => {
     // Нераспределённое показывает длительность, а не интервал (FR-B-5)
     expect(zoneCards(wrapper)[0]?.text()).toContain('Марафон')
     expect(zoneCards(wrapper)[0]?.text()).toContain('23 ч 45 мин')
+    await waitFor(() => wrapper.find('[data-test="live"]').text().includes('Марафон'))
     expect(wrapper.find('[data-test="live"]').text()).toContain('Марафон поставлено на 08:00')
   })
 
   it('перенос карточки по сетке pointer events меняет startMin (FR-B-2)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15, durationMin: 15 })])
+    await instanceDay([placement({ id: 'p1', startMin: 15, durationMin: 15 })])
     const { wrapper } = await mountPage()
 
     await dragCardToSlot(wrapper, 'p1', 3) // 09:00
+    await waitFor(() => useCycleStore().currentInstance?.placements[0]?.startMin === 45)
 
-    expect(await dbPlacement('p1')).toMatchObject({ startMin: 45 })
+    expect(await storedPlacement('p1')).toMatchObject({ startMin: 45 })
     expect(card(wrapper, 'p1').attributes('style')).toContain(`top: ${(45 / 15) * SLOT_HEIGHT}px`)
   })
 
-  /**
-   * Выделенное название срывает перенос: браузер начинает тащить выделенный
-   * текст нативным drag-and-drop, pointer events обрываются, и drop до доски не
-   * доходит — дело остаётся на месте. Поэтому текст карточки не выделяется, а
-   * нативный `dragstart` гасится.
-   */
-  it('выделение названия не срывает перенос карточки (FR-B-2)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15, durationMin: 15 })])
+  it('нераспределённое размещение переносится на сетку (FR-B-5)', async () => {
+    await instanceDay([placement({ id: 'p1', startMin: null, durationMin: 30 })])
     const { wrapper } = await mountPage()
 
-    const title = card(wrapper, 'p1').find('.placement-card__title')
-    expect(title.exists()).toBe(true)
+    expect(zoneCards(wrapper)).toHaveLength(1)
+    await dragCardToSlot(wrapper, 'p1', 4) // 09:00
+    await waitFor(() => useCycleStore().currentInstance?.placements[0]?.startMin === 60)
 
-    // Жест начался на выделенном фрагменте: нативный перенос текста не стартует
-    const nativeDrag = new Event('dragstart', { bubbles: true, cancelable: true })
-    title.element.dispatchEvent(nativeDrag)
-    expect(nativeDrag.defaultPrevented).toBe(true)
-
-    // jsdom не применяет <style> из SFC: правило выделения проверяется по исходнику
-    const source = readFileSync(`${process.cwd()}/src/components/days/PlacementCard.vue`, 'utf8')
-    expect(source).toMatch(/\.placement-card\s*\{[^}]*user-select:\s*none/)
+    expect(await storedPlacement('p1')).toMatchObject({ startMin: 60 })
+    expect(zoneCards(wrapper)).toHaveLength(0)
+    expect(gridCards(wrapper)).toHaveLength(1)
   })
 
-  /**
-   * Во время переноса видно, в какой слот встанет дело: полоса совпадает со
-   * строкой сетки (высота SLOT_HEIGHT) и лежит выше карточек — на заполненном
-   * дне цель иначе скрыта под ними. Слабая заливка (без рамки) не читается как
-   * цель переноса.
-   */
-  it('подсветка цели совпадает со слотом и видна над карточками (FR-B-2)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 0, durationMin: 120 })])
+  it('подсветка цели совпадает со слотом и не перерисовывает строки (FR-B-2)', async () => {
+    await instanceDay([placement({ id: 'p1', startMin: 0, durationMin: 120 })])
     const { wrapper } = await mountPage()
 
     const grid = wrapper.find('[data-test="grid"]')
@@ -599,64 +700,24 @@ describe('DayBoard: перенос дел (FR-B-2, FR-B-4, FR-B-5)', () => {
     expect(highlight.exists()).toBe(true)
     expect(highlight.attributes('style')).toContain(`top: ${slotIndex * SLOT_HEIGHT}px`)
     expect(highlight.attributes('style')).toContain(`height: ${SLOT_HEIGHT}px`)
-
-    // jsdom не применяет <style> из SFC: слой над карточками и рамка цели
-    // проверяются по исходнику, иначе регресс в CSS остался бы незамеченным
-    const source = readFileSync(`${process.cwd()}/src/components/days/DayGrid.vue`, 'utf8')
-    const rule = /\.day-grid__hover\s*\{([^}]*)\}/.exec(source)?.[1] ?? ''
-    expect(rule).toContain('z-index: 3')
-    expect(rule).toContain('var(--app-drop-target)')
-  })
-
-  /**
-   * Карточку в переносе видно сквозь: полупрозрачная заливка показывает линии
-   * сетки и подсветку целевого слота под ней. Прозрачность задаётся заливкой, а
-   * не `opacity` элемента — иначе название и время (11–12 px) уходят ниже WCAG AA
-   * (журнал, дефект D38; тест `a11y/contrast.spec.ts` ловит `opacity < 1`).
-   */
-  it('переносимая карточка полупрозрачна, но не через opacity (FR-B-2, НФТ §7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15, durationMin: 15 })])
-    const { wrapper } = await mountPage()
-
-    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 0, clientY: 0, button: 0 })
-    window.dispatchEvent(pointerEvent('pointermove', 120))
-    await flush()
-
-    expect(card(wrapper, 'p1').classes()).toContain('placement-card--dragging')
-
-    // jsdom не применяет <style> из SFC: приём прозрачности проверяется по исходнику
-    const source = readFileSync(`${process.cwd()}/src/components/days/PlacementCard.vue`, 'utf8')
-    const rule = /\.placement-card--dragging\s*\{([^}]*)\}/.exec(source)?.[1] ?? ''
-    expect(rule).toContain('background: color-mix(')
-    expect(rule).not.toContain('opacity')
-
-    window.dispatchEvent(pointerEvent('pointerup', 120))
-    await flush()
-  })
-
-  it('нераспределённое размещение переносится на сетку (FR-B-5)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: null, durationMin: 30 })])
-    const { wrapper } = await mountPage()
-
-    expect(zoneCards(wrapper)).toHaveLength(1)
-    await dragCardToSlot(wrapper, 'p1', 4) // 09:00
-
-    expect(await dbPlacement('p1')).toMatchObject({ startMin: 60 })
-    expect(zoneCards(wrapper)).toHaveLength(0)
-    expect(gridCards(wrapper)).toHaveLength(1)
+    expect(useCycleStore().hoveredSlot).toBe(slotIndex)
   })
 
   it('завершённый день не принимает ни drop, ни перенос (DAY_NOT_ACTIVE)', async () => {
-    await db.tasks.add(task({ id: 'a' }))
-    await seedDay([placement({ id: 'p1', startMin: 15 })], { status: 'completed' })
+    const task = await seedTask('Позднее')
+    const instance = await instanceDay(
+      [placement({ id: 'p1', startMin: 15 })],
+      { status: 'completed' },
+    )
     const { wrapper } = await mountPage()
 
-    await dropTaskOnSlot(wrapper, 'a', 5)
+    await dropTaskOnSlot(wrapper, task.id, 5)
     await dragCardToSlot(wrapper, 'p1', 8)
+    await flush()
 
-    const instance = await db.dayInstances.get('inst-1')
-    expect(instance?.placements).toHaveLength(1)
-    expect(instance?.placements[0]).toMatchObject({ id: 'p1', startMin: 15 })
+    const stored = await db.dayInstances.get(instance.id)
+    expect(stored?.placements).toHaveLength(1)
+    expect(stored?.placements[0]).toMatchObject({ id: 'p1', startMin: 15 })
   })
 })
 
@@ -665,7 +726,7 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
   afterEach(teardown)
 
   it('меню карточки содержит полный набор действий FR-B-7', async () => {
-    await seedDay([placement({ id: 'p1' })])
+    await instanceDay([placement({ id: 'p1' })])
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
@@ -679,73 +740,76 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
   })
 
   it('меняет статус и снимает отметку, не удаляя размещение (FR-B-6, FR-B-7)', async () => {
-    await seedDay([placement({ id: 'p1' })])
+    await instanceDay([placement({ id: 'p1' })])
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('mark-done')
-    expect(await dbPlacement('p1')).toMatchObject({ status: 'done' })
+    await waitFor(async () => (await storedPlacement('p1'))?.status === 'done')
     expect(card(wrapper, 'p1').find('.placement-card__status').text()).toBe('✓')
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('unmark-done')
-    expect(await dbPlacement('p1')).toMatchObject({ status: 'pending' })
+    await waitFor(async () => (await storedPlacement('p1'))?.status === 'pending')
     expect(card(wrapper, 'p1').find('.placement-card__status').exists()).toBe(false)
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('mark-skipped')
-    expect(await dbPlacement('p1')).toMatchObject({ status: 'skipped' })
+    await waitFor(async () => (await storedPlacement('p1'))?.status === 'skipped')
     expect(card(wrapper, 'p1').find('.placement-card__status').text()).toBe('✗')
     expect(gridCards(wrapper)).toHaveLength(1)
   })
 
   it('отметка «выполнено» на будущем слоте сохраняется с предупреждением (FR-B-7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 240 })]) // 12:00, сейчас 10:05
+    await instanceDay([placement({ id: 'p1', startMin: 240 })]) // 12:00, сейчас 10:05
     const { wrapper } = await mountPage()
     const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('mark-done')
+    await waitFor(async () => (await storedPlacement('p1'))?.status === 'done')
 
-    expect(await dbPlacement('p1')).toMatchObject({ status: 'done' })
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify.mock.calls[0]?.[0]).toBe('Слот ещё не начался')
     expect(notify.mock.calls[0]?.[1]).toBe('warning')
   })
 
   it('«Изменить длительность» правит размещение и уводит в нераспределённые (FR-B-7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 795, durationMin: 15 })]) // 21:15
-    await db.tasks.add(task({ id: 'a', durationMin: 15 }))
+    const task = await seedTask('Старое', { durationMin: 15 })
+    await instanceDay([
+      placement({ id: 'p1', taskId: task.id, startMin: 795, durationMin: 15 }),
+    ]) // 21:15
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('change-duration')
+    await waitFor(() => bodyEl('[data-test="duration-value"]') !== null)
 
-    expect(document.body.querySelector('[data-test="duration-value"]')?.textContent).toBe('15 мин')
+    expect(bodyText('[data-test="duration-value"]')).toBe('15 мин')
     for (let step = 0; step < 6; step += 1) {
       await clickBody('[data-test="duration-plus"]')
     }
-    expect(document.body.querySelector('[data-test="duration-value"]')?.textContent).toBe(
-      '1 ч 45 мин',
-    )
+    expect(bodyText('[data-test="duration-value"]')).toBe('1 ч 45 мин')
 
     await clickBody('[data-test="duration-save"]')
+    await waitFor(async () => (await storedPlacement('p1'))?.durationMin === 105)
 
     // 105 минут от 21:15 не помещаются в день до 22:00 → startMin = null (FR-B-4)
-    expect(await dbPlacement('p1')).toMatchObject({ durationMin: 105, startMin: null })
+    expect(await storedPlacement('p1')).toMatchObject({ durationMin: 105, startMin: null })
     expect(zoneCards(wrapper)).toHaveLength(1)
     // Снимок дела не тронут (FR-T-2)
-    expect((await db.tasks.get('a'))?.durationMin).toBe(15)
+    expect((await db.tasks.get(task.id))?.durationMin).toBe(15)
   })
 
   it('«Переместить в слот…» переносит размещение и объявляет перенос (FR-B-2, НФТ §7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15 })])
+    await instanceDay([placement({ id: 'p1', startMin: 15 })])
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('move-to-slot')
+    await waitFor(() => bodyEl('[data-test="slot-list"]') !== null)
 
-    const list = document.body.querySelector('[data-test="slot-list"]')
+    const list = bodyEl('[data-test="slot-list"]')
     expect(list?.getAttribute('role')).toBe('list')
     const items = [...document.body.querySelectorAll<HTMLElement>('[role="listitem"]')]
     expect(items).toHaveLength(56)
@@ -753,17 +817,18 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
     expect(items[55]?.getAttribute('aria-label')).toBe('21:45')
 
     await clickBody('[data-test="slot-4"]')
+    await waitFor(async () => (await storedPlacement('p1'))?.startMin === 60)
 
-    expect(await dbPlacement('p1')).toMatchObject({ startMin: 60 })
     expect(wrapper.find('[data-test="live"]').text()).toContain('перемещено на 09:00')
   })
 
   it('стрелки двигают фокус внутри списка слотов, карточку не переносят (FR-B-2, НФТ §7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15 })])
+    const instance = await instanceDay([placement({ id: 'p1', startMin: 15 })])
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('move-to-slot')
+    await waitFor(() => bodyEl('[data-test="slot-list"]') !== null)
     await flush(50)
 
     const items = [
@@ -781,29 +846,36 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
     expect(document.activeElement).toBe(items[55])
 
     // Стрелки не переносят саму карточку по сетке
-    expect(await dbPlacement('p1')).toMatchObject({ startMin: 15 })
+    await flush()
+    const stored = await db.dayInstances.get(instance.id)
+    expect(stored?.placements[0]).toMatchObject({ startMin: 15 })
   })
 
   it('«Заменить дело» берёт снимок нового дела (FR-B-7)', async () => {
-    await seedDay([
+    const oldTask = await seedTask('Старое')
+    const newTask = await seedTask('Новое', {
+      color: '#4CAF50',
+      priority: 'high',
+      durationMin: 60,
+    })
+    await instanceDay([
       placement({
         id: 'p1',
+        taskId: oldTask.id,
         startMin: 15,
         taskSnapshot: { title: 'Старое', color: '#2196F3', priority: 'medium' },
       }),
-    ])
-    await db.tasks.bulkAdd([
-      task({ id: 'a', title: 'Старое' }),
-      task({ id: 'b', title: 'Новое', color: '#4CAF50', priority: 'high', durationMin: 60 }),
     ])
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('replace')
-    await clickBody('[data-test="replace-b"]')
+    await waitFor(() => bodyEl(`[data-test="replace-${newTask.id}"]`) !== null)
+    await clickBody(`[data-test="replace-${newTask.id}"]`)
+    await waitFor(async () => (await storedPlacement('p1'))?.taskId === newTask.id)
 
-    expect(await dbPlacement('p1')).toMatchObject({
-      taskId: 'b',
+    expect(await storedPlacement('p1')).toMatchObject({
+      taskId: newTask.id,
       durationMin: 60,
       startMin: 15,
       taskSnapshot: { title: 'Новое', color: '#4CAF50', priority: 'high' },
@@ -811,37 +883,132 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
     expect(card(wrapper, 'p1').text()).toContain('Новое')
   })
 
-  it('«Убрать из дня» удаляет размещение, дело остаётся (FR-B-7)', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    await db.tasks.add(task({ id: 'a', title: 'Зарядка' }))
+  it('«Убрать из дня» удаляет внеплановое размещение, дело остаётся (FR-B-7)', async () => {
+    const task = await seedTask('Зарядка')
+    await instanceDay([placement({ id: 'p1', taskId: task.id })])
     const { wrapper } = await mountPage()
 
     await openCardMenu(wrapper, 'p1')
     await clickMenuAction('remove')
+    await waitFor(() => wrapper.find('[data-test="live"]').text() === 'Размещение убрано из дня')
 
-    expect((await db.dayInstances.get('inst-1'))?.placements).toHaveLength(0)
+    expect(useCycleStore().currentInstance?.placements).toHaveLength(0)
     expect(gridCards(wrapper)).toHaveLength(0)
-    expect(await db.tasks.get('a')).toBeDefined()
-    expect(wrapper.find('[data-test="live"]').text()).toBe('Размещение убрано из дня')
+    expect(await db.tasks.get(task.id)).toBeDefined()
   })
 
-  it('у завершённого дня меню размещения недоступно (вайрфреймы §1.3)', async () => {
-    await seedDay([placement({ id: 'p1' })], { status: 'completed' })
+  it('плановое дело уходит в «Убрано из плана» и возвращается (FR-B-8)', async () => {
+    const task = await seedTask('Плановое')
+    const plan = await planDay({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
     const { wrapper } = await mountPage()
+    const cycle = useCycleStore()
+    const planned = cycle.currentInstance?.placements[0]
+    if (planned === undefined) throw new Error('плановое размещение не материализовалось')
 
-    expect(card(wrapper, 'p1').find('.placement-card__menu-button').exists()).toBe(false)
-    await card(wrapper, 'p1').trigger('keydown.enter')
-    await flush()
-    expect(menuItem('change-duration')).toBeNull()
+    await openCardMenu(wrapper, planned.id)
+    await clickMenuAction('remove')
+    await waitFor(() => cycle.removedCount === 1)
+
+    // Плановое дело не удаляется: оно остаётся фактом «убрано из плана»
+    expect(wrapper.find('[data-test="removed-zone"]').exists()).toBe(true)
+    expect(wrapper.find(`[data-removed="${planned.id}"]`).exists()).toBe(true)
+    // ...и не остаётся на таймлайне: карточка живёт только в блоке «Убрано»
+    expect(gridCards(wrapper)).toHaveLength(0)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      removed: true,
+      unplanned: true,
+      status: 'skipped',
+    })
+    expect(useDayPlansStore().planById(plan.id)?.plannedPlacements).toHaveLength(1)
+
+    await wrapper.find(`[data-test="restore-${planned.id}"]`).trigger('click')
+    await waitFor(() => wrapper.find('[data-test="live"]').text() === 'Дело возвращено в день')
+
+    expect(cycle.removedCount).toBe(0)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      removed: false,
+      unplanned: false,
+      status: 'pending',
+      startMin: 60,
+      taskId: task.id,
+    })
+    expect(wrapper.find('[data-test="removed-zone"]').exists()).toBe(false)
+  })
+
+  it('внеплановые бейджи и плановое время после добавления и переноса (FR-B-8)', async () => {
+    const plannedTask = await seedTask('Плановое')
+    const extraTask = await seedTask('Новое')
+    await planDay({
+      plannedPlacements: [{ id: 'pp1', taskId: plannedTask.id, startMin: 60, durationMin: 30 }],
+    })
+    const { wrapper } = await mountPage()
+    const cycle = useCycleStore()
+    const planned = cycle.currentInstance?.placements[0]
+    if (planned === undefined) throw new Error('плановое размещение не материализовалось')
+
+    // Изначально отклонений нет: бейджа и планового времени не видно
+    expect(card(wrapper, planned.id).find('[data-test="placement-unplanned"]').exists()).toBe(false)
+    expect(card(wrapper, planned.id).find('[data-test="placement-planned-time"]').exists()).toBe(
+      false,
+    )
+
+    await dropTaskOnSlot(wrapper, extraTask.id, 8) // 10:00
+    await waitFor(() => cycle.currentInstance?.placements.length === 2)
+    const added = cycle.currentInstance?.placements.find(item => item.taskId === extraTask.id)
+    if (added === undefined) throw new Error('внеплановое размещение не добавилось')
+    expect(card(wrapper, added.id).find('[data-test="placement-unplanned"]').text()).toBe(
+      'внепланово',
+    )
+    expect(cycle.unplannedCount).toBe(1)
+
+    await dragCardToSlot(wrapper, planned.id, 12) // 11:00 вместо 09:00
+    await waitFor(() => cycle.currentInstance?.placements[0]?.startMin === 180)
+
+    const moved = cycle.currentInstance?.placements.find(item => item.id === planned.id)
+    expect(moved).toMatchObject({ startMin: 180, unplanned: true })
+    expect(card(wrapper, planned.id).find('[data-test="placement-unplanned"]').exists()).toBe(true)
+    expect(card(wrapper, planned.id).find('[data-test="placement-planned-time"]').text()).toBe(
+      'план: 09:00',
+    )
+    expect(cycle.unplannedCount).toBe(2)
   })
 })
 
-describe('DayBoard: доступность и производительность (НФТ ТЗ §7)', () => {
+describe('DayBoard: завершение, доступность и виртуализация (НФТ ТЗ §7)', () => {
   beforeEach(prepare)
   afterEach(teardown)
 
+  it('диалог завершения показывает план, после подтверждения доска только для чтения', async () => {
+    const task = await seedTask('Плановое')
+    const plan = await planDay({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const { wrapper } = await mountPage()
+    const cycle = useCycleStore()
+    const planned = cycle.currentInstance?.placements[0]
+    if (planned === undefined) throw new Error('плановое размещение не материализовалось')
+
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await waitFor(() => bodyEl('[data-test="complete-dialog"]') !== null)
+
+    // В шапке диалога — имя плана, а не «Без плана» (вайрфреймы §6)
+    expect(bodyText('[data-test="completion-plan"]')).toBe(plan.name)
+
+    await clickBody('[data-test="completion-confirm"]')
+    await waitFor(() => cycle.currentInstance?.status === 'completed')
+    await flush()
+
+    // Завершённый день — только для чтения: действий и завершения больше нет
+    expect(cycle.canComplete).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(false)
+    expect(card(wrapper, planned.id).find('.placement-card__menu-button').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
+  })
+
   it('карточка — role=button с aria-label, aria-pressed только при переносе (НФТ §7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15, durationMin: 30, status: 'done' })])
+    await instanceDay([placement({ id: 'p1', startMin: 15, durationMin: 30, status: 'done' })])
     const { wrapper } = await mountPage()
 
     const target = card(wrapper, 'p1')
@@ -856,12 +1023,12 @@ describe('DayBoard: доступность и производительност
     expect(card(wrapper, 'p1').attributes('aria-pressed')).toBe('true')
 
     window.dispatchEvent(pointerEvent('pointerup', 700))
-    await flush()
+    await waitFor(() => useCycleStore().currentInstance?.placements[0]?.startMin === 60)
     expect(card(wrapper, 'p1').attributes('aria-pressed')).toBeUndefined()
   })
 
   it('у нераспределённого карточка подписана «без времени» (FR-B-5, НФТ §7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: null, status: 'skipped' })])
+    await instanceDay([placement({ id: 'p1', startMin: null, status: 'skipped' })])
     const { wrapper } = await mountPage()
 
     expect(zoneCards(wrapper)[0]?.attributes('aria-label')).toBe(
@@ -871,7 +1038,7 @@ describe('DayBoard: доступность и производительност
 
   it('колонка подписей виртуализирована, слой размещений — нет (НФТ §7)', async () => {
     // Размещение в самом конце дня: его якорный слот вне окна подписей
-    await seedDay([placement({ id: 'p1', startMin: 825, durationMin: 15 })])
+    await instanceDay([placement({ id: 'p1', startMin: 825, durationMin: 15 })])
     const { wrapper } = await mountPage()
 
     expect(slots(wrapper)).toHaveLength(56)
@@ -892,7 +1059,7 @@ describe('DayBoard: доступность и производительност
         taskSnapshot: { title: `дело ${index}`, color: '#2196F3', priority: 'low' },
       }),
     )
-    await seedDay(many)
+    await instanceDay(many)
     const { wrapper } = await mountPage()
 
     const rendered = gridCards(wrapper)

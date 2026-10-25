@@ -45,6 +45,7 @@ describe('aggregateStats: пустые данные и нулевые знаме
       placed: 0,
       done: 0,
       skipped: 0,
+      unplanned: 0,
       rate: null,
       periodStart: null,
       periodEnd: TODAY,
@@ -100,6 +101,23 @@ describe('aggregateStats: пустые данные и нулевые знаме
 
     expect(perTask.get('a')).toMatchObject({ placed: 3, done: 1, skipped: 1, pending: 1, rate: 0.5 })
     expect(overall).toMatchObject({ placed: 3, done: 1, skipped: 1, rate: 0.5 })
+  })
+
+  it('считает внеплановые размещения по делу и в итоге (FR-S-5)', () => {
+    const { perTask, overall } = run([
+      instance({
+        id: 'i1',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', unplanned: true }),
+          placement({ id: 'p2', taskId: 'a', unplanned: false }),
+          placement({ id: 'p3', taskId: 'b', unplanned: true, removed: true, status: 'skipped' }),
+        ],
+      }),
+    ])
+
+    expect(overall.unplanned).toBe(2)
+    expect(perTask.get('a')?.unplanned).toBe(1)
+    expect(perTask.get('b')?.unplanned).toBe(1)
   })
 })
 

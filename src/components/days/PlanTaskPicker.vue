@@ -1,24 +1,18 @@
 <template>
-  <!--
-    Выбор дел для шаблона дня (FR-D-7, вайрфреймы §4.3). Источник — активные
-    дела из useTasksStore; уже выбранные архивные или отсутствующие показываются
-    отдельно, чтобы их можно было снять, но нельзя было выбрать снова.
-  -->
+  <!-- Массовый выбор дел для плана: выбранные добавляются в «Нераспределённые». -->
   <q-dialog
     :model-value="modelValue"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <q-card
-      class="template-task-picker"
+      class="plan-task-picker"
       style="width: 520px; max-width: 100%"
     >
       <q-card-section class="text-subtitle1">
         {{ t('days.tasksPickerTitle') }}
       </q-card-section>
-
       <q-separator />
-
-      <q-card-section class="template-task-picker__body">
+      <q-card-section class="plan-task-picker__body">
         <q-input
           v-model="query"
           dense
@@ -48,7 +42,7 @@
           <q-item
             v-for="row in rows"
             :key="row.id"
-            class="template-task-picker__row"
+            class="plan-task-picker__row"
             :data-task="row.id"
           >
             <q-item-section avatar>
@@ -64,7 +58,7 @@
               avatar
             >
               <span
-                class="template-task-picker__swatch"
+                class="plan-task-picker__swatch"
                 :style="{ backgroundColor: row.task.color }"
                 aria-hidden="true"
               />
@@ -90,9 +84,7 @@
           </q-item>
         </q-list>
       </q-card-section>
-
       <q-separator />
-
       <q-card-actions align="right">
         <q-btn
           flat
@@ -128,15 +120,13 @@ interface PickerRow {
 }
 
 const props = defineProps<{
-  /** Открыт ли диалог. */
   modelValue: boolean
-  /** Текущий список дел шаблона. */
+  /** Уже добавленные в план дела: показываются выбранными. */
   selectedIds: string[]
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  /** Готовый выбор: порядок существующих ссылок сохранён, новые — в конце. */
   apply: [ids: string[]]
 }>()
 
@@ -144,17 +134,11 @@ const { t } = useI18n()
 const tasks = useTasksStore()
 const ui = useUiStore()
 
-/** Черновик выбора: изменения применяются только по кнопке «Готово». */
 const draft = ref<string[]>([])
 const query = ref('')
 
-/**
- * Уже выбранные недоступные дела (архив или удалённое) идут первыми: их видно
- * даже при активном поиске, иначе пользователь не смог бы снять такую ссылку.
- */
 const rows = computed<PickerRow[]>(() => {
   const q = query.value.trim().toLowerCase()
-
   const unavailable: PickerRow[] = props.selectedIds
     .map(id => ({ id, task: tasks.taskById(id) }))
     .filter(row => row.task === undefined || row.task.archived)
@@ -173,8 +157,6 @@ watch(
     if (!open) return
     draft.value = [...props.selectedIds]
     query.value = ''
-    // Список дел мог ещё не загрузиться при прямом заходе на /days: без него
-    // предупреждать нечем, а шаблон открылся бы с пустым выбором.
     if (!tasks.initialized) {
       void tasks.loadAll().then(result => {
         if (!result.ok) ui.notify(t('tasks.loadError'), 'error')
@@ -200,12 +182,12 @@ function apply(): void {
 </script>
 
 <style scoped>
-.template-task-picker__body {
+.plan-task-picker__body {
   max-height: 60vh;
   overflow-y: auto;
 }
 
-.template-task-picker__swatch {
+.plan-task-picker__swatch {
   display: inline-block;
   width: 18px;
   height: 18px;

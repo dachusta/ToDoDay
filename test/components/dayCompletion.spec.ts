@@ -1,6 +1,6 @@
 import { DOMWrapper, mount, type VueWrapper } from '@vue/test-utils'
 import { QLayout, QPageContainer, Quasar } from 'quasar'
-import { createPinia, setActivePinia } from 'pinia'
+import { getActivePinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,29 +8,31 @@ import DayBoardPage from 'src/pages/DayBoardPage.vue'
 import { i18n } from 'src/boot/i18n'
 import { db } from 'src/services/db'
 import { addDaysISO, todayISO } from 'src/services/dates'
-import { SLOT_HEIGHT } from 'src/models/cycle'
 import { useCycleStore } from 'src/stores/cycle'
-import { useDaysStore } from 'src/stores/days'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useStatsStore } from 'src/stores/stats'
 import { useTasksStore } from 'src/stores/tasks'
 import { useUiStore } from 'src/stores/ui'
-import type { DayInstance, Placement } from 'src/models/dayInstance'
-import type { DayTemplate } from 'src/models/day'
+import type { DayPlan, DayPlanInput, PlannedPlacement } from 'src/models/day'
+import type { DayInstance } from 'src/models/dayInstance'
 import type { Task } from 'src/models/task'
 import { quasarComponents, quasarDirectives, quasarPluginOptions } from '../vitest/quasar'
 import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helpers'
 
 /**
- * Завершение дня (этап 6, FR-E-1…FR-E-3, вайрфреймы §6) и действия размещения
- * (FR-B-7: мышь, клавиатура, долгий тап и свайп) на экране «Сегодня».
+ * Завершение дня на плановой основе (FR-E-1…FR-E-3, вайрфреймы §6) и связанные
+ * с ним состояния доски: «Убрано из плана» (FR-B-8), внеплановые дела (FR-B-4),
+ * сдвиг на план следующей даты и на пустой день (FR-C-3), отмена завершения.
  *
- * Страница монтируется в реальном каркасе QLayout + QPageContainer: вне layout
- * QPage не рендерится. Диалоги Quasar уезжают в портал, поэтому их разметка
- * ищется в `document.body` — как и в `dayBoard.spec.ts`.
+ * День открывается так же, как в приложении: план на дату пишется стором,
+ * затем `cycle.initialize()` материализует размещения. Страница монтируется в
+ * реальном каркасе QLayout + QPageContainer (вне layout QPage не рендерится), а
+ * диалоги Quasar уезжают в портал — их разметка ищется в `document.body`.
  */
 
 const initialWidth = window.innerWidth
 
+/** Время суток для подписи «сейчас»: дата берётся текущая, часы фиксированы. */
 const clock = vi.hoisted(() => ({ hours: 10, minutes: 5 }))
 
 vi.mock('@vueuse/core', async importOriginal => {
@@ -79,6 +81,7 @@ function makeRouter(): Router {
       { path: '/', name: 'today', component: { template: '<div />' } },
       { path: '/tasks', name: 'tasks', component: { template: '<div />' } },
       { path: '/days', name: 'days', component: { template: '<div />' } },
+      { path: '/days/:id', name: 'day-plan', component: { template: '<div />' } },
     ],
   })
 }
@@ -88,11 +91,25 @@ async function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> 
   while (!check() && Date.now() - start < timeoutMs) await flush(20)
 }
 
+/**
+ * Ожидание асинхронного условия (запись в Dexie + реакция стора).
+ * Фиксированная пауза ненадёжна: под полной прогонкой с покрытием транзакция
+ * завершения и материализация следующего дня не укладываются в один `flush()`.
+ */
+async function waitForState(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 3000,
+): Promise<void> {
+  const start = Date.now()
+  while (!(await check()) && Date.now() - start < timeoutMs) await flush(20)
+}
+
 async function mountPage(width = 1280): Promise<{ wrapper: VueWrapper; router: Router }> {
   setViewportWidth(width)
   await flush()
 
-  const pinia = createPinia()
+  const pinia = getActivePinia()
+  if (!pinia) throw new Error('Pinia не создан в prepare()')
   setActivePinia(pinia)
   const router = makeRouter()
   await router.push('/')
@@ -109,88 +126,96 @@ async function mountPage(width = 1280): Promise<{ wrapper: VueWrapper; router: R
   mounted.push(wrapper)
 
   await waitUntil(() => !wrapper.find('[data-test="skeleton"]').exists())
+  await flush()
   return { wrapper, router }
 }
 
 // --- Данные ---------------------------------------------------------------
 
-const template = (over: Partial<DayTemplate> = {}): DayTemplate => ({
-  id: 't1',
-  name: 'Рабочий день',
-  order: 0,
-  timeStart: '08:00',
-  timeEnd: '22:00',
-  gridStepMin: 15,
-  accentColor: '#2196F3',
-  repeatRule: { type: 'none' },
-  plannedTaskIds: [],
-  createdAt: 1,
-  ...over,
-})
+async function newTask(title: string, durationMin = 30): Promise<Task> {
+  const result = await useTasksStore().createTask({
+    title,
+    priority: 'medium',
+    color: '#2196F3',
+    durationMin,
+  })
+  if (!result.ok) throw new Error(`дело «${title}» не создано: ${result.error.message}`)
+  return result.data
+}
 
-const task = (over: Partial<Task> & { id: string }): Task => ({
-  title: `дело ${over.id}`,
-  priority: 'medium',
-  color: '#2196F3',
-  durationMin: 30,
-  archived: false,
-  createdAt: 1,
-  updatedAt: 1,
-  ...over,
-})
+function planned(
+  id: string,
+  taskId: string,
+  startMin: number | null,
+  durationMin = 30,
+): PlannedPlacement {
+  return { id, taskId, startMin, durationMin }
+}
 
-const placement = (over: Partial<Placement> & { id: string }): Placement => ({
-  taskId: 'a',
-  startMin: 75,
-  durationMin: 15,
-  status: 'pending',
-  placedAt: 1,
-  taskSnapshot: { title: `дело ${over.id}`, color: '#2196F3', priority: 'medium' },
-  ...over,
-})
-
-/** Материализованный день: по умолчанию сегодняшний и активный. */
-async function seedDay(placements: Placement[] = [], over: Partial<DayInstance> = {}) {
-  const instance: DayInstance = {
-    id: 'inst-1',
-    templateId: null,
+/** План на сегодня (или на дату из over) через стор, как это делает форма. */
+async function createPlan(over: Partial<DayPlanInput> = {}): Promise<DayPlan> {
+  const plans = useDayPlansStore()
+  const result = await plans.createPlan({
+    name: 'Рабочий день',
+    accentColor: '#2196F3',
     date: todayISO(),
-    status: 'active',
-    placements,
+    repeatRule: { type: 'none' },
     timeStart: '08:00',
     timeEnd: '22:00',
-    createdAt: 1,
     ...over,
+  })
+  if (!result.ok) throw new Error(`план не создан: ${result.error.message}`)
+  return result.data
+}
+
+async function initializeCycle() {
+  const cycle = useCycleStore()
+  const result = await cycle.initialize()
+  if (!result.ok) throw new Error(`цикл не инициализирован: ${result.error.message}`)
+  return cycle
+}
+
+/**
+ * Просроченный активный день: приложение было закрыто до полуночи. План и факт
+ * кладутся в БД как есть, инициализация уже сама открывает авто-диалог (FR-C-4).
+ */
+async function seedOverdueDay(taskTitle = 'Зарядка') {
+  const task = await newTask(taskTitle)
+  const yesterday = addDaysISO(todayISO(), -1)
+  const plan = await createPlan({
+    date: yesterday,
+    plannedPlacements: [planned('pp1', task.id, 60)],
+  })
+  const now = Date.now()
+  const instance: DayInstance = {
+    id: 'inst-overdue',
+    planId: plan.id,
+    templateId: null,
+    date: yesterday,
+    status: 'active',
+    placements: [
+      {
+        id: 'p-overdue',
+        taskId: task.id,
+        startMin: 60,
+        durationMin: 30,
+        status: 'pending',
+        placedAt: now,
+        taskSnapshot: { title: task.title, color: task.color, priority: task.priority },
+        plannedId: 'pp1',
+        unplanned: false,
+        removed: false,
+      },
+    ],
+    timeStart: '08:00',
+    timeEnd: '22:00',
+    createdAt: now,
   }
   await db.dayInstances.add(instance)
   await db.cycleState.update('current', { activeInstanceId: instance.id })
-  return instance
+  const cycle = await initializeCycle()
+  return { cycle, instance, plan, task }
 }
-
-const cycleState = () => db.cycleState.get('current')
-
-/**
- * Ожидание асинхронного условия (запись в Dexie + реакция стора).
- * Фиксированная пауза здесь ненадёжна: под полной прогонкой с покрытием
- * транзакция отката завершения не укладывается в один `flush()`.
- */
-async function waitForState(
-  check: () => boolean | Promise<boolean>,
-  timeoutMs = 3000,
-): Promise<void> {
-  const start = Date.now()
-  while (!(await check()) && Date.now() - start < timeoutMs) await flush(20)
-}
-
-const activeInstance = async (): Promise<DayInstance | undefined> => {
-  const state = await cycleState()
-  return state?.activeInstanceId ? db.dayInstances.get(state.activeInstanceId) : undefined
-}
-
-const dbInstance = (id: string) => db.dayInstances.get(id)
-
-const dbPlacement = async (placementId: string, instanceId = 'inst-1') =>
-  (await db.dayInstances.get(instanceId))?.placements.find(item => item.id === placementId)
 
 // --- Селекторы ------------------------------------------------------------
 
@@ -221,14 +246,6 @@ async function clickBody(selector: string): Promise<void> {
   await flush()
 }
 
-function pointerEvent(type: string, clientY: number, clientX = 0): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true })
-  Object.defineProperty(event, 'clientY', { value: clientY })
-  Object.defineProperty(event, 'clientX', { value: clientX })
-  Object.defineProperty(event, 'button', { value: 0 })
-  return event
-}
-
 async function teardown(): Promise<void> {
   for (const wrapper of mounted.splice(0)) {
     try {
@@ -238,7 +255,7 @@ async function teardown(): Promise<void> {
     }
   }
   useTasksStore().unsubscribe()
-  useDaysStore().unsubscribe()
+  useDayPlansStore().unsubscribe()
   useCycleStore().dispose()
   document.body.innerHTML = ''
   resetViewportWidth()
@@ -252,26 +269,38 @@ function prepare(): Promise<void> {
   return resetDatabase()
 }
 
-describe('Завершение дня: шапка доски (FR-C-3, FR-E-1, FR-E-3)', () => {
+describe('Завершение дня: шапка доски и сдвиг на следующий план (FR-C-3, FR-E-1)', () => {
   beforeEach(prepare)
   afterEach(teardown)
 
-  it('у активного дня есть «Следующий день →» и «Завершить день», отмены нет', async () => {
-    await seedDay([placement({ id: 'p1' })])
+  it('план на сегодня: имя в шапке, «Открыть план», сдвиг и завершение, отмены нет', async () => {
+    const task = await newTask('Зарядка')
+    await createPlan({
+      name: 'Рабочий день',
+      plannedPlacements: [planned('pp1', task.id, 60)],
+    })
+    const cycle = await initializeCycle()
     const { wrapper } = await mountPage()
 
+    expect(cycle.currentPlan?.name).toBe('Рабочий день')
+    expect(wrapper.find('[data-test="plan-name"]').text()).toBe('Рабочий день')
+    expect(wrapper.find('[data-test="plan-none"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="board-template"]').text()).toContain('08:00–22:00')
+    expect(wrapper.find('[data-test="open-plan"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
   })
 
-  it('сдвиг в те же сутки недоступен, а отказ стора показывается предупреждением (§9.3)', async () => {
-    await seedDay([placement({ id: 'p1' })])
+  it('сдвиг в те же сутки: отказ стора показывается предупреждением (§9.3)', async () => {
+    const task = await newTask('Зарядка')
+    await createPlan({ plannedPlacements: [planned('pp1', task.id, 60)] })
+    const cycle = await initializeCycle()
     const { wrapper } = await mountPage()
-    const cycle = useCycleStore()
     const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
+
     // Второй сдвиг за сутки отклоняется стором; кнопка в этот момент ещё видна
-    // (гонка с другой вкладкой) — UI обязан показать текст по коду
+    // (гонка с другой вкладкой) — UI обязан показать текст по коду ошибки.
     vi.spyOn(cycle, 'shiftToNextDay').mockResolvedValue({
       ok: false,
       error: { code: 'SHIFT_ALREADY_DONE_TODAY', message: '' },
@@ -281,430 +310,486 @@ describe('Завершение дня: шапка доски (FR-C-3, FR-E-1, FR
     await flush()
 
     expect(notify).toHaveBeenCalledTimes(1)
-    expect(notify.mock.calls[0]?.[0]).toBe('Сдвиг в эти сутки уже выполнен')
+    expect(notify.mock.calls[0]?.[0]).toBe(i18n.global.t('day.shiftBlockedToday'))
     expect(notify.mock.calls[0]?.[1]).toBe('warning')
   })
 
-  it('«Следующий день →» открывает диалог с подсказкой о новом дне (FR-C-3, вайрфреймы §6)', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    const { wrapper } = await mountPage()
+  it('«Следующий день» открывает диалог, а подтверждение — план завтрашней даты', async () => {
+    const todayTask = await newTask('Зарядка')
+    const tomorrowTask = await newTask('Чтение')
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await createPlan({
+      name: 'Сегодня',
+      plannedPlacements: [planned('pp1', todayTask.id, 60)],
+    })
+    const tomorrowPlan = await createPlan({
+      name: 'Завтра',
+      date: tomorrow,
+      plannedPlacements: [planned('pp2', tomorrowTask.id, 120)],
+    })
+    const cycle = await initializeCycle()
+    const todayInstanceId = cycle.currentInstance?.id ?? ''
 
+    const { wrapper } = await mountPage()
     await wrapper.find('[data-test="shift-next"]').trigger('click')
     await flush()
 
-    expect(dialogMounted()).toBe(true)
-    expect(bodyText('[data-test="completion-shift"]')).toBe('После подтверждения начнётся новый день')
-    // Опция разового пропуска — только у авто-триггера (FR-C-4)
-    expect(bodyEl('[data-test="completion-skip-once"]')).toBeNull()
-  })
-
-  it('сдвиг подтверждается: завтрашний экземпляр, manualShiftDate, старый completed (FR-C-3)', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    await db.dayTemplates.add(template())
-    const { wrapper } = await mountPage()
-
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
-    await flush()
-    await clickBody('[data-test="completion-confirm"]')
-
-    const state = await cycleState()
-    const next = state?.activeInstanceId ? await dbInstance(state.activeInstanceId) : undefined
-    expect(next?.date).toBe(addDaysISO(todayISO(), 1))
-    expect(next?.templateId).toBe('t1')
-    expect(state?.manualShiftDate).toBe(todayISO())
-    expect((await dbInstance('inst-1'))?.status).toBe('completed')
-    // Отмена доступна в той же сессии (FR-E-3), сдвиг в эти сутки — больше нет
-    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(false)
-  })
-
-  it('второй сдвиг в те же сутки недоступен сразу после подтверждения (правило 12)', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    await db.dayTemplates.add(template())
-    const { wrapper } = await mountPage()
-
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
-    await flush()
-    await clickBody('[data-test="completion-confirm"]')
-
-    expect(useCycleStore().canShiftNext).toBe(false)
-  })
-
-  it('авто-триггер при смене суток: диалог, разовый пропуск и тишина до перезагрузки (FR-C-4)', async () => {
-    await seedDay([placement({ id: 'p1', status: 'done' })], { date: addDaysISO(todayISO(), -1) })
-    const { wrapper } = await mountPage()
-
-    // День просрочен, авто-сдвиг выключен, «спрашивать» включено — диалог открыт
+    // Диалог сдвига: подсказка о новом дне, разового пропуска нет (FR-C-4)
     expect(completionOpen()).toBe(true)
-    expect(bodyEl('[data-test="completion-skip-once"]')).not.toBeNull()
-    expect(bodyEl('[data-test="completion-shift"]')).toBeNull()
+    expect(dialogMounted()).toBe(true)
+    expect(bodyText('[data-test="completion-shift"]')).toBe(
+      i18n.global.t('completion.shiftHint'),
+    )
+    expect(bodyEl('[data-test="completion-skip-once"]')).toBeNull()
+    expect(bodyText('[data-test="completion-plan"]')).toBe('Сегодня')
 
-    await clickBody('[data-test="completion-skip-once"]')
-
-    expect(completionOpen()).toBe(false)
-    expect(useCycleStore().skippedAutoPromptDate).toBe(todayISO())
-    // Повторная проверка смены даты диалог не возвращает (до перезагрузки)
-    useCycleStore().checkDayChange()
+    await clickBody('[data-test="completion-confirm"]')
+    await waitUntil(() => cycle.currentInstance?.date === tomorrow)
     await flush()
-    expect(completionOpen()).toBe(false)
+
+    const state = await db.cycleState.get('current')
+    const next = await db.dayInstances.get(state?.activeInstanceId ?? '')
+    const finished = await db.dayInstances.get(todayInstanceId)
+
+    expect(state?.manualShiftDate).toBe(todayISO())
+    expect(state?.activeInstanceId).not.toBe(todayInstanceId)
+    expect(next).toMatchObject({ date: tomorrow, planId: tomorrowPlan.id, status: 'active' })
+    expect(next?.placements.map(placement => placement.plannedId)).toEqual(['pp2'])
+    expect(finished?.status).toBe('completed')
+    // Сдвиг в эти сутки больше недоступен, отмена завершения — доступна (FR-E-3)
+    expect(cycle.canShiftNext).toBe(false)
+    expect(cycle.currentPlan?.name).toBe('Завтра')
+    expect(wrapper.find('[data-test="plan-name"]').text()).toBe('Завтра')
+    expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
   })
 
-  it('подтверждение просроченного дня открывает сегодняшний, отмена возвращает вчерашний (сценарий 1)', async () => {
-    await seedDay([placement({ id: 'p1', status: 'done' })], { date: addDaysISO(todayISO(), -1) })
+  it('сдвиг на день без плана открывает пустой (виртуальный) день', async () => {
+    const tomorrow = addDaysISO(todayISO(), 1)
+    const task = await newTask('Зарядка')
+    await createPlan({
+      name: 'Сегодня',
+      plannedPlacements: [planned('pp1', task.id, 60)],
+    })
+    const cycle = await initializeCycle()
+    const todayInstanceId = cycle.currentInstance?.id ?? ''
+
     const { wrapper } = await mountPage()
-
+    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await flush()
     await clickBody('[data-test="completion-confirm"]')
-
-    const state = await cycleState()
-    expect((await dbInstance('inst-1'))?.status).toBe('completed')
-    // Новый день на сегодня: шаблона нет — экземпляр виртуален (activeInstanceId = null)
-    expect(state?.activeInstanceId).toBeNull()
-    expect(useCycleStore().currentInstance?.date).toBe(todayISO())
-
-    await wrapper.find('[data-test="cancel-completion"]').trigger('click')
+    await waitUntil(() => cycle.currentInstance?.date === tomorrow)
     await flush()
 
-    expect((await dbInstance('inst-1'))?.status).toBe('active')
-    expect((await cycleState())?.activeInstanceId).toBe('inst-1')
-    expect(useCycleStore().currentInstance?.date).toBe(addDaysISO(todayISO(), -1))
-    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
+    expect(cycle.isPlanless).toBe(true)
+    expect(cycle.isVirtualInstance).toBe(true)
+    expect(cycle.currentPlan).toBeNull()
+    expect((await db.cycleState.get('current'))?.activeInstanceId).toBeNull()
+    expect((await db.dayInstances.get(todayInstanceId))?.status).toBe('completed')
+    expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="plan-none"]').text()).toBe(i18n.global.t('day.noPlan'))
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(false)
   })
 })
 
-describe('Диалог завершения дня (FR-E-1, FR-E-2, вайрфреймы §6)', () => {
+describe('Диалог завершения дня: план, внеплановые и убранные (FR-E-1, FR-E-2)', () => {
   beforeEach(prepare)
   afterEach(teardown)
 
-  it('показывает все размещения с чекбоксами и дефолтными отметками', async () => {
-    await seedDay([
-      placement({ id: 'p1', status: 'done', startMin: 75, durationMin: 15 }),
-      placement({ id: 'p2', status: 'pending', startMin: 90, durationMin: 30 }),
-      placement({ id: 'p3', status: 'skipped', startMin: 120, durationMin: 15 }),
-      placement({ id: 'p4', status: 'pending', startMin: null, durationMin: 60 }),
-    ])
+  it('показывает имя плана, внеплановую метку и подсказку об убранных, скрывая их из списка', async () => {
+    const first = await newTask('Зарядка')
+    const second = await newTask('Чтение')
+    const extra = await newTask('Прогулка')
+    await createPlan({
+      name: 'Рабочий день',
+      plannedPlacements: [planned('pp1', first.id, 60), planned('pp2', second.id, 120)],
+    })
+    const cycle = await initializeCycle()
+    const firstPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp1')
+    const secondPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp2')
+    if (!firstPlacement || !secondPlacement) throw new Error('плановые размещения не созданы')
+
+    await cycle.setPlacementStatus(firstPlacement.id, 'done')
+    const removed = await cycle.removePlacement(secondPlacement.id)
+    expect(removed.ok).toBe(true)
+    const unplanned = await cycle.placeTask(extra.id, 180)
+    if (!unplanned.ok) throw new Error('внеплановое дело не размещено')
+
     const { wrapper } = await mountPage()
+    // На доске внеплановое дело помечено бейджем, убранное — в отдельной зоне
+    expect(wrapper.find('[data-test="placement-unplanned"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="removed-zone"]').exists()).toBe(true)
 
     await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
 
-    // Дата и шаблон в шапке диалога (вайрфреймы §6)
-    expect(bodyText('[data-test="completion-date"]')).toMatch(/^[А-ЯЁ][а-яё]+ · \d{1,2} [а-яё]+$/)
-    expect(bodyText('[data-test="completion-template"]')).toBe('Без шаблона')
-    // Все размещения, включая нераспределённое — «без времени» (FR-E-1, FR-B-5)
+    expect(bodyText('[data-test="completion-date"]')).toMatch(
+      /^[А-ЯЁ][а-яё]+ · \d{1,2} [а-яё]+$/,
+    )
+    expect(bodyText('[data-test="completion-plan"]')).toBe('Рабочий день')
+    // Убранное из плана в диалог не попадает, но о нём предупреждают (FR-E-2)
+    expect(bodyEl('[data-test="completion-removed-hint"]')).not.toBeNull()
+    expect(bodyText('[data-test="completion-removed-hint"]')).toBe(
+      i18n.global.t('completion.removedHint', { n: 1 }),
+    )
+    const rows =
+      bodyEl('[data-test="completion-list"]')?.querySelectorAll(
+        '[data-test^="completion-item-"]',
+      ) ?? []
+    expect(rows).toHaveLength(2)
+    expect(bodyText(`[data-test="completion-item-${secondPlacement.id}"]`)).toBe('')
+    expect(bodyText(`[data-test="completion-item-${unplanned.data.id}"]`)).toContain(
+      i18n.global.t('placement.unplannedBadge'),
+    )
     expect(
-      bodyEl('[data-test="completion-list"]')?.querySelectorAll('[data-test^="completion-item-"]'),
-    ).toHaveLength(4)
-    expect(bodyText('[data-test="completion-progress"]')).toBe('Выполнено: 1 из 4')
-    expect(bodyText('[data-test="completion-item-p4"]')).toContain('без времени')
-    expect(bodyText('[data-test="completion-item-p4"]')).toContain('1 ч')
+      document.body.querySelectorAll('[data-test="completion-unplanned"]'),
+    ).toHaveLength(1)
+    expect(bodyText('[data-test="completion-progress"]')).toBe(
+      i18n.global.t('completion.doneCount', { done: 1, total: 2 }),
+    )
 
     const checked = (id: string) =>
       bodyEl(`[data-test="completion-check-${id}"]`)?.getAttribute('aria-checked')
-    expect(checked('p1')).toBe('true') // done — отмечено по умолчанию
-    expect(checked('p2')).toBe('false')
-    expect(checked('p3')).toBe('false')
+    expect(checked(firstPlacement.id)).toBe('true')
+    expect(checked(unplanned.data.id)).toBe('false')
+  })
+
+  it('подтверждение фиксирует отметки: убранное → skipped, внеплановое → done', async () => {
+    const first = await newTask('Зарядка')
+    const second = await newTask('Чтение')
+    const extra = await newTask('Прогулка')
+    await createPlan({
+      plannedPlacements: [planned('pp1', first.id, 60), planned('pp2', second.id, 120)],
+    })
+    const cycle = await initializeCycle()
+    const instanceId = cycle.currentInstance?.id ?? ''
+    const firstPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp1')
+    const secondPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp2')
+    if (!firstPlacement || !secondPlacement) throw new Error('плановые размещения не созданы')
+
+    await cycle.setPlacementStatus(firstPlacement.id, 'done')
+    await cycle.removePlacement(secondPlacement.id)
+    const unplanned = await cycle.placeTask(extra.id, 180)
+    if (!unplanned.ok) throw new Error('внеплановое дело не размещено')
+    const recompute = vi.spyOn(useStatsStore(), 'recompute')
+
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await flush()
+    // Отмечаем внеплановое дело — оно станет done вместе с уже отмеченным плановым
+    await clickBody(`[data-test="completion-check-${unplanned.data.id}"]`)
+    await clickBody('[data-test="completion-confirm"]')
+    await waitForState(() => cycle.currentInstance?.status === 'completed')
+    await flush()
+
+    const stored = await db.dayInstances.get(instanceId)
+    const statuses = new Map(stored?.placements.map(item => [item.id, item.status]))
+    expect(stored?.status).toBe('completed')
+    expect(typeof stored?.completedAt).toBe('number')
+    expect(statuses.get(firstPlacement.id)).toBe('done')
+    expect(statuses.get(unplanned.data.id)).toBe('done')
+    // Убранное из плана завершается как пропущенное, даже без отметки (FR-E-2)
+    expect(statuses.get(secondPlacement.id)).toBe('skipped')
+    expect(cycle.dayProgress).toMatchObject({ done: 2, skipped: 0, pending: 0 })
+    expect(completionOpen()).toBe(false)
+    // Статистика пересчитана без ручного обновления (FR-S-1)
+    expect(recompute).toHaveBeenCalled()
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
   })
 
   it('«Отметить всё» и «Снять всё» переключают весь список сразу', async () => {
-    await seedDay([
-      placement({ id: 'p1', status: 'done' }),
-      placement({ id: 'p2', status: 'pending' }),
-    ])
+    const first = await newTask('Зарядка')
+    const second = await newTask('Чтение')
+    await createPlan({
+      plannedPlacements: [planned('pp1', first.id, 60), planned('pp2', second.id, 120)],
+    })
+    await initializeCycle()
     const { wrapper } = await mountPage()
 
     await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
 
     await clickBody('[data-test="completion-unmark-all"]')
-    expect(bodyText('[data-test="completion-progress"]')).toBe('Выполнено: 0 из 2')
-
+    expect(bodyText('[data-test="completion-progress"]')).toBe(
+      i18n.global.t('completion.doneCount', { done: 0, total: 2 }),
+    )
     await clickBody('[data-test="completion-mark-all"]')
-    expect(bodyText('[data-test="completion-progress"]')).toBe('Выполнено: 2 из 2')
+    expect(bodyText('[data-test="completion-progress"]')).toBe(
+      i18n.global.t('completion.doneCount', { done: 2, total: 2 }),
+    )
   })
 
-  it('снятая галочка превращает ранее выполненное в пропущенное, остальное — как отмечено (FR-E-2)', async () => {
-    await seedDay([
-      placement({ id: 'p1', status: 'done' }),
-      placement({ id: 'p2', status: 'pending' }),
-    ])
-    const { wrapper } = await mountPage()
-    const recompute = vi.spyOn(useStatsStore(), 'recompute')
-
-    await wrapper.find('[data-test="complete-day"]').trigger('click')
-    await flush()
-
-    // Снимаем галочку с p1 и ставим её p2 — как это делает пользователь кликом
-    await clickBody('[data-test="completion-check-p1"]')
-    await clickBody('[data-test="completion-check-p2"]')
-    expect(bodyText('[data-test="completion-progress"]')).toBe('Выполнено: 1 из 2')
-
-    await clickBody('[data-test="completion-confirm"]')
-
-    const instance = await dbInstance('inst-1')
-    expect(instance?.status).toBe('completed')
-    expect(typeof instance?.completedAt).toBe('number')
-    expect(instance?.placements.map(p => [p.id, p.status])).toEqual([
-      ['p1', 'skipped'],
-      ['p2', 'done'],
-    ])
-    // dayProgress стора видит новые статусы, диалог закрыт
-    expect(useCycleStore().dayProgress).toMatchObject({ done: 1, skipped: 1, pending: 0 })
-    expect(completionOpen()).toBe(false)
-    // Статистика пересчитана без ручного обновления (FR-S-1)
-    expect(recompute).toHaveBeenCalled()
-  })
-
-  it('после подтверждения показывает тост «День завершён» (5 с) с ярлыком «Отменить» (FR-E-3)', async () => {
-    await seedDay([placement({ id: 'p1', status: 'pending' })])
-    const { wrapper } = await mountPage()
-    const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
-
-    await wrapper.find('[data-test="complete-day"]').trigger('click')
-    await flush()
-    await clickBody('[data-test="completion-confirm"]')
-
-    expect(notify).toHaveBeenCalledTimes(1)
-    const [message, type, action, timeout] = notify.mock.calls[0] ?? []
-    expect(message).toBe('День завершён')
-    expect(type).toBe('success')
-    expect(timeout).toBe(5000)
-    expect(action?.label).toBe('Отменить')
-
-    // Тост — ярлык, а не единственный вход: кнопка в шапке остаётся (FR-E-3)
-    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
-
-    action?.handler()
-    await flush()
-    expect((await dbInstance('inst-1'))?.status).toBe('active')
-    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
-  })
-
-  it('пустой (виртуальный) день: отмечать нечего, подтверждение пишет экземпляр в историю (FR-D-6)', async () => {
-    const { wrapper } = await mountPage()
-
-    // День виртуален: в Dexie его нет, авто-диалога для него тоже нет
-    expect((await cycleState())?.activeInstanceId).toBeNull()
-    expect(dialogMounted()).toBe(false)
-
-    await wrapper.find('[data-test="complete-day"]').trigger('click')
-    await flush()
-
-    expect(bodyText('[data-test="completion-empty"]')).toBe('В этом дне нет размещённых дел')
-    expect(bodyEl('[data-test="completion-list"]')).toBeNull()
-
-    await clickBody('[data-test="completion-confirm"]')
-
-    const instance = await activeInstance()
-    expect(instance).toMatchObject({ status: 'completed', placements: [], date: todayISO() })
-  })
-
-  it('«Вернуться к дню» закрывает диалог без фиксации (вайрфреймы §6)', async () => {
-    await seedDay([placement({ id: 'p1', status: 'done' })])
+  it('«Вернуться к дню» и крестик закрывают диалог без фиксации дня', async () => {
+    const task = await newTask('Зарядка')
+    await createPlan({ plannedPlacements: [planned('pp1', task.id, 60)] })
+    const cycle = await initializeCycle()
+    const instanceId = cycle.currentInstance?.id ?? ''
     const { wrapper } = await mountPage()
 
     await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
     await clickBody('[data-test="completion-back"]')
-
     expect(completionOpen()).toBe(false)
-    expect((await dbInstance('inst-1'))?.status).toBe('active')
-    expect(useCycleStore().completing).toBe(false)
-    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
-  })
-
-  it('крестик закрывает диалог, не фиксируя день', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    const { wrapper } = await mountPage()
+    expect((await db.dayInstances.get(instanceId))?.status).toBe('active')
 
     await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
     await clickBody('[data-test="completion-close"]')
-
     expect(completionOpen()).toBe(false)
-    expect((await dbInstance('inst-1'))?.status).toBe('active')
+    expect((await db.dayInstances.get(instanceId))?.status).toBe('active')
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
   })
 })
 
-describe('Отмена завершения (FR-E-3)', () => {
+describe('Убранные из плана дела и завершение (FR-B-8, FR-E-2)', () => {
   beforeEach(prepare)
   afterEach(teardown)
 
-  it('возвращает день, снимок отметок и удаляет экземпляр, созданный завершением', async () => {
-    await seedDay([
-      placement({ id: 'p1', status: 'done' }),
-      placement({ id: 'p2', status: 'pending' }),
-    ])
-    await db.dayTemplates.add(template())
-    await db.tasks.add(task({ id: 'a', title: 'Зарядка' }))
+  it('«Убрать из дня» уводит плановое дело в «Убрано из плана», а возврат ставит обратно', async () => {
+    const task = await newTask('Зарядка')
+    const plan = await createPlan({
+      name: 'Рабочий день',
+      plannedPlacements: [planned('pp1', task.id, 60)],
+    })
+    const cycle = await initializeCycle()
+    const placement = cycle.currentInstance?.placements[0]
+    if (!placement) throw new Error('плановое размещение не создано')
     const { wrapper } = await mountPage()
-    const cycle = useCycleStore()
 
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await card(wrapper, placement.id).trigger('contextmenu')
     await flush()
-    await clickBody('[data-test="completion-confirm"]')
+    expect(menuItem('remove')?.textContent).toContain(i18n.global.t('placement.remove'))
+    await clickBody('[data-action="remove"]')
+    await waitUntil(() => cycle.removedCount === 1)
+    await flush()
 
-    const createdId = (await cycleState())?.activeInstanceId ?? ''
-    expect(createdId).not.toBe('inst-1')
-    // Пользователь успел положить дело в новый день — отмена забирает и его (FR-E-3)
-    await cycle.placeTask('a', 0)
-    expect((await dbInstance(createdId))?.placements).toHaveLength(1)
+    expect(wrapper.find('[data-test="removed-zone"]').exists()).toBe(true)
+    expect(wrapper.find(`[data-removed="${placement.id}"]`).text()).toContain('Зарядка')
+    // Контракт стора: убранное не попадает в слоты доски, но остаётся фактом дня
+    expect(cycle.removedCount).toBe(1)
+    expect(cycle.placementsBySlot.size).toBe(0)
+    // План не меняется: дело убрано только из факта дня
+    expect((await db.dayPlans.get(plan.id))?.plannedPlacements).toHaveLength(1)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      removed: true,
+      unplanned: true,
+      status: 'skipped',
+    })
 
-    await wrapper.find('[data-test="cancel-completion"]').trigger('click')
-    await waitForState(async () => (await cycleState())?.activeInstanceId === 'inst-1')
+    await clickBody(`[data-test="restore-${placement.id}"]`)
+    await waitUntil(() => cycle.removedCount === 0)
+    await flush()
 
-    expect(await dbInstance(createdId)).toBeUndefined()
-    const restored = await dbInstance('inst-1')
-    expect(restored?.status).toBe('active')
-    expect(restored?.completedAt).toBeUndefined()
-    // Снимок размещений вернулся: done остался done, pending — pending (FR-E-3)
-    expect(restored?.placements.map(p => [p.id, p.status])).toEqual([
-      ['p1', 'done'],
-      ['p2', 'pending'],
-    ])
-    expect((await cycleState())?.activeInstanceId).toBe('inst-1')
-    expect(cycle.lastCompletedInstanceId).toBeNull()
+    expect(wrapper.find('[data-test="removed-zone"]').exists()).toBe(false)
+    expect(cycle.placementsBySlot.size).toBe(1)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      removed: false,
+      unplanned: false,
+      status: 'pending',
+    })
   })
 
-  it('восстанавливает manualShiftDate и снова разрешает ручной сдвиг', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    await db.dayTemplates.add(template())
-    const { wrapper } = await mountPage()
-    const cycle = useCycleStore()
+  it('убранное дело не попадает в диалог, но завершается пропущенным', async () => {
+    const first = await newTask('Зарядка')
+    const second = await newTask('Чтение')
+    await createPlan({
+      plannedPlacements: [planned('pp1', first.id, 60), planned('pp2', second.id, 120)],
+    })
+    const cycle = await initializeCycle()
+    const instanceId = cycle.currentInstance?.id ?? ''
+    const secondPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp2')
+    if (!secondPlacement) throw new Error('плановое размещение не создано')
+    await cycle.removePlacement(secondPlacement.id)
 
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
+    expect(bodyText('[data-test="completion-progress"]')).toBe(
+      i18n.global.t('completion.doneCount', { done: 0, total: 1 }),
+    )
     await clickBody('[data-test="completion-confirm"]')
-    expect((await cycleState())?.manualShiftDate).toBe(todayISO())
+    await waitForState(() => cycle.currentInstance?.status === 'completed')
 
-    await wrapper.find('[data-test="cancel-completion"]').trigger('click')
-    await waitForState(async () => (await cycleState())?.manualShiftDate === null)
-
-    expect((await cycleState())?.manualShiftDate).toBeNull()
-    expect(cycle.canShiftNext).toBe(true)
+    const stored = await db.dayInstances.get(instanceId)
+    const removed = stored?.placements.find(item => item.id === secondPlacement.id)
+    expect(removed).toMatchObject({ removed: true, status: 'skipped' })
+    // Убранное не раздувает прогресс: в счётчике только оставшееся в дне
+    expect(cycle.dayProgress).toMatchObject({ done: 0, skipped: 1, pending: 0, total: 1 })
   })
+})
 
-  it('отмена после обычного завершения дня возвращает его без удаления соседей', async () => {
-    await seedDay([placement({ id: 'p1', status: 'done' })])
+describe('Завершение, отмена и пустой день (FR-E-3, FR-D-6)', () => {
+  beforeEach(prepare)
+  afterEach(teardown)
+
+  it('после завершения показывает тост «День завершён» с ярлыком «Отменить»', async () => {
+    const task = await newTask('Зарядка')
+    await createPlan({ plannedPlacements: [planned('pp1', task.id, 60)] })
+    const cycle = await initializeCycle()
+    const instanceId = cycle.currentInstance?.id ?? ''
+    const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
+
     const { wrapper } = await mountPage()
-
     await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
     await clickBody('[data-test="completion-confirm"]')
-    expect(useCycleStore().nextInstanceId).toBeNull()
-
-    await wrapper.find('[data-test="cancel-completion"]').trigger('click')
+    await waitForState(() => cycle.currentInstance?.status === 'completed')
     await flush()
 
-    expect((await dbInstance('inst-1'))?.status).toBe('active')
-    expect((await db.dayInstances.count())).toBe(1)
+    expect(notify).toHaveBeenCalledTimes(1)
+    const [message, type, action, timeout] = notify.mock.calls[0] ?? []
+    expect(message).toBe(i18n.global.t('day.completed'))
+    expect(type).toBe('success')
+    expect(timeout).toBe(5000)
+    expect(action?.label).toBe(i18n.global.t('common.undo'))
+    // Тост — ярлык, а не единственный вход: кнопка в шапке остаётся (FR-E-3)
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
+
+    action?.handler()
+    await waitForState(() => cycle.currentInstance?.status === 'active')
+    await flush()
+
+    expect((await db.dayInstances.get(instanceId))?.status).toBe('active')
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
+  })
+
+  it('кнопка «Отменить завершение» возвращает день и снимок отметок', async () => {
+    const first = await newTask('Зарядка')
+    const second = await newTask('Чтение')
+    await createPlan({
+      plannedPlacements: [planned('pp1', first.id, 60), planned('pp2', second.id, 120)],
+    })
+    const cycle = await initializeCycle()
+    const instanceId = cycle.currentInstance?.id ?? ''
+    const firstPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp1')
+    const secondPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp2')
+    if (!firstPlacement || !secondPlacement) throw new Error('плановые размещения не созданы')
+    await cycle.setPlacementStatus(firstPlacement.id, 'done')
+
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await flush()
+    await clickBody('[data-test="completion-confirm"]')
+    await waitForState(() => cycle.currentInstance?.status === 'completed')
+    await flush()
+
+    await wrapper.find('[data-test="cancel-completion"]').trigger('click')
+    await waitForState(() => cycle.currentInstance?.status === 'active')
+    await flush()
+
+    const restored = await db.dayInstances.get(instanceId)
+    const statuses = new Map(restored?.placements.map(item => [item.id, item.status]))
+    expect(restored?.status).toBe('active')
+    expect(restored?.completedAt).toBeUndefined()
+    expect(statuses.get(firstPlacement.id)).toBe('done')
+    expect(statuses.get(secondPlacement.id)).toBe('pending')
+    expect(cycle.currentInstance?.id).toBe(instanceId)
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
+  })
+
+  it('пустой день: отмечать нечего, подтверждение пишет экземпляр в историю (FR-D-6)', async () => {
+    const cycle = await initializeCycle()
+    expect(cycle.isVirtualInstance).toBe(true)
+    expect(cycle.isPlanless).toBe(true)
+
+    const { wrapper } = await mountPage()
+    expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(true)
+    expect(dialogMounted()).toBe(false)
+
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await flush()
+
+    expect(bodyText('[data-test="completion-empty"]')).toBe(
+      i18n.global.t('completion.nothingToMark'),
+    )
+    expect(bodyEl('[data-test="completion-list"]')).toBeNull()
+
+    await clickBody('[data-test="completion-confirm"]')
+    await waitForState(() => cycle.currentInstance?.status === 'completed')
+
+    const state = await db.cycleState.get('current')
+    const stored = await db.dayInstances.get(state?.activeInstanceId ?? '')
+    expect(stored).toMatchObject({
+      date: todayISO(),
+      status: 'completed',
+      placements: [],
+    })
+    expect(state?.activeInstanceId).toBe(cycle.currentInstance?.id)
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
+  })
+
+  it('удалённый план: шапка и диалог говорят «План дня удалён»', async () => {
+    const task = await newTask('Зарядка')
+    const plan = await createPlan({ plannedPlacements: [planned('pp1', task.id, 60)] })
+    const cycle = await initializeCycle()
+    const { wrapper } = await mountPage()
+
+    // План мог исчезнуть из другой вкладки: факт дня остаётся, шапка это называет
+    await db.dayPlans.delete(plan.id)
+    await waitForState(() => cycle.isPlanMissing)
+    await flush()
+
+    expect(cycle.currentPlan).toBeNull()
+    expect(wrapper.find('[data-test="plan-deleted"]').text()).toBe(
+      i18n.global.t('day.planDeleted'),
+    )
+    expect(wrapper.find('[data-test="open-plan"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await flush()
+    expect(bodyText('[data-test="completion-plan"]')).toBe(i18n.global.t('day.planDeleted'))
   })
 })
 
-describe('Действия размещения FR-B-7: мышь, клавиатура и свайп (ТЗ §5.3, НФТ §7)', () => {
+describe('Просроченный день и авто-диалог при смене суток (FR-C-4)', () => {
   beforeEach(prepare)
   afterEach(teardown)
 
-  it('правый клик по карточке открывает меню действий', async () => {
-    await seedDay([placement({ id: 'p1' })])
+  it('авто-триггер открывает диалог; разовый пропуск молчит до перезагрузки', async () => {
+    await seedOverdueDay()
+    const cycle = useCycleStore()
+
+    // День просрочен, авто-сдвиг выключен, «спрашивать» включено — диалог открыт
+    expect(completionOpen()).toBe(true)
     const { wrapper } = await mountPage()
+    expect(bodyEl('[data-test="completion-skip-once"]')).not.toBeNull()
+    expect(bodyEl('[data-test="completion-shift"]')).toBeNull()
 
-    await card(wrapper, 'p1').trigger('contextmenu')
+    await clickBody('[data-test="completion-skip-once"]')
+
+    expect(completionOpen()).toBe(false)
+    expect(cycle.skippedAutoPromptDate).toBe(todayISO())
+    // Повторная проверка смены даты диалог не возвращает (до перезагрузки)
+    cycle.checkDayChange()
     await flush()
-
-    expect(menuItem('change-duration')?.textContent).toContain('Изменить длительность')
+    expect(completionOpen()).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
   })
 
-  it('Enter на карточке открывает меню с полным набором действий (НФТ §7)', async () => {
-    await seedDay([placement({ id: 'p1' })])
+  it('подтверждение просроченного дня открывает сегодняшний, отмена возвращает вчерашний', async () => {
+    const { instance } = await seedOverdueDay()
+    const cycle = useCycleStore()
     const { wrapper } = await mountPage()
+    const yesterday = instance.date
 
-    await card(wrapper, 'p1').trigger('keydown.enter')
+    await clickBody('[data-test="completion-confirm"]')
+    await waitForState(() => cycle.currentInstance?.date === todayISO())
     await flush()
 
-    for (const action of [
-      'mark-done',
-      'mark-skipped',
-      'change-duration',
-      'replace',
-      'move-to-slot',
-      'remove',
-    ]) {
-      expect(menuItem(action)).not.toBeNull()
-    }
-    expect(menuItem('mark-done')?.getAttribute('role')).toBe('menuitem')
-  })
+    expect((await db.dayInstances.get(instance.id))?.status).toBe('completed')
+    // Сегодня плана нет — день виртуален (activeInstanceId = null)
+    expect((await db.cycleState.get('current'))?.activeInstanceId).toBeNull()
+    expect(cycle.isPlanless).toBe(true)
 
-  it('долгий тап по карточке открывает меню (вайрфреймы §1.1)', async () => {
-    await seedDay([placement({ id: 'p1' })])
-    const { wrapper } = await mountPage()
-
-    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 40, clientY: 40, button: 0 })
-    expect(menuItem('change-duration')).toBeNull()
-
-    await flush(600) // долгий тап: 500 мс удержания
+    await wrapper.find('[data-test="cancel-completion"]').trigger('click')
+    await waitForState(() => cycle.currentInstance?.date === yesterday)
     await flush()
 
-    expect(menuItem('change-duration')).not.toBeNull()
-  })
-
-  it('горизонтальный свайп открывает меню и карточку не переносит', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 75 })])
-    const { wrapper } = await mountPage()
-
-    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 100, clientY: 40, button: 0 })
-    window.dispatchEvent(pointerEvent('pointermove', 40, 160))
-    window.dispatchEvent(pointerEvent('pointerup', 40, 160))
-    await flush()
-
-    expect(menuItem('change-duration')).not.toBeNull()
-    expect(await dbPlacement('p1')).toMatchObject({ startMin: 75 })
-    expect(useCycleStore().draggingTaskId).toBeNull()
-  })
-
-  it('вертикальное движение остаётся переносом и меню не открывает (FR-B-2)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 15 })])
-    const { wrapper } = await mountPage()
-
-    // Слот 3 — 45 минут от начала дня: та же геометрия, что у переноса в dayBoard.spec
-    const y = 3 * SLOT_HEIGHT + 1
-    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 40, clientY: 0, button: 0 })
-    window.dispatchEvent(pointerEvent('pointermove', y, 44))
-    window.dispatchEvent(pointerEvent('pointerup', y, 44))
-    await flush()
-
-    expect(menuItem('change-duration')).toBeNull()
-    expect(await dbPlacement('p1')).toMatchObject({ startMin: 45 })
-  })
-
-  it('действие, выбранное из меню жеста, доходит до стора (FR-B-7)', async () => {
-    await seedDay([placement({ id: 'p1', startMin: 75 })])
-    const { wrapper } = await mountPage()
-
-    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 100, clientY: 40, button: 0 })
-    window.dispatchEvent(pointerEvent('pointermove', 40, 160))
-    window.dispatchEvent(pointerEvent('pointerup', 40, 160))
-    await flush()
-
-    const item = menuItem('mark-skipped')
-    if (item === null) throw new Error('пункт меню mark-skipped не найден')
-    await new DOMWrapper(item).trigger('click')
-    await flush()
-
-    expect(await dbPlacement('p1')).toMatchObject({ status: 'skipped' })
-  })
-
-  it('у завершённого дня ни свайп, ни долгий тап меню не открывают (вайрфреймы §1.3)', async () => {
-    await seedDay([placement({ id: 'p1' })], { status: 'completed' })
-    const { wrapper } = await mountPage()
-
-    await card(wrapper, 'p1').trigger('pointerdown', { clientX: 100, clientY: 40, button: 0 })
-    window.dispatchEvent(pointerEvent('pointermove', 40, 160))
-    window.dispatchEvent(pointerEvent('pointerup', 40, 160))
-    await flush(600)
-    await flush()
-
-    expect(menuItem('change-duration')).toBeNull()
-    expect(card(wrapper, 'p1').find('.placement-card__menu-button').exists()).toBe(false)
+    expect((await db.dayInstances.get(instance.id))?.status).toBe('active')
+    expect((await db.cycleState.get('current'))?.activeInstanceId).toBe(instance.id)
+    expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
   })
 })

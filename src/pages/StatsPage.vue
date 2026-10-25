@@ -168,6 +168,7 @@ const sortOptions = computed(() => [
   { label: t('stats.columns.placed'), value: 'placed' },
   { label: t('stats.columns.done'), value: 'done' },
   { label: t('stats.columns.skipped'), value: 'skipped' },
+  { label: t('stats.columns.unplanned'), value: 'unplanned' },
   { label: t('stats.columns.rate'), value: 'rate' },
 ])
 

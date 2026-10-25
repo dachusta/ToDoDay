@@ -6,17 +6,23 @@ import { i18n } from 'src/boot/i18n'
 import { db, ensureCycleState, toPlain } from 'src/services/db'
 import type { ThemeMode, TimeFormat } from 'src/models/enums'
 import type { Task } from 'src/models/task'
-import type { DayTemplate } from 'src/models/day'
+import type { DayPlan } from 'src/models/day'
 import type { CycleStateDto, DayInstance } from 'src/models/dayInstance'
 import { ok, err, type Result } from 'src/models/common'
-import { normalizeDayTemplate } from 'src/services/templateTasks'
+import {
+  migrateLegacyPlanRow,
+  normalizeDayInstance,
+  normalizeDayPlan,
+} from 'src/services/dayPlans'
 import { useTasksStore } from './tasks'
-import { useDaysStore } from './days'
+import { useDayPlansStore } from './dayPlans'
 import { useStatsStore } from './stats'
 import { useCycleStore } from './cycle'
 
-// Версия формата файла экспорта (ТЗ FR-SET-4, контракты §5.4)
-export const EXPORT_VERSION = '1.0'
+// Версия формата файла экспорта (ТЗ FR-SET-4, контракты §5.4).
+// 2.0: dayPlans вместо dayTemplates; импорт 1.0 поддерживается.
+export const EXPORT_VERSION = '2.0'
+const LEGACY_EXPORT_VERSION = '1.0'
 
 /** Ключи localStorage раздела настроек (контракты §5.1). Поля файла = суффиксы ключей. */
 const SETTINGS_KEYS = {
@@ -56,7 +62,7 @@ const DEFAULT_SETTINGS: NormalizedSettings = {
 
 interface ImportPayload {
   tasks: Task[]
-  dayTemplates: DayTemplate[]
+  dayPlans: DayPlan[]
   dayInstances: DayInstance[]
   cycleState: CycleStateDto
   settings: Record<string, unknown>
@@ -67,7 +73,7 @@ interface ExportFile {
   exportedAt: string
   data: {
     tasks: Task[]
-    dayTemplates: DayTemplate[]
+    dayPlans: DayPlan[]
     dayInstances: DayInstance[]
     cycleState: CycleStateDto
     settings: Record<string, unknown>
@@ -127,25 +133,44 @@ function validateImportFile(parsed: unknown): Result<ImportPayload> {
     return err('VALIDATION_ERROR', 'Файл не содержит объект', { reason: 'MALFORMED' })
   }
   const file = parsed as { version?: unknown; data?: unknown }
-  if (file.version !== EXPORT_VERSION) {
-    return err('VALIDATION_ERROR', `Версия файла не поддерживается: ${String(file.version)}`, {
+  const version = file.version
+  if (version !== EXPORT_VERSION && version !== LEGACY_EXPORT_VERSION) {
+    return err('VALIDATION_ERROR', `Версия файла не поддерживается: ${String(version)}`, {
       reason: 'VERSION_UNSUPPORTED',
-      version: file.version,
+      version,
     })
   }
   if (typeof file.data !== 'object' || file.data === null) {
     return err('VALIDATION_ERROR', 'В файле нет блока data', { reason: 'MALFORMED' })
   }
   const data = file.data as Record<string, unknown>
-  if (
-    !Array.isArray(data.tasks) ||
-    !Array.isArray(data.dayTemplates) ||
-    !Array.isArray(data.dayInstances)
-  ) {
-    return err('VALIDATION_ERROR', 'tasks/dayTemplates/dayInstances должны быть массивами', {
+  if (!Array.isArray(data.tasks) || !Array.isArray(data.dayInstances)) {
+    return err('VALIDATION_ERROR', 'tasks/dayInstances должны быть массивами', {
       reason: 'MALFORMED',
     })
   }
+  const tasks = data.tasks as Task[]
+  const taskMap = new Map(tasks.map(task => [task.id, task]))
+
+  let dayPlans: DayPlan[]
+  if (version === EXPORT_VERSION) {
+    if (!Array.isArray(data.dayPlans)) {
+      return err('VALIDATION_ERROR', 'dayPlans должен быть массивом', {
+        reason: 'MALFORMED',
+      })
+    }
+    dayPlans = (data.dayPlans as DayPlan[]).map(plan => normalizeDayPlan(plan, taskMap))
+  } else {
+    if (!Array.isArray(data.dayTemplates)) {
+      return err('VALIDATION_ERROR', 'dayTemplates должен быть массивом', {
+        reason: 'MALFORMED',
+      })
+    }
+    dayPlans = (data.dayTemplates as Array<Record<string, unknown>>).map(row =>
+      migrateLegacyPlanRow(row, taskMap),
+    )
+  }
+
   const cs = data.cycleState
   if (typeof cs !== 'object' || cs === null || (cs as { id?: unknown }).id !== 'current') {
     return err('VALIDATION_ERROR', 'cycleState должен быть объектом с id «current»', {
@@ -156,9 +181,11 @@ function validateImportFile(parsed: unknown): Result<ImportPayload> {
     return err('VALIDATION_ERROR', 'settings должен быть объектом', { reason: 'MALFORMED' })
   }
   return ok({
-    tasks: data.tasks as Task[],
-    dayTemplates: data.dayTemplates as DayTemplate[],
-    dayInstances: data.dayInstances as DayInstance[],
+    tasks,
+    dayPlans,
+    dayInstances: (data.dayInstances as DayInstance[]).map(instance =>
+      normalizeDayInstance(instance),
+    ),
     cycleState: cs as CycleStateDto,
     settings: data.settings as Record<string, unknown>,
   })
@@ -170,7 +197,6 @@ function normalizeCycleState(cs: CycleStateDto): CycleStateDto {
   return {
     id: 'current',
     activeInstanceId: asId(cs.activeInstanceId),
-    lastCyclicTemplateId: asId(cs.lastCyclicTemplateId),
     manualShiftDate: asId(cs.manualShiftDate),
     lastAutoShiftDate: asId(cs.lastAutoShiftDate),
   }
@@ -321,9 +347,9 @@ export const useSettingsStore = defineStore('settings', () => {
     }
     busy.value = true
     try {
-      const [tasks, dayTemplates, dayInstances, stored] = await Promise.all([
+      const [tasks, dayPlans, dayInstances, stored] = await Promise.all([
         db.tasks.toArray(),
-        db.dayTemplates.toArray(),
+        db.dayPlans.toArray(),
         db.dayInstances.toArray(),
         db.cycleState.get('current'),
       ])
@@ -334,10 +360,8 @@ export const useSettingsStore = defineStore('settings', () => {
         exportedAt: nowIso,
         data: {
           tasks,
-          // FR-D-7: в файле всегда есть plannedTaskIds, даже если запись в БД
-          // осталась от версии без этого поля (аддитивное изменение формата).
-          dayTemplates: dayTemplates.map(normalizeDayTemplate),
-          dayInstances,
+          dayPlans: dayPlans.map(plan => normalizeDayPlan(plan)),
+          dayInstances: dayInstances.map(instance => normalizeDayInstance(instance)),
           cycleState,
           settings: buildSettingsBlock(),
         },
@@ -380,23 +404,28 @@ export const useSettingsStore = defineStore('settings', () => {
       }
       const validated = validateImportFile(parsed)
       if (!validated.ok) return validated
-      const { tasks, dayTemplates, dayInstances, settings } = validated.data
+      const { tasks, dayPlans, dayInstances, settings } = validated.data
 
       try {
-        await db.transaction('rw', db.tasks, db.dayTemplates, db.dayInstances, db.cycleState, async () => {
-          await Promise.all([
-            db.tasks.clear(),
-            db.dayTemplates.clear(),
-            db.dayInstances.clear(),
-            db.cycleState.clear(),
-          ])
-          await db.tasks.bulkAdd(toPlain(tasks))
-          // FR-D-7: старые файлы (версия 1.0 без поля) получают пустой список,
-          // поэтому все записи после импорта имеют одинаковую форму.
-          await db.dayTemplates.bulkAdd(toPlain(dayTemplates.map(normalizeDayTemplate)))
-          await db.dayInstances.bulkAdd(toPlain(dayInstances))
-          await db.cycleState.put(normalizeCycleState(validated.data.cycleState))
-        })
+        await db.transaction(
+          'rw',
+          db.tasks,
+          db.dayPlans,
+          db.dayInstances,
+          db.cycleState,
+          async () => {
+            await Promise.all([
+              db.tasks.clear(),
+              db.dayPlans.clear(),
+              db.dayInstances.clear(),
+              db.cycleState.clear(),
+            ])
+            await db.tasks.bulkAdd(toPlain(tasks))
+            await db.dayPlans.bulkAdd(toPlain(dayPlans))
+            await db.dayInstances.bulkAdd(toPlain(dayInstances))
+            await db.cycleState.put(normalizeCycleState(validated.data.cycleState))
+          },
+        )
         // cycleState — singleton, отсутствующие поля достраиваются дефолтами (ТЗ §3.3)
         await ensureCycleState()
       } catch (e) {
@@ -471,16 +500,16 @@ export const useSettingsStore = defineStore('settings', () => {
    */
   async function rehydrateAll(): Promise<void> {
     const tasks = useTasksStore()
-    const days = useDaysStore()
+    const plans = useDayPlansStore()
     const stats = useStatsStore()
     const cycle = useCycleStore()
     tasks.unsubscribe()
-    days.unsubscribe()
+    plans.unsubscribe()
     stats.unsubscribe()
     stats.resetCache()
     cycle.dispose()
     cycle.resetSessionState()
-    // initialize сам перечитывает tasks/days и подписывает их liveQuery (контракты §7)
+    // initialize сам перечитывает tasks/dayPlans и подписывает их liveQuery.
     await cycle.initialize()
     await stats.initialize()
   }
@@ -493,14 +522,21 @@ export const useSettingsStore = defineStore('settings', () => {
     busy.value = true
     try {
       try {
-        await db.transaction('rw', db.tasks, db.dayTemplates, db.dayInstances, db.cycleState, async () => {
-          await Promise.all([
-            db.tasks.clear(),
-            db.dayTemplates.clear(),
-            db.dayInstances.clear(),
-            db.cycleState.clear(),
-          ])
-        })
+        await db.transaction(
+          'rw',
+          db.tasks,
+          db.dayPlans,
+          db.dayInstances,
+          db.cycleState,
+          async () => {
+            await Promise.all([
+              db.tasks.clear(),
+              db.dayPlans.clear(),
+              db.dayInstances.clear(),
+              db.cycleState.clear(),
+            ])
+          },
+        )
         // cycleState пересоздаётся дефолтами: активный день, указатель цикла и
         // обе даты сдвига обнуляются (FR-SET-10)
         await ensureCycleState()

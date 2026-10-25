@@ -38,10 +38,17 @@
         </div>
         <div
           class="text-caption text-grey-7"
-          data-test="completion-template"
+          data-test="completion-plan"
         >
-          {{ templateLabel }}
+          {{ planLabel }}
         </div>
+        <p
+          v-if="removedCount > 0"
+          class="text-caption q-mt-xs q-mb-none"
+          data-test="completion-removed-hint"
+        >
+          {{ t('completion.removedHint', { n: removedCount }) }}
+        </p>
         <!-- Сдвиг: подпись, что после подтверждения начнётся новый день (вайрфреймы §6) -->
         <p
           v-if="shiftPending"
@@ -101,6 +108,11 @@
                     aria-hidden="true"
                   />
                   <span class="completion__title">{{ placement.taskSnapshot.title }}</span>
+                  <span
+                    v-if="placement.unplanned"
+                    class="completion__unplanned"
+                    data-test="completion-unplanned"
+                  >{{ t('placement.unplannedBadge') }}</span>
                 </div>
               </q-item-section>
               <q-item-section side>
@@ -186,8 +198,10 @@ const props = withDefaults(
     placements: Placement[]
     /** Дата словами для шапки диалога (вайрфреймы §6). */
     dateLabel: string
-    /** Имя шаблона либо заглушка «Шаблон удалён» / «Без шаблона» (FR-D-4/FR-D-6). */
-    templateLabel: string
+    /** Имя плана либо заглушка «План дня удалён» / «Без плана». */
+    planLabel: string
+    /** Сколько плановых дел убрано в «Сегодня»: они станут skipped. */
+    removedCount?: number
     /** Триггер диалога: ручной, авто (FR-C-4) или сдвиг (FR-C-3). */
     source?: 'manual' | 'auto' | 'shift' | null
     /** Завершение открыто из «Следующий день →»: показываем подсказку о новом дне. */
@@ -201,6 +215,7 @@ const props = withDefaults(
     shiftPending: false,
     dayStartMin: 0,
     timeFormat: '24h',
+    removedCount: 0,
   },
 )
 
@@ -314,6 +329,17 @@ function confirm() {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+}
+
+.completion__unplanned {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--app-surface-muted);
+  color: var(--app-meta);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
 }
 
 .completion__time,

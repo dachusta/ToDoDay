@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { liveQuery, type Subscription } from 'dexie'
 import { db, toPlain } from 'src/services/db'
-import { normalizePlannedTaskIds } from 'src/services/templateTasks'
 import type { Task, TaskInput, TaskSortField } from 'src/models/task'
 import type { Priority } from 'src/models/enums'
 import { ok, err, type Result } from 'src/models/common'
@@ -220,22 +219,25 @@ export const useTasksStore = defineStore('tasks', () => {
       return err<void>('CONSTRAINT_VIOLATION', 'Удалять можно только дела из архива')
     }
     try {
-      // FR-D-7: безвозвратное удаление дела вычищает ссылку из всех шаблонов.
-      // Пишем в dayTemplates в той же транзакции: иначе шаблон остался бы со
-      // ссылкой на несуществующее дело, а форма блокировала бы сохранение.
-      // useDaysStore обновляет список через liveQuery (контракты §2.3).
-      await db.transaction('rw', db.tasks, db.dayTemplates, async () => {
+      // Безвозвратное удаление дела вычищает ссылку из всех планов.
+      // Пишем в dayPlans в той же транзакции: иначе план остался бы со ссылкой
+      // на несуществующее дело, а форма блокировала бы сохранение.
+      await db.transaction('rw', db.tasks, db.dayPlans, async () => {
         await db.tasks.delete(id)
 
-        const templates = await db.dayTemplates.toArray()
-        const changed = templates
-          .map(tpl => ({ tpl, ids: normalizePlannedTaskIds(tpl.plannedTaskIds) }))
-          .filter(row => row.ids.includes(id))
-          .map(row => ({
-            ...row.tpl,
-            plannedTaskIds: row.ids.filter(taskId => taskId !== id),
+        const plans = await db.dayPlans.toArray()
+        const changed = plans
+          .map(plan => ({
+            plan,
+            placements: plan.plannedPlacements.filter(item => item.taskId !== id),
           }))
-        if (changed.length) await db.dayTemplates.bulkPut(toPlain(changed))
+          .filter(row => row.placements.length !== row.plan.plannedPlacements.length)
+          .map(row => ({
+            ...row.plan,
+            plannedPlacements: row.placements,
+            updatedAt: Date.now(),
+          }))
+        if (changed.length) await db.dayPlans.bulkPut(toPlain(changed))
       })
       tasks.value = tasks.value.filter(x => x.id !== id)
       return ok(undefined)

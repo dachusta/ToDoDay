@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { visiblePlacementActions, type PlacementActionId } from './placementActions'
+import { visiblePlacementActions, type PlacementActionId, type PlacementActionMode } from './placementActions'
 import type { Placement } from 'src/models/dayInstance'
 
 const props = withDefaults(
@@ -54,6 +54,8 @@ const props = withDefaults(
     placement: Placement
     /** День завершён: изменяющих действий нет вовсе (DAY_NOT_ACTIVE). */
     readOnly?: boolean
+    /** 'day' — факт дня, 'plan' — редактор плана (без статусов выполнения). */
+    mode?: PlacementActionMode
     /**
      * Элемент-якорь карточки: на нём слушаются жесты, к нему привязано меню.
      * Карточка передаёт свой корень, потому что разметка карточки — её
@@ -61,7 +63,7 @@ const props = withDefaults(
      */
     target?: HTMLElement | null
   }>(),
-  { readOnly: false, target: null },
+  { readOnly: false, mode: 'day', target: null },
 )
 
 const emit = defineEmits<{
@@ -78,7 +80,7 @@ const LONG_PRESS_TOLERANCE = 8
 const SWIPE_MIN_DISTANCE = 32
 
 const open = ref(false)
-const actions = computed(() => visiblePlacementActions(props.placement, props.readOnly))
+const actions = computed(() => visiblePlacementActions(props.placement, props.readOnly, props.mode))
 const canOpen = computed(() => !props.readOnly && actions.value.length > 0)
 
 /** Начало жеста: точка нажатия. null — жест не идёт (или уже сработал). */

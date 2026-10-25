@@ -1,14 +1,24 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { Task } from 'src/models/task'
-import type { DayTemplate } from 'src/models/day'
+import type { DayPlan } from 'src/models/day'
 import type { DayInstance, CycleStateDto } from 'src/models/dayInstance'
+import { normalizeRule } from 'src/services/repeat'
 
+/**
+ * Dexie-схема версии 2.
+ *
+ * Физическое имя таблицы планов остаётся `dayTemplates`: в нём уже лежат
+ * шаблоны пользователя, и копировать строки ради переименования не нужно.
+ * В коде таблица доступна как `db.dayPlans` (алиас), а upgrade-функция
+ * превращает старые `plannedTaskIds` в `plannedPlacements` без времени.
+ */
 class ToDoDayDB extends Dexie {
   tasks!: EntityTable<Task, 'id'>
-  dayTemplates!: EntityTable<DayTemplate, 'id'>
+  /** Планы дней; физическое хранилище — `dayTemplates` (историческое имя). */
+  dayPlans!: EntityTable<DayPlan, 'id'>
+  /** Легаси-алиас того же хранилища: оставлен для старых тестов и экспорта. */
+  dayTemplates!: EntityTable<Record<string, unknown>, 'id'>
   dayInstances!: EntityTable<DayInstance, 'id'>
-  // EntityTable (а не Table): TKey здесь — тип ключа ('id' → string), иначе Dexie
-  // сужает ключ до литерала id === 'current' и get('current') не проходит проверку.
   cycleState!: EntityTable<CycleStateDto, 'id'>
 
   constructor() {
@@ -20,6 +30,64 @@ class ToDoDayDB extends Dexie {
       dayInstances: 'id, date, templateId, status',
       cycleState: 'id',
     })
+
+    this.version(2)
+      .stores({
+        tasks: 'id, archived, priority, createdAt',
+        // &date — уникальность конкретного дня. null-даты IndexedDB не индексирует,
+        // поэтому повторяющиеся планы и заготовки «без даты» не конфликтуют.
+        dayTemplates: 'id, &date',
+        dayInstances: 'id, date, planId, templateId, status',
+        cycleState: 'id',
+      })
+      .upgrade(async tx => {
+        const tasks = (await tx.table('tasks').toArray()) as Task[]
+        const byId = new Map(tasks.map(task => [task.id, task]))
+
+        await tx.table('dayTemplates').toCollection().modify((raw: Record<string, unknown>) => {
+          const rule = normalizeRule(
+            (raw.repeatRule as DayPlan['repeatRule'] | undefined) ?? { type: 'none' },
+          )
+          raw.repeatRule = rule
+          raw.date =
+            rule.type === 'none' && typeof raw.date === 'string' ? raw.date : null
+
+          if (!Array.isArray(raw.plannedPlacements)) {
+            const ids = Array.isArray(raw.plannedTaskIds) ? raw.plannedTaskIds : []
+            raw.plannedPlacements = ids
+              .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+              .map(taskId => ({
+                id: crypto.randomUUID(),
+                taskId,
+                startMin: null,
+                durationMin: byId.get(taskId)?.durationMin ?? 30,
+              }))
+          }
+
+          raw.gridStepMin = 15
+          raw.updatedAt =
+            typeof raw.updatedAt === 'number'
+              ? raw.updatedAt
+              : typeof raw.createdAt === 'number'
+                ? raw.createdAt
+                : Date.now()
+          raw.name = typeof raw.name === 'string' ? raw.name : '—'
+          raw.accentColor =
+            typeof raw.accentColor === 'string' ? raw.accentColor : '#2196F3'
+          raw.timeStart = typeof raw.timeStart === 'string' ? raw.timeStart : '08:00'
+          raw.timeEnd = typeof raw.timeEnd === 'string' ? raw.timeEnd : '22:00'
+
+          delete raw.plannedTaskIds
+          delete raw.order
+        })
+      })
+
+    // Алиасы на историческое хранилище: код и тесты работают с dayPlans.
+    this.dayPlans = this.table('dayTemplates') as unknown as EntityTable<DayPlan, 'id'>
+    this.dayTemplates = this.table('dayTemplates') as unknown as EntityTable<
+      Record<string, unknown>,
+      'id'
+    >
   }
 }
 
@@ -30,10 +98,8 @@ export const db = new ToDoDayDB()
  *
  * Значения сторов — реактивные Proxy из Vue (ref/reactive), а Dexie клонирует
  * записываемые объекты структурным клонированием: `structuredClone` на Proxy
- * падает DataCloneError («#<Object> could not be cloned»), поэтому put/bulkPut
- * реактивного объекта не доходит до IndexedDB. Перед записью состояние
- * разворачивается в обычные объекты и массивы (вложенные значения тоже: спред
- * реактивного массива даёт массив прокси).
+ * падает DataCloneError, поэтому put/bulkPut реактивного объекта не доходит до
+ * IndexedDB. Перед записью состояние разворачивается в обычные объекты.
  */
 export function toPlain<T>(value: T): T {
   if (Array.isArray(value)) return value.map(item => toPlain(item)) as unknown as T
@@ -47,15 +113,11 @@ export function toPlain<T>(value: T): T {
   return value
 }
 
-// Синглтон состояния цикла. Дополняет отсутствующие поля дефолтами: ревизия 1.2
-// добавила lastAutoShiftDate, а база могла быть создана раньше. Отдельная
-// Dexie-миграция для этого не нужна (меняется не схема, а набор полей записи) —
-// политика в ТЗ §3.3.
+// Синглтон состояния цикла. Дополняет отсутствующие поля дефолтами.
 export async function ensureCycleState(): Promise<CycleStateDto> {
   const defaults: CycleStateDto = {
     id: 'current',
     activeInstanceId: null,
-    lastCyclicTemplateId: null,
     manualShiftDate: null,
     lastAutoShiftDate: null,
   }
@@ -66,7 +128,12 @@ export async function ensureCycleState(): Promise<CycleStateDto> {
     return defaults
   }
 
-  const merged = { ...defaults, ...existing, id: 'current' as const }
+  const merged: CycleStateDto = {
+    id: 'current',
+    activeInstanceId: existing.activeInstanceId ?? null,
+    manualShiftDate: existing.manualShiftDate ?? null,
+    lastAutoShiftDate: existing.lastAutoShiftDate ?? null,
+  }
   if (existing.lastAutoShiftDate === undefined) await db.cycleState.put(merged)
   return merged
 }

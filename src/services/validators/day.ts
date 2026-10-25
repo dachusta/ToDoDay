@@ -1,46 +1,37 @@
-import type { DayTemplate, DayTemplateInput, ValidationIssue } from 'src/models/day'
+import type { DayPlan, DayPlanInput, PlannedPlacement, ValidationIssue } from 'src/models/day'
+import { planMode } from 'src/models/day'
 import { validateNoOverlap } from 'src/services/repeat'
-import { parseClock } from 'src/services/dates'
+import { isValidISODate, parseClock } from 'src/services/dates'
+import { fitInDayRange } from 'src/services/scheduler'
 
 /**
- * Валидация шаблона дня (ТЗ FR-D-1, FR-D-5; контракты §2.5).
- *
- * Решение по `services/validators/day.ts` (строка «валидатор дня» таблицы гэпов
- * скаффолда §6, ТЗ §8.2): файл из дерева ТЗ §4.2 не убирается, а получает ту
- * самую роль, ради которой он в дереве и стоял, — проверки шаблона живут здесь,
- * а `daysStore.validate` только делегирует (как `validators/task.ts` обслуживает
- * `tasksStore`). Алгоритм правил при этом один: сервис вызывает
- * `repeat.validateRule` / `repeat.validateNoOverlap` (ТЗ §4.4), а не повторяет
- * их, поэтому дублей проверок нет ни в сторе, ни в сервисе.
+ * Валидация плана дня. Проверки живут здесь, а `useDayPlansStore` только
+ * делегирует — как `validators/task.ts` обслуживает `useTasksStore`.
+ * Алгоритм правил остаётся один: `repeat.validateRule` / `repeat.validateNoOverlap`.
  */
 
-/** Границы полей шаблона — те же, что в ТЗ FR-D-1 и контрактах §2.4/§2.5. */
 export const NAME_MIN_LENGTH = 1
 export const NAME_MAX_LENGTH = 50
 export const MIN_DAY_SPAN_MIN = 60
 export const MAX_DAY_SPAN_MIN = 1425
 
-/** Цвет-акцент: строго `#RRGGBB` (FR-D-1). */
 const HEX_COLOR = /^#[0-9A-F]{6}$/i
 
-/** Коды конфликтов правил: по ним `createTemplate`/`updateTemplate` отдают CONFLICT. */
+/** Коды конфликтов правил: по ним create/update отдают CONFLICT. */
 export const OVERLAP_ISSUE_CODES = ['OVERLAP_WEEKDAYS', 'OVERLAP_MONTHDAYS'] as const
 
-/** Конфликт с другим шаблоном (а не ошибка значений) — контракты §2.5. */
 export function isOverlapIssue(issue: ValidationIssue): boolean {
   return (OVERLAP_ISSUE_CODES as readonly string[]).includes(issue.code)
 }
 
-/** Виновники пересечений без повторов — для `details.conflictingTemplateIds`. */
-export function overlapTemplateIds(issues: ValidationIssue[]): string[] {
-  return [...new Set(issues.filter(isOverlapIssue).flatMap(i => i.conflictingTemplateIds))]
+/** Виновники пересечений без повторов — для `details.conflictingPlanIds`. */
+export function overlapPlanIds(issues: ValidationIssue[]): string[] {
+  return [...new Set(issues.filter(isOverlapIssue).flatMap(i => i.conflictingPlanIds))]
 }
 
 /**
- * FR-D-7: ссылки на дела шаблона должны существовать. Архивное дело — не ошибка:
- * оно остаётся в шаблоне с плашкой и просто не попадает в новый день (FR-T-3).
- * Проверка отдельная от `validateDayTemplate`, потому что требует чтения таблицы
- * дел и выполняется в createTemplate/updateTemplate перед записью.
+ * Ссылки на дела плана должны существовать. Архивное дело — не ошибка:
+ * оно остаётся в плане с плашкой и просто не попадает в новый день.
  */
 export function validatePlannedTaskRefs(
   taskIds: readonly string[],
@@ -52,35 +43,35 @@ export function validatePlannedTaskRefs(
   return [
     {
       code: 'TASK_NOT_FOUND',
-      message: 'Дело шаблона не найдено',
-      conflictingTemplateIds: [],
+      message: 'Дело плана не найдено',
+      conflictingPlanIds: [],
       taskIds: missing,
     },
   ]
 }
 
 /**
- * Все проблемы ввода шаблона одним массивом (контракты §2.5): сначала правило и
- * пересечения, затем имя, цвет и время. Порядок важен для UI: форма показывает
- * первую проблему у своего поля, а конфликт — отдельным блоком.
- *
- * `templates` — снимок списка шаблонов; `excludeId` — id правимого шаблона,
- * чтобы он не конфликтовал сам с собой (FR-D-3).
+ * Все проблемы ввода плана одним массивом: сначала правило и пересечения,
+ * затем имя, цвет, дата и время. `plans` — снимок списка планов; `excludeId` —
+ * id правимого плана, чтобы он не конфликтовал сам с собой.
  */
-export function validateDayTemplate(
-  input: DayTemplateInput,
-  templates: DayTemplate[],
+export function validateDayPlan(
+  input: DayPlanInput,
+  plans: readonly DayPlan[],
   excludeId?: string,
 ): ValidationIssue[] {
-  // Правило и пересечения: EMPTY_RULE / INVALID_RULE / OVERLAP_* (repeat.validateNoOverlap)
-  const issues = validateNoOverlap(input.repeatRule, templates, excludeId)
+  const issues = validateNoOverlap(input.repeatRule, plans, excludeId)
+  const mode = planMode({
+    date: input.date,
+    repeatRule: input.repeatRule,
+  })
 
   const name = input.name.trim()
   if (name.length < NAME_MIN_LENGTH || name.length > NAME_MAX_LENGTH) {
     issues.push({
       code: 'INVALID_NAME',
       message: `Название: ${NAME_MIN_LENGTH}–${NAME_MAX_LENGTH} символов`,
-      conflictingTemplateIds: [],
+      conflictingPlanIds: [],
     })
   }
 
@@ -88,12 +79,10 @@ export function validateDayTemplate(
     issues.push({
       code: 'INVALID_COLOR',
       message: 'Цвет: HEX #RRGGBB',
-      conflictingTemplateIds: [],
+      conflictingPlanIds: [],
     })
   }
 
-  // parseClock отсекает всё, кроме HH:mm с минутами 00/15/30/45 (ТЗ FR-D-1):
-  // 'abc', '99:99', '24:00', '08:07' — INVALID_TIME, а не тихое приведение.
   const start = parseClock(input.timeStart)
   const end = parseClock(input.timeEnd)
   const span = start !== null && end !== null ? end - start : NaN
@@ -106,9 +95,67 @@ export function validateDayTemplate(
     issues.push({
       code: 'INVALID_TIME',
       message: 'Время: HH:mm, минуты кратны 15, конец позже начала минимум на час',
-      conflictingTemplateIds: [],
+      conflictingPlanIds: [],
     })
   }
 
+  if (mode === 'oneoff') {
+    if (!isValidISODate(input.date)) {
+      issues.push({
+        code: 'INVALID_DATE',
+        message: 'Дата: YYYY-MM-DD',
+        conflictingPlanIds: [],
+      })
+    } else {
+      const taken = plans.find(
+        plan => plan.id !== excludeId && plan.repeatRule.type === 'none' && plan.date === input.date,
+      )
+      if (taken) {
+        issues.push({
+          code: 'DATE_TAKEN',
+          message: 'На эту дату уже есть день',
+          conflictingPlanIds: [taken.id],
+        })
+      }
+    }
+  }
+
+  return issues
+}
+
+/**
+ * Проверка размещений плана: время и длительность. Не помещающиеся значения
+ * не должны попадать в БД: редактор и нормализация уводят их в null.
+ */
+export function validatePlanPlacements(
+  placements: readonly PlannedPlacement[],
+  timeStart: string,
+  timeEnd: string,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  for (const placement of placements) {
+    const durationOk =
+      Number.isInteger(placement.durationMin) &&
+      placement.durationMin >= 15 &&
+      placement.durationMin <= MAX_DAY_SPAN_MIN &&
+      placement.durationMin % 15 === 0
+    const startOk =
+      placement.startMin === null ||
+      (Number.isInteger(placement.startMin) &&
+        placement.startMin >= 0 &&
+        placement.startMin % 15 === 0)
+    const fits =
+      placement.startMin === null ||
+      (startOk && fitInDayRange(placement.startMin, placement.durationMin, timeStart, timeEnd))
+
+    if (!durationOk || !startOk || !fits) {
+      issues.push({
+        code: 'INVALID_PLACEMENT',
+        message: 'Размещение: время кратно 15, длительность 15–1425 мин и помещается в день',
+        conflictingPlanIds: [],
+      })
+      break
+    }
+  }
   return issues
 }

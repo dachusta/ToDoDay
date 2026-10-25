@@ -16,7 +16,7 @@ import { EXPORT_VERSION, useSettingsStore } from 'src/stores/settings'
 import { useUiStore } from 'src/stores/ui'
 import { useCycleStore } from 'src/stores/cycle'
 import { useTasksStore } from 'src/stores/tasks'
-import { useDaysStore } from 'src/stores/days'
+import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useStatsStore } from 'src/stores/stats'
 import type { Task } from 'src/models/task'
 import type { CycleStateDto } from 'src/models/dayInstance'
@@ -70,7 +70,7 @@ afterEach(() => {
   }
   useCycleStore().dispose()
   useTasksStore().unsubscribe()
-  useDaysStore().unsubscribe()
+  useDayPlansStore().unsubscribe()
   useStatsStore().unsubscribe()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
@@ -90,7 +90,6 @@ const seedTask = (id: string, title: string): Task => ({
 const cycleState = (over: Partial<CycleStateDto> = {}): CycleStateDto => ({
   id: 'current',
   activeInstanceId: null,
-  lastCyclicTemplateId: null,
   manualShiftDate: null,
   lastAutoShiftDate: null,
   ...over,
@@ -100,7 +99,7 @@ const cycleState = (over: Partial<CycleStateDto> = {}): CycleStateDto => ({
 const payload = (mutate: (data: Record<string, unknown>) => void = () => {}) => {
   const data: Record<string, unknown> = {
     tasks: [seedTask('imported', 'Импортированное')],
-    dayTemplates: [],
+    dayPlans: [],
     dayInstances: [],
     cycleState: cycleState(),
     settings: {
@@ -353,7 +352,7 @@ describe('SettingsPage: «Данные» (FR-SET-4/5/10, вайрфреймы §
     scrollIntoView.mockClear()
   })
 
-  it('FR-SET-4: экспорт выгружает JSON версии 1.0, обновляет подпись и показывает тост', async () => {
+  it('FR-SET-4: экспорт выгружает JSON версии 2.0, обновляет подпись и показывает тост', async () => {
     await db.tasks.add(seedTask('t1', 'Дело'))
     const { wrapper, ui } = await mountPage()
     const settings = useSettingsStore()
@@ -371,7 +370,7 @@ describe('SettingsPage: «Данные» (FR-SET-4/5/10, вайрфреймы §
       version: string
       data: { tasks: Task[]; settings: Record<string, unknown> }
     }
-    expect(file.version).toBe('1.0')
+    expect(file.version).toBe('2.0')
     expect(file.data.tasks.map(task => task.id)).toEqual(['t1'])
     expect(file.data.settings.theme).toBe('auto')
 
