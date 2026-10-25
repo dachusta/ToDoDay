@@ -123,6 +123,7 @@ const template = (over: Partial<DayTemplate> = {}): DayTemplate => ({
   gridStepMin: 15,
   accentColor: '#2196F3',
   repeatRule: { type: 'none' },
+  plannedTaskIds: [],
   createdAt: 1,
   ...over,
 })

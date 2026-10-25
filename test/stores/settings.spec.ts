@@ -91,6 +91,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
       gridStepMin: 15,
       accentColor: '#4CAF50',
       repeatRule: { type: 'none' },
+      plannedTaskIds: ['t1'],
       createdAt: 1,
     })
     await db.dayInstances.add({
@@ -127,6 +128,9 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     )
     expect((file.data.tasks as Task[]).map(t => t.id)).toEqual(['t1'])
     expect((file.data.dayTemplates as { id: string }[]).map(t => t.id)).toEqual(['tpl'])
+    expect(
+      (file.data.dayTemplates as { plannedTaskIds: string[] }[])[0]?.plannedTaskIds,
+    ).toEqual(['t1'])
     expect((file.data.dayInstances as { id: string }[]).map(t => t.id)).toEqual(['i1'])
     expect((file.data.cycleState as CycleStateDto).id).toBe('current')
     expect(file.data.settings).toMatchObject({
@@ -171,6 +175,64 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
     // Сторы переинициализированы данными файла (контракты §5.4)
     expect(useTasksStore().tasks.map(t => t.id)).toEqual(['imported'])
     expect(useCycleStore().cycleState?.activeInstanceId).toBeNull()
+  })
+
+  it('FR-D-7: импорт старого файла без plannedTaskIds даёт пустой список', async () => {
+    const store = useSettingsStore()
+    const legacyTemplate = {
+      id: 'tpl',
+      name: 'Старый',
+      order: 0,
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      gridStepMin: 15,
+      accentColor: '#4CAF50',
+      repeatRule: { type: 'none' },
+      createdAt: 1,
+    }
+
+    const result = await store.importAll(
+      asFile(
+        payload(data => {
+          data.dayTemplates = [legacyTemplate]
+        }),
+      ),
+    )
+    expect(result.ok).toBe(true)
+    await flush()
+
+    expect((await db.dayTemplates.get('tpl'))?.plannedTaskIds).toEqual([])
+    expect(
+      useDaysStore().templates.find(t => t.id === 'tpl')?.plannedTaskIds,
+    ).toEqual([])
+  })
+
+  it('FR-D-7: импорт нового файла сохраняет plannedTaskIds', async () => {
+    const store = useSettingsStore()
+    const result = await store.importAll(
+      asFile(
+        payload(data => {
+          data.dayTemplates = [
+            {
+              id: 'tpl',
+              name: 'Новый',
+              order: 0,
+              timeStart: '08:00',
+              timeEnd: '22:00',
+              gridStepMin: 15,
+              accentColor: '#4CAF50',
+              repeatRule: { type: 'none' },
+              plannedTaskIds: ['imported'],
+              createdAt: 1,
+            },
+          ]
+        }),
+      ),
+    )
+    expect(result.ok).toBe(true)
+    await flush()
+
+    expect((await db.dayTemplates.get('tpl'))?.plannedTaskIds).toEqual(['imported'])
   })
 
   it('FR-SET-5: повреждённый JSON отклоняется без изменения данных', async () => {
@@ -266,6 +328,7 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
       gridStepMin: 15,
       accentColor: '#4CAF50',
       repeatRule: { type: 'none' },
+      plannedTaskIds: [],
       createdAt: 1,
     })
     await db.dayInstances.add({

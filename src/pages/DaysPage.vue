@@ -162,6 +162,13 @@
       @conflict="onConflict"
     />
 
+    <!-- FR-D-7: быстрый редактор списка дел без открытия всей формы шаблона -->
+    <TemplateTasksDialog
+      v-model="tasksDialogOpen"
+      :template="tasksDialogTemplate"
+      @saved="onTasksSaved"
+    />
+
     <!-- Диалог с перечнем конфликтующих шаблонов (FR-D-5, вайрфреймы §3.2). -->
     <q-dialog v-model="conflictsOpen">
       <q-card style="width: 480px; max-width: 100%">
@@ -208,6 +215,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DayTemplateCard from 'src/components/days/DayTemplateCard.vue'
 import DayTemplateForm from 'src/components/days/DayTemplateForm.vue'
+import TemplateTasksDialog from 'src/components/days/TemplateTasksDialog.vue'
 import { weekdayLabelKey } from 'src/components/days/dayRepeat'
 import type { DayTemplate, RepeatRule } from 'src/models/day'
 import { isOverlapIssue } from 'src/services/validators/day'
@@ -224,6 +232,9 @@ const loadError = ref(false)
 const formOpen = ref(false)
 const editing = ref<DayTemplate | null>(null)
 const conflictsOpen = ref(false)
+/** FR-D-7: диалог быстрого редактирования списка дел шаблона. */
+const tasksDialogOpen = ref(false)
+const tasksDialogTemplate = ref<DayTemplate | null>(null)
 /**
  * Правило, конфликты которого показывает диалог: его присылает форма при
  * отклонённом сохранении (FR-D-5). null — диалог открыт из баннера и показывает
@@ -308,6 +319,18 @@ async function onSaved() {
 }
 
 /**
+ * FR-D-7: список дел сохраняется отдельным диалогом. Если текущий день ещё
+ * виртуальный и шаблон подходит на сегодня, force пересоздаёт его — заготовки
+ * появляются сразу, как и после сохранения формы (ТЗ §2.9 правило 7а).
+ */
+async function onTasksSaved() {
+  ui.notify(t('days.tasksSaved'), 'success', undefined, 2000)
+
+  if (!cycle.initialized || !cycle.isVirtualInstance) return
+  await cycle.resolveCurrentDay({ force: true })
+}
+
+/**
  * Конфликт правил (FR-D-5): форма уже показала перечень инлайн, страница
  * добавляет снэкбар со ссылкой на диалог (вайрфреймы §3.2). В диалог уходит
  * правило отклонённого сохранения — иначе «Показать конфликты» открыло бы
@@ -329,10 +352,16 @@ function openStoredConflicts() {
   conflictsOpen.value = true
 }
 
-async function onAction(id: 'edit' | 'delete', template: DayTemplate) {
+async function onAction(id: 'edit' | 'tasks' | 'delete', template: DayTemplate) {
   if (id === 'edit') {
     editing.value = template
     formOpen.value = true
+    return
+  }
+
+  if (id === 'tasks') {
+    tasksDialogTemplate.value = template
+    tasksDialogOpen.value = true
     return
   }
 

@@ -183,6 +183,7 @@ const template = (over: Partial<DayTemplate> = {}): DayTemplate => ({
   accentColor: '#2196F3',
   // Циклический шаблон подходит любой дате: он и определяет «шаблон на завтра»
   repeatRule: { type: 'none' },
+  plannedTaskIds: [],
   createdAt: 1,
   ...over,
 })
@@ -774,6 +775,111 @@ describe('useCycleStore: resolveCurrentDay и размещение архивн�
     ])
     expect(cycle.currentInstance?.placements.map(p => p.startMin)).toEqual([60, 120])
     expect((await db.dayInstances.get(cycle.currentInstance?.id ?? ''))?.placements).toHaveLength(2)
+  })
+})
+
+// --- Подготовленный список дел шаблона (FR-D-7) ----------------------------
+
+describe('useCycleStore: дела шаблона при открытии дня (FR-D-7)', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  afterEach(() => {
+    useCycleStore().dispose()
+  })
+
+  it('resolveCurrentDay материализует дела шаблона в нераспределённые', async () => {
+    const first = await newTask('Первое')
+    const second = await newTask('Второе')
+    await db.dayTemplates.add(template({ plannedTaskIds: [second.id, first.id] }))
+
+    const cycle = useCycleStore()
+    expect((await cycle.initialize()).ok).toBe(true)
+
+    const placements = cycle.currentInstance?.placements ?? []
+    expect(placements.map(placement => placement.taskId)).toEqual([second.id, first.id])
+    expect(placements.every(placement => placement.startMin === null)).toBe(true)
+    expect(placements.every(placement => placement.status === 'pending')).toBe(true)
+    expect(placements[1]?.durationMin).toBe(30)
+    expect(placements[1]?.taskSnapshot.title).toBe('Первое')
+
+    // Заготовки действительно записаны в экземпляр, а не только в память
+    const stored = await db.dayInstances.get(cycle.currentInstance?.id ?? '')
+    expect(stored?.placements).toHaveLength(2)
+  })
+
+  it('правка списка шаблона не переписывает уже открытый день (FR-D-3)', async () => {
+    const task = await newTask('Дело')
+    const other = await newTask('Второе')
+    const tpl = template({ plannedTaskIds: [task.id] })
+    await db.dayTemplates.add(tpl)
+
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    expect(cycle.currentInstance?.placements).toHaveLength(1)
+
+    await db.dayTemplates.put({ ...tpl, plannedTaskIds: [other.id] })
+    await flush()
+    await cycle.resolveCurrentDay()
+    await flush()
+
+    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([task.id])
+  })
+
+  it('сдвиг дня сеет дела следующего шаблона', async () => {
+    const task = await newTask('После сдвига')
+    await db.dayTemplates.add(template({ plannedTaskIds: [task.id] }))
+
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    expect((await cycle.shiftToNextDay()).ok).toBe(true)
+
+    expect((await cycle.completeDay({})).ok).toBe(true)
+    expect(cycle.currentInstance?.date).toBe(addDaysISO(todayISO(), 1))
+    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([task.id])
+    expect(cycle.currentInstance?.placements[0]?.startMin).toBeNull()
+  })
+
+  it('архивные и отсутствующие дела пропускаются', async () => {
+    const alive = await newTask('Живое')
+    const archived = await newTask('Архивное')
+    expect((await useTasksStore().archiveTask(archived.id)).ok).toBe(true)
+
+    await db.dayTemplates.add(
+      template({ plannedTaskIds: [alive.id, archived.id, 'missing-task'] }),
+    )
+
+    const cycle = useCycleStore()
+    expect((await cycle.initialize()).ok).toBe(true)
+    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([
+      alive.id,
+    ])
+  })
+
+  it('force на виртуальном дне заменяет день и добавляет дела шаблона', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    expect(cycle.isVirtualInstance).toBe(true)
+    expect(cycle.currentInstance?.placements).toHaveLength(0)
+
+    const task = await newTask('Появилось')
+    const days = useDaysStore()
+    const created = await days.createTemplate({
+      name: 'Сегодняшний',
+      accentColor: '#2196F3',
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      repeatRule: { type: 'none' },
+      plannedTaskIds: [task.id],
+    })
+    expect(created.ok).toBe(true)
+
+    expect((await cycle.resolveCurrentDay({ force: true })).ok).toBe(true)
+    expect(cycle.isVirtualInstance).toBe(false)
+    expect(cycle.currentInstance?.placements.map(placement => placement.taskId)).toEqual([task.id])
   })
 })
 

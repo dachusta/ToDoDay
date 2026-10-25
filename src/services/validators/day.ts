@@ -37,6 +37,29 @@ export function overlapTemplateIds(issues: ValidationIssue[]): string[] {
 }
 
 /**
+ * FR-D-7: ссылки на дела шаблона должны существовать. Архивное дело — не ошибка:
+ * оно остаётся в шаблоне с плашкой и просто не попадает в новый день (FR-T-3).
+ * Проверка отдельная от `validateDayTemplate`, потому что требует чтения таблицы
+ * дел и выполняется в createTemplate/updateTemplate перед записью.
+ */
+export function validatePlannedTaskRefs(
+  taskIds: readonly string[],
+  existingTaskIds: ReadonlySet<string>,
+): ValidationIssue[] {
+  const missing = taskIds.filter(id => !existingTaskIds.has(id))
+  if (!missing.length) return []
+
+  return [
+    {
+      code: 'TASK_NOT_FOUND',
+      message: 'Дело шаблона не найдено',
+      conflictingTemplateIds: [],
+      taskIds: missing,
+    },
+  ]
+}
+
+/**
  * Все проблемы ввода шаблона одним массивом (контракты §2.5): сначала правило и
  * пересечения, затем имя, цвет и время. Порядок важен для UI: форма показывает
  * первую проблему у своего поля, а конфликт — отдельным блоком.

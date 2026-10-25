@@ -5,6 +5,7 @@ import { validateDayTemplate } from 'src/services/validators/day'
 import { validateNoOverlap as repeatValidateNoOverlap } from 'src/services/repeat'
 import type { DayTemplate, DayTemplateInput } from 'src/models/day'
 import type { DayInstance } from 'src/models/dayInstance'
+import type { Task } from 'src/models/task'
 import { freshPinia, flush, resetDatabase, resetStorage } from './helpers'
 
 const input = (over: Partial<DayTemplateInput> = {}): DayTemplateInput => ({
@@ -13,10 +14,23 @@ const input = (over: Partial<DayTemplateInput> = {}): DayTemplateInput => ({
   timeStart: '08:00',
   timeEnd: '22:00',
   repeatRule: { type: 'none' },
+  plannedTaskIds: [],
   ...over,
 })
 
 const byId = (list: DayTemplate[], id: string) => list.find(t => t.id === id)
+
+const seedTask = (id: string, over: Partial<Task> = {}): Task => ({
+  id,
+  title: `дело ${id}`,
+  priority: 'medium',
+  color: '#2196F3',
+  durationMin: 30,
+  archived: false,
+  createdAt: 1,
+  updatedAt: 1,
+  ...over,
+})
 
 describe('useDaysStore: гэпы скаффолд §6', () => {
   beforeEach(async () => {
@@ -114,6 +128,7 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
       gridStepMin: 15,
       accentColor: '#4CAF50',
       repeatRule: { type: 'weekdays', weekdays: [0] },
+      plannedTaskIds: [],
       createdAt: 1,
     })
     await store.refresh()
@@ -160,6 +175,7 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
       gridStepMin: 15,
       accentColor: '#4CAF50',
       repeatRule: { type: 'none' },
+      plannedTaskIds: [],
       createdAt: 1,
     })
     await flush()
@@ -175,6 +191,7 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
       gridStepMin: 15,
       accentColor: '#4CAF50',
       repeatRule: { type: 'none' },
+      plannedTaskIds: [],
       createdAt: 2,
     })
     await flush()
@@ -185,8 +202,8 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
     const store = useDaysStore()
     await store.loadAll()
     await db.dayTemplates.bulkAdd([
-      { id: 'b', name: 'B', order: 1, timeStart: '08:00', timeEnd: '22:00', gridStepMin: 15, accentColor: '#4CAF50', repeatRule: { type: 'none' }, createdAt: 1 },
-      { id: 'a', name: 'A', order: 0, timeStart: '08:00', timeEnd: '22:00', gridStepMin: 15, accentColor: '#4CAF50', repeatRule: { type: 'none' }, createdAt: 1 },
+      { id: 'b', name: 'B', order: 1, timeStart: '08:00', timeEnd: '22:00', gridStepMin: 15, accentColor: '#4CAF50', repeatRule: { type: 'none' }, plannedTaskIds: [], createdAt: 1 },
+      { id: 'a', name: 'A', order: 0, timeStart: '08:00', timeEnd: '22:00', gridStepMin: 15, accentColor: '#4CAF50', repeatRule: { type: 'none' }, plannedTaskIds: [], createdAt: 1 },
     ])
     await flush()
     expect(store.orderedTemplates.map(t => t.name)).toEqual(['A', 'B'])
@@ -415,5 +432,81 @@ describe('useDaysStore: гэпы скаффолд §6', () => {
 
     expect(store.orderedTemplates.map(t => t.name)).toEqual(['A', 'B'])
     expect(store.orderedTemplates.map(t => t.order)).toEqual([0, 1])
+  })
+
+  it('FR-D-7: create/updateTemplate сохраняют список дел шаблона', async () => {
+    const store = useDaysStore()
+    await db.tasks.bulkAdd([seedTask('a'), seedTask('b')])
+
+    const created = await store.createTemplate(
+      input({ name: 'Рабочий', plannedTaskIds: ['b', 'a', 'b'] }),
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    // Дубли убираются при сохранении, порядок первого вхождения сохраняется
+    expect(created.data.plannedTaskIds).toEqual(['b', 'a'])
+    expect((await db.dayTemplates.get(created.data.id))?.plannedTaskIds).toEqual(['b', 'a'])
+
+    const updated = await store.updateTemplate(created.data.id, { plannedTaskIds: ['a'] })
+    expect(updated.ok).toBe(true)
+    if (!updated.ok) return
+    expect(updated.data.plannedTaskIds).toEqual(['a'])
+    expect(store.templateById(created.data.id)?.plannedTaskIds).toEqual(['a'])
+  })
+
+  it('FR-D-7: сохранение с отсутствующей ссылкой отклоняется', async () => {
+    const store = useDaysStore()
+    await db.tasks.add(seedTask('a'))
+
+    const created = await store.createTemplate(
+      input({ name: 'Рабочий', plannedTaskIds: ['a', 'gone'] }),
+    )
+    expect(created.ok).toBe(false)
+    if (!created.ok) expect(created.error.code).toBe('VALIDATION_ERROR')
+    expect(store.lastValidationErrors.map(issue => issue.code)).toEqual(['TASK_NOT_FOUND'])
+    expect(store.lastValidationErrors[0]?.taskIds).toEqual(['gone'])
+    expect(store.templatesCount).toBe(0)
+
+    // Уже сохранённый шаблон тоже нельзя оставить с битой ссылкой
+    const valid = await store.createTemplate(input({ name: 'Второй', plannedTaskIds: ['a'] }))
+    if (!valid.ok) return
+    const broken = await store.updateTemplate(valid.data.id, { plannedTaskIds: ['a', 'gone'] })
+    expect(broken.ok).toBe(false)
+    expect(store.lastValidationErrors.map(issue => issue.code)).toEqual(['TASK_NOT_FOUND'])
+    expect(store.templateById(valid.data.id)?.plannedTaskIds).toEqual(['a'])
+  })
+
+  it('FR-D-7: архивное дело разрешено в шаблоне и не блокирует сохранение', async () => {
+    const store = useDaysStore()
+    await db.tasks.add(seedTask('archived', { archived: true }))
+
+    const created = await store.createTemplate(
+      input({ name: 'С архивным', plannedTaskIds: ['archived'] }),
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    expect(created.data.plannedTaskIds).toEqual(['archived'])
+
+    // Правка другого поля не требует чистить архивную ссылку
+    expect((await store.updateTemplate(created.data.id, { name: 'Переименован' })).ok).toBe(true)
+  })
+
+  it('FR-D-7: запись без plannedTaskIds читается как пустой список', async () => {
+    const store = useDaysStore()
+    await db.dayTemplates.add({
+      id: 'legacy',
+      name: 'Старая запись',
+      order: 0,
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      gridStepMin: 15,
+      accentColor: '#4CAF50',
+      repeatRule: { type: 'none' },
+      createdAt: 1,
+    } as unknown as DayTemplate)
+
+    expect((await store.refresh()).ok).toBe(true)
+    expect(store.templateById('legacy')?.plannedTaskIds).toEqual([])
   })
 })

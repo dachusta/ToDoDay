@@ -218,6 +218,25 @@
         >
           {{ t('days.cyclicUnreachable') }}
         </div>
+
+        <q-separator class="q-my-md" />
+
+        <!-- FR-D-7: подготовленный список дел шаблона -->
+        <div class="text-caption text-grey-7">
+          {{ t('days.tasksSection') }}
+        </div>
+        <TemplateTaskList
+          v-model="form.plannedTaskIds"
+          class="q-mt-xs"
+        />
+        <div
+          v-if="hasIssue('TASK_NOT_FOUND')"
+          class="text-negative text-caption q-mt-xs"
+          role="alert"
+          data-test="error-tasks"
+        >
+          {{ t('days.validation.taskMissing') }}
+        </div>
       </q-card-section>
 
       <q-separator />
@@ -247,6 +266,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
 import ColorPicker from 'src/components/common/ColorPicker.vue'
+import TemplateTaskList from './TemplateTaskList.vue'
 import { MONTHDAYS, weekdayLabelKey, weekdayOrder } from './dayRepeat'
 import type { DayTemplate, DayTemplateInput, RepeatRule, ValidationIssue } from 'src/models/day'
 import type { RepeatRuleType } from 'src/models/enums'
@@ -306,6 +326,8 @@ const form = reactive<DayTemplateInput>({
   // стирается, а лишние для type поля отбрасывает normalizeRule при сохранении
   // (FR-D-1) — ровно тот случай, который проверяет приёмка ТЗ §9 «По дням».
   repeatRule: { type: 'none', weekdays: [], monthdays: [] },
+  // FR-D-7: подготовленный список дел шаблона (id дел в порядке показа)
+  plannedTaskIds: [],
 })
 
 /** Проблемы последней неудачной попытки сохранения — из store.lastValidationErrors. */
@@ -330,6 +352,7 @@ watch(
         weekdays: [...(source.repeatRule.weekdays ?? [])],
         monthdays: [...(source.repeatRule.monthdays ?? [])],
       }
+      form.plannedTaskIds = [...(source.plannedTaskIds ?? [])]
       return
     }
     form.name = ''
@@ -338,6 +361,7 @@ watch(
     form.timeStart = DEFAULT_TIME_START
     form.timeEnd = DEFAULT_TIME_END
     form.repeatRule = { type: 'none', weekdays: [], monthdays: [] }
+    form.plannedTaskIds = []
   },
   { immediate: true },
 )
@@ -354,6 +378,13 @@ function clearIssue(code: ValidationIssue['code']): void {
   if (!hasIssue(code)) return
   issues.value = issues.value.filter(issue => issue.code !== code)
 }
+
+// Список дел правится компонентом целиком: любое изменение снимает ошибку
+// «дело не найдено», как и правка обычного поля.
+watch(
+  () => form.plannedTaskIds,
+  () => clearIssue('TASK_NOT_FOUND'),
+)
 
 function setRuleType(value: RepeatRuleType): void {
   form.repeatRule.type = value
@@ -458,6 +489,7 @@ async function save(): Promise<void> {
       weekdays: [...(form.repeatRule.weekdays ?? [])],
       monthdays: [...(form.repeatRule.monthdays ?? [])],
     },
+    plannedTaskIds: [...form.plannedTaskIds],
   }
 
   const result = props.template

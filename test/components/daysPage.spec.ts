@@ -9,6 +9,7 @@ import { i18n } from 'src/boot/i18n'
 import { err } from 'src/models/common'
 import { useDaysStore } from 'src/stores/days'
 import { useCycleStore } from 'src/stores/cycle'
+import { useTasksStore } from 'src/stores/tasks'
 import { useUiStore } from 'src/stores/ui'
 import type { DayTemplate } from 'src/models/day'
 import type { DayInstance } from 'src/models/dayInstance'
@@ -64,6 +65,7 @@ const template = (over: Partial<DayTemplate> & { id: string }): DayTemplate => (
   gridStepMin: 15,
   accentColor: '#2196F3',
   repeatRule: { type: 'none' },
+  plannedTaskIds: [],
   createdAt: 1,
   ...over,
 })
@@ -244,6 +246,66 @@ describe('DaysPage: список шаблонов (вайрфреймы §3.1, F
       '10:00–20:00',
     ])
     expect(wrapper.find('[data-test="count"]').text()).toBe(i18n.global.t('days.count', { n: 4 }))
+  })
+
+  it('FR-D-7: показывает число дел и быстро правит список из меню', async () => {
+    await db.tasks.bulkAdd([
+      {
+        id: 'a',
+        title: 'Первое',
+        priority: 'medium',
+        color: '#2196F3',
+        durationMin: 30,
+        archived: false,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: 'b',
+        title: 'Второе',
+        priority: 'high',
+        color: '#4CAF50',
+        durationMin: 45,
+        archived: false,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ])
+
+    const created = await useDaysStore().createTemplate({
+      name: 'С делами',
+      accentColor: '#2196F3',
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      repeatRule: { type: 'none' },
+      plannedTaskIds: ['a', 'b'],
+    })
+    if (!created.ok) throw new Error('шаблон не создан')
+
+    const wrapper = await mountPage()
+    expect(wrapper.find('[data-test="tasks-count"]').text()).toBe(
+      i18n.global.t('days.tasksCount', { n: 2 }),
+    )
+
+    await openMenu(wrapper)
+    await click($('[data-action="tasks"]'))
+    await waitUntil(() => useTasksStore().initialized)
+    await flush()
+
+    expect($('[data-test="template-tasks"]')).not.toBeNull()
+    await click($('[data-test="template-tasks"] [data-task="a"] [data-test="task-remove"]'))
+    await flush()
+    await click($('[data-test="tasks-save"]'))
+    await flush()
+    for (let i = 0; i < 50; i++) {
+      await flush(20)
+      if ((await db.dayTemplates.get(created.data.id))?.plannedTaskIds.length === 1) break
+    }
+
+    expect((await db.dayTemplates.get(created.data.id))?.plannedTaskIds).toEqual(['b'])
+    expect(wrapper.find('[data-test="tasks-count"]').text()).toBe(
+      i18n.global.t('days.tasksCount', { n: 1 }),
+    )
   })
 
   it('перетаскивание за ручку пересчитывает order и мгновенно меняет цикл (FR-D-2)', async () => {

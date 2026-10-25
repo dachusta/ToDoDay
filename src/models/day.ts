@@ -17,6 +17,12 @@ export interface DayTemplate {
   gridStepMin: 15
   accentColor: string
   repeatRule: RepeatRule
+  /**
+   * Подготовленный список дел шаблона (FR-D-7): порядок показа и материализации.
+   * Хранятся только ссылки на Task; длительность и снимок берутся в момент
+   * открытия дня. Дублей нет — это обеспечивает normalizePlannedTaskIds.
+   */
+  plannedTaskIds: string[]
   createdAt: number
 }
 
@@ -26,6 +32,7 @@ export interface DayTemplateInput {
   timeStart: string
   timeEnd: string
   repeatRule: RepeatRule
+  plannedTaskIds: string[]
 }
 
 // Единый тип проблемы валидации шаблона. Возвращается repeat.validateRule /
@@ -40,7 +47,10 @@ export interface ValidationIssue {
     | 'INVALID_COLOR'
     | 'EMPTY_RULE'
     | 'INVALID_RULE'
+    | 'TASK_NOT_FOUND'
   message: string
   conflictingTemplateIds: string[]
   values?: number[]
+  /** Ссылки на отсутствующие дела шаблона (FR-D-7, код TASK_NOT_FOUND). */
+  taskIds?: string[]
 }

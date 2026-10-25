@@ -8,9 +8,11 @@ import { resolveDayForDate, resolveShiftTargets } from 'src/services/repeat'
 import { detectConflicts, fitInDay, isValidStartMin } from 'src/services/scheduler'
 import { minutesOfDay, todayISO } from 'src/services/dates'
 import type { DayInstance, Placement, CycleStateDto } from 'src/models/dayInstance'
+import type { DayTemplate } from 'src/models/day'
 import type { PlacementStatus, ShiftMode } from 'src/models/enums'
 import type { Slot, Conflict } from 'src/models/cycle'
 import { ok, err, type Result } from 'src/models/common'
+import { buildPlannedPlacements } from 'src/services/templateTasks'
 import { useTasksStore, onTaskArchived } from './tasks'
 import { useDaysStore, onCyclicPointerRewritten } from './days'
 import { useSettingsStore } from './settings'
@@ -264,6 +266,28 @@ export const useCycleStore = defineStore('cycle', () => {
   }
 
   /**
+   * FR-D-7: экземпляр дня по шаблону. Дела шаблона становятся размещениями без
+   * слота («Нераспределённые», FR-B-4), снимок и длительность берутся с дела на
+   * момент создания экземпляра (FR-T-2). Вызывается только при создании дня:
+   * правка шаблона уже открытый экземпляр не меняет (FR-D-3).
+   */
+  function buildDayInstance(template: DayTemplate | null, date: string): DayInstance {
+    const now = Date.now()
+    return {
+      id: crypto.randomUUID(),
+      templateId: template?.id ?? null,
+      date,
+      status: 'active',
+      placements: template
+        ? buildPlannedPlacements(template, useTasksStore().tasks, now)
+        : [],
+      timeStart: template?.timeStart ?? '08:00',
+      timeEnd: template?.timeEnd ?? '22:00',
+      createdAt: now,
+    }
+  }
+
+  /**
    * FR-C-1 + FR-D-6. Создаёт день на сегодня: по шаблону (сразу в Dexie) либо
    * виртуальный пустой день (только в памяти, activeInstanceId = null).
    * force пересчитывает виртуальный день, когда на сегодня появился шаблон.
@@ -286,16 +310,18 @@ export const useCycleStore = defineStore('cycle', () => {
       cycleState.value?.lastCyclicTemplateId ?? null,
     )
 
-    const inst: DayInstance = {
-      id: crypto.randomUUID(),
-      templateId: tpl?.id ?? null,
-      date: today,
-      status: 'active',
-      placements: [],
-      timeStart: tpl?.timeStart ?? '08:00',
-      timeEnd: tpl?.timeEnd ?? '22:00',
-      createdAt: Date.now(),
+    // FR-D-7: для материализации дел шаблона нужен загруженный список дел.
+    // Обычно initialize уже это сделал; прямой заход на /days и тесты стора
+    // могут прийти раньше — догружаем сами, иначе день молча открылся бы без дел.
+    const tasksStore = useTasksStore()
+    if (tpl && !tasksStore.initialized) {
+      const loaded = await tasksStore.loadAll()
+      if (!loaded.ok) {
+        return err(loaded.error.code, loaded.error.message, loaded.error.details)
+      }
     }
+
+    const inst: DayInstance = buildDayInstance(tpl, today)
 
     try {
       if (tpl) {
@@ -328,16 +354,7 @@ export const useCycleStore = defineStore('cycle', () => {
     // 'early' → date и шаблон на завтра, 'midnight'/'overdue' → оба на сегодня.
     const { targetDate, templateDate } = resolveShiftTargets(finishedDate, today, mode)
     const tpl = resolveDayForDate(templateDate, useDaysStore().orderedTemplates, nextLastCyclicId)
-    return {
-      id: crypto.randomUUID(),
-      templateId: tpl?.id ?? null,
-      date: targetDate,
-      status: 'active',
-      placements: [],
-      timeStart: tpl?.timeStart ?? '08:00',
-      timeEnd: tpl?.timeEnd ?? '22:00',
-      createdAt: Date.now(),
-    }
+    return buildDayInstance(tpl, targetDate)
   }
 
   async function completeDay(

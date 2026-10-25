@@ -158,7 +158,7 @@ interface TaskInput {
 | updateTask | db.tasks.update(...) + updatedAt. Правка durationMin допустима и не трогает снимки Placement.durationMin (FR-T-2); существующие размещения сохраняют свою длительность. Название, цвет и приоритет ведут себя так же: `Placement.taskSnapshot` не пересчитывается, доска показывает прежнюю подпись, новые размещения берут новую |
 | archiveTask | Если дело стоит в активном DayInstance с status='pending' — useCycleStore ставит skipped (через emitter/событие). done не меняется (FR-T-3). Если запись в БД прошла, а emitter нет, следующий initialize ещё раз переводит такие pending в skipped |
 | unarchiveTask | archived = false; размещения и история не восстанавливаются |
-| deleteTask | Hard delete (FR-T-6). Разрешено только для архивных: иначе CONSTRAINT_VIOLATION. История хранит taskId; подписи остаются в taskSnapshot размещения, поэтому статистика не ломается |
+| deleteTask | Hard delete (FR-T-6). Разрешено только для архивных: иначе CONSTRAINT_VIOLATION. В той же транзакции (`db.tasks` + `db.dayTemplates`) ссылка вычищается из `plannedTaskIds` всех шаблонов (FR-D-7); состояние daysStore обновляет liveQuery. История хранит taskId; подписи остаются в taskSnapshot размещения, поэтому статистика не ломается |
 | duplicateTask | «<Название>» + i18n `tasks.copySuffix` с обрезкой базы под лимит 100 от длины суффикса текущей локали, новый id, createdAt = now, archived = false |
 
 Важно (введём явно): в Placement хранится снимок taskSnapshot: `{ title, color, priority }` на момент размещения. Это позволяет удалять дела без потери истории статистики. Снимок — не кэш «на минуту»: он заморожен вместе с `durationMin`, и `updateTask` его не трогает (FR-T-2). Обновляет снимок только `replacePlacement`, и то данными нового дела (FR-B-7). Доска поэтому показывает подпись и цвет на момент размещения, а не текущие значения дела.
@@ -238,10 +238,11 @@ interface DayTemplateInput {
   timeStart: string;          // 'HH:mm'
   timeEnd: string;            // parseClock: HH:mm, минуты 00/15/30/45, > timeStart, длина 60..1425
   repeatRule: RepeatRule;     // { type, weekdays?, monthdays? }
+  plannedTaskIds: string[];   // FR-D-7: ссылки на дела в порядке показа; нормализуются
 }
 ```
 
-Вход нормализуется перед сохранением: `repeatRule = repeat.normalizeRule(input.repeatRule)`. Поля, не относящиеся к выбранному `type`, отбрасываются, значения дедуплицируются и сортируются — поэтому состояние «type = weekdays, но monthdays тоже заполнен» не может попасть ни в БД, ни в detect/resolve. Нормализация не заменяет валидацию: значения вне диапазона отклоняются (§2.5), а не «подчищаются».
+Вход нормализуется перед сохранением: `repeatRule = repeat.normalizeRule(input.repeatRule)`. Поля, не относящиеся к выбранному `type`, отбрасываются, значения дедуплицируются и сортируются — поэтому состояние «type = weekdays, но monthdays тоже заполнен» не может попасть ни в БД, ни в detect/resolve. Нормализация не заменяет валидацию: значения вне диапазона отклоняются (§2.5), а не «подчищаются». `plannedTaskIds` нормализуется `normalizePlannedTaskIds` (только непустые строки, без дублей, порядок первого вхождения); пустой список допустим.
 
 ### 2.5 Правила валидации (детально)
 
@@ -258,6 +259,9 @@ interface DayTemplateInput {
 | Имя | 1..50 после trim | INVALID_NAME |
 | Цвет | `/^#[0-9A-F]{6}$/i` | INVALID_COLOR |
 | Время | `dates.parseClock('HH:mm')` не null (часы 00–23, минуты 00/15/30/45), timeEnd > timeStart, длина ≥ 60 и ≤ 1425 мин | INVALID_TIME |
+| Ссылки на дела | каждая `plannedTaskIds` существует в `db.tasks`; архивная — допустима | TASK_NOT_FOUND (`taskIds` — отсутствующие) |
+
+Проверка ссылок выполняется в `createTemplate`/`updateTemplate` после синхронной `validate()`: `db.tasks.bulkGet(ids)` → `validatePlannedTaskRefs(ids, existingIds)`. Поэтому сохранение не зависит от того, загружен ли `useTasksStore`, а архивное дело не блокирует правку (оно пропускается при материализации дня, FR-D-7). `TASK_NOT_FOUND` — не `CONFLICT`: возвращается `VALIDATION_ERROR` с `details.issue`.
 
 weekdays и monthdays между собой не конфликтуют — приоритет у monthdays (FR-C-1). Маппинг в Result у createTemplate/updateTemplate: если среди issues есть OVERLAP_* — `CONFLICT` с `details.conflictingTemplateIds`; иначе первая не-overlap проблема → `VALIDATION_ERROR` с `details.issue`; сохранение не выполняется ни в одном из случаев.
 
@@ -277,14 +281,15 @@ weekdays и monthdays между собой не конфликтуют — пр
 | Action | Side effect |
 | --- | --- |
 | deleteTemplate | Проверка: если есть активный DayInstance с этим templateId — вернуть CONSTRAINT_VIOLATION с details: { instanceId }. Иначе удалить и в той же транзакции уплотнить `order` оставшихся до `0..n-1` (FR-C-2). Если `lastCyclicTemplateId` равен удаляемому id, в этой же транзакции указатель сдвигается на предыдущий циклический (наибольший order меньше удалённого, до уплотнения) или становится `null`. Память cycleStore обновляет emitter, не импорт days → cycle. Завершённые экземпляры не блокируют удаление и остаются с этим templateId: снимка имени шаблона в модели нет, UI показывает «Шаблон удалён» (ТЗ FR-D-4) |
-| createTemplate / updateTemplate | Валидация → при конфликте — не сохранять, вернуть CONFLICT с conflictingTemplateIds; иначе VALIDATION_ERROR с details.issue. Перед записью правило нормализуется (repeat.normalizeRule) |
+| createTemplate / updateTemplate | Валидация → при конфликте — не сохранять, вернуть CONFLICT с conflictingTemplateIds; иначе VALIDATION_ERROR с details.issue. Перед записью правило нормализуется (repeat.normalizeRule), а `plannedTaskIds` — `normalizePlannedTaskIds`. Ссылки проверяются по `db.tasks.bulkGet` (FR-D-7): отсутствующая → VALIDATION_ERROR/TASK_NOT_FOUND, архивная разрешена. `updateTemplate` без `plannedTaskIds` в патче сохраняет текущий список |
 | reorder | Не пересчитывает уже материализованные экземпляры. UI вызывает этот action при смене порядка, а DaysPage после создания/правки шаблона дополнительно вызывает cycleStore.resolveCurrentDay({ force: true }), если текущий день виртуальный (ТЗ FR-D-6) |
+| deleteTask (tasksStore) | В транзакции `db.tasks` + `db.dayTemplates` вычищает id из `plannedTaskIds` всех шаблонов (FR-D-7) |
 
 ### 2.8 Взаимодействие
 
-- Читает: db.dayTemplates.
+- Читает: db.dayTemplates, db.tasks (только `bulkGet` для проверки ссылок FR-D-7).
 
-- Используется: DaysPage, DayTemplateForm, useCycleStore.
+- Используется: DaysPage, DayTemplateForm, TemplateTasksDialog, useCycleStore.
 
 ## 3. useCycleStore
 Сердце приложения. Ответственность: разрешение текущего дня, материализация DayInstance, ручной сдвиг, завершение, автопереход.
@@ -458,8 +463,11 @@ cur = currentInstance
 Выйти с ok(cur), если cur.date >= date и не (opts.force && cur виртуальный).
 1. template = repeat.resolveDayForDate(date, templates, lastCyclicTemplateId)
 2. Собрать DayInstance { id: uuid, date, templateId: template?.id ?? null, status: 'active',
-   placements: [], timeStart: template?.timeStart ?? '08:00', timeEnd: template?.timeEnd ?? '22:00',
+   placements: template ? buildPlannedPlacements(template, tasksStore.tasks) : [],
+   timeStart: template?.timeStart ?? '08:00', timeEnd: template?.timeEnd ?? '22:00',
    createdAt: now }
+   // FR-D-7: дела шаблона сразу становятся размещениями без слота (startMin: null),
+   // снимок и durationMin берутся с дела; архивные и отсутствующие пропускаются.
 3. Если template есть — материализовать сразу: транзакция add(instance) + cycleState.activeInstanceId = id.
    Если шаблона нет — это виртуальный пустой день (FR-D-6): в Dexie НЕ писать,
    cycleState.activeInstanceId = null.
@@ -471,6 +479,7 @@ cur = currentInstance
 - `force: true` пересчитывает только виртуальный день (например, после создания шаблона на сегодня, ТЗ §2.9 правило 7а). Сохранённый экземпляр с размещениями force не пересоздаёт — защита от потери размещений.
 - Условие `cur.date >= date`, а не `===`: экземпляр, датированный будущим (следствие раннего сдвига), остаётся текущим и после перезапуска до полуночи — второй экземпляр на сегодня не создаётся (ТЗ §2.9, §2.10 сценарий 9).
 - Шаги выбора шаблона — чистая функция repeat.resolveDayForDate (ТЗ §4.4, тесты в §9). Числа 29–31 в коротком месяце не совпадают с monthday и проваливаются дальше по приоритету FR-C-1.
+- FR-D-7: если шаблон найден, а `tasksStore` ещё не инициализирован, `resolveCurrentDay` догружает дела (`loadAll`); ошибка чтения → `DB_ERROR`. Без этого день молча открылся бы без заготовок. `buildShiftedInstance` использует тот же `buildDayInstance`; к моменту завершения дня задачи уже загружены `initialize`.
 
 #### shiftToNextDay() — FR-C-3
 
@@ -1127,6 +1136,7 @@ notify оборачивает Quasar Notify. `timeout` — длительнос�
 - `test/stores/settings.spec.ts` (дополнен) — сбой очистки localStorage даёт `STORAGE_ERROR`/`SETTINGS_CLEAR` и не откатывает уже выполненную очистку Dexie; сбой хранилища при повторной записи настроек (`retrySettingsWrite`) возвращает `STORAGE_ERROR`/`SETTINGS_WRITE` и оставляет `pendingSettings`; повторный вход в операцию при `busy` отклоняется `CONSTRAINT_VIOLATION`.
 - `test/components/confirmDialog.spec.ts` — очистка после теста снимает хост и дожидается исчезновения портала QDialog: иначе таймер transition-хука Quasar срабатывает после закрытия окружения jsdom и прогон падает на «Unhandled Errors: document is not defined» (критерий «все тесты контрактов §9 зелёные» включает отсутствие необработанных ошибок).
 - `test/vitest/setup.ts` / `vitest.config.ts` — прогон с покрытием ограничен четырьмя воркерами и таймаутом 30 с на тест: компонентные тесты монтируют Quasar-каркас и Dexie-транзакции, и без этого старт 31 воркера с инструментацией покрытия не оставлял CPU самим тестам. Сброс ширины окна в `afterEach` и переходы на ожидание условий вместо фиксированных пауз — там же, где тест зависел от времени.
+- `test/services/templateTasks.spec.ts` (новый, ревизия 1.20.0) — FR-D-7: `normalizePlannedTaskIds` (непустые строки, дубли, мусор, не-массив), `normalizeDayTemplate` достраивает поле старой записи; `buildPlannedPlacements` — порядок шаблона, `startMin: null`, `status: 'pending'`, снимок и `durationMin` из дела, пропуск архивных и отсутствующих, пустой список и нормализация дублей. Дополнены `test/services/dayValidator.spec.ts` (`TASK_NOT_FOUND`, архивная ссылка не ошибка), `test/stores/days.spec.ts` (сохранение и нормализация списка, отказ с отсутствующей ссылкой, архив разрешён, чтение старой записи), `test/stores/cycle.spec.ts` (материализация при `resolveCurrentDay`, `force` на виртуальном дне, сдвиг, архив/отсутствие, отсутствие ретроактивных изменений), `test/stores/tasks.spec.ts` (hard delete чистит ссылки, архивация — нет), `test/stores/settings.spec.ts` (экспорт с полем, импорт старого и нового файла), `test/components/dayTemplateForm.spec.ts` (добавление/перестановка/удаление, ошибка отсутствующей ссылки) и `test/components/daysPage.spec.ts` (счётчик на карточке, диалог «Дела шаблона»).
 
 Тесты этапа 10 (ревизия 1.19.0, приложение Ш журнала) — критерий готовности этапа ТЗ §8.2: «весь чек-лист ТЗ §9 отмечен; сборка PWA успешна; FCP < 1.5 c на 3G; все строки интерфейса из i18n». Построчный разбор критериев — в [Приёмка-ToDoDay.md](Приёмка-ToDoDay.md); ниже — что именно проверяет каждый новый файл.
 
@@ -1136,4 +1146,4 @@ notify оборачивает Quasar Notify. `timeout` — длительнос�
 - `test/i18n/completeness.spec.ts` — полнота i18n по источникам: наборы ключей ru и en совпадают и не содержат пустых строк; каждый литеральный ключ `t('...')` есть в обоих словарях и отдаёт непустой перевод в обеих локалях; ключи, собранные кодом (`priorities.*`, `placementStatusKey`, дескрипторы `durationDescriptor`/`summaryDescriptor`/`historyRowDescriptor` — шесть форм истории, `labelKey` меню и действий, карта `errors.*` по всем девяти кодам `ErrorCode`), разрешаются; в шаблонах нет русских текстовых узлов и литеральных подписей (кроме символов `·`, `—`, `▶`, `✓`, `✗`, `⚠`); русские литералы скриптов — только сообщения `Result` и `console.warn` из закрытого списка НФТ ТЗ §7 (перечислены в тесте); словари — единственное место переводов.
 - `test/pwa/offline.spec.ts` — собранный `dist/pwa`: `index.html` содержит стартовый экран с inline-стилем, не содержит блокирующего внешнего CSS и подключает приложение модулем; критическая цепочка (HTML + CSS в gzip) укладывается в бюджет с печатью оценки времени по профилю Slow 3G; манифест предкеша сервис-воркера покрывает все собранные JS/CSS и шрифты (и каждая его запись существует на диске); `sw.js` содержит `NavigationRoute` на `index.html`, `skipWaiting`, `clientsClaim` и предкеш манифеста приложения. Если сборки нет, тесты пропускаются: без `pnpm build:pwa` проверять нечего.
 
-Журнал правок (приложения А–Ш) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).
+Журнал правок (приложения А–Щ) — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md).

@@ -9,7 +9,9 @@ import {
   isOverlapIssue as isOverlap,
   overlapTemplateIds,
   validateDayTemplate,
+  validatePlannedTaskRefs,
 } from 'src/services/validators/day'
+import { normalizeDayTemplate, normalizePlannedTaskIds } from 'src/services/templateTasks'
 
 // Как onTaskArchived: daysStore не импортирует cycleStore.
 type CyclicPointerHandler = (nextId: string | null) => void
@@ -113,7 +115,7 @@ export const useDaysStore = defineStore('days', () => {
     if (subscription) return
     const sub = liveQuery(() => db.dayTemplates.toArray()).subscribe({
       next: rows => {
-        templates.value = rows
+        templates.value = rows.map(normalizeDayTemplate)
         initialized.value = true
       },
       error: () => {
@@ -133,7 +135,7 @@ export const useDaysStore = defineStore('days', () => {
   async function refresh(): Promise<Result<void>> {
     loading.value = true
     try {
-      templates.value = await db.dayTemplates.toArray()
+      templates.value = (await db.dayTemplates.toArray()).map(normalizeDayTemplate)
       initialized.value = true
       return ok(undefined)
     } catch (e) {
@@ -183,14 +185,42 @@ export const useDaysStore = defineStore('days', () => {
     return null
   }
 
+  /**
+   * FR-D-7: ссылки на дела проверяются по таблице, а не по стору задач. Так
+   * сохранение шаблона не зависит от того, успел ли загрузиться useTasksStore
+   * (например, при прямом заходе на /days).
+   */
+  async function plannedTaskRefIssues(taskIds: string[]): Promise<ValidationIssue[]> {
+    if (!taskIds.length) return []
+
+    const rows = await db.tasks.bulkGet(taskIds)
+    const existing = new Set<string>()
+    for (const row of rows) {
+      if (row) existing.add(row.id)
+    }
+    return validatePlannedTaskRefs(taskIds, existing)
+  }
+
   async function createTemplate(input: DayTemplateInput): Promise<Result<DayTemplate>> {
     // Каждая новая операция начинается с чистого списка ошибок (контракты §2.1)
     lastValidationErrors.value = []
-    const issues = validate(input)
+    const plannedTaskIds = normalizePlannedTaskIds(input.plannedTaskIds)
+    const issues = validate({ ...input, plannedTaskIds })
     const invalid = inputError(issues)
     if (invalid) {
       lastValidationErrors.value = issues
       return invalid
+    }
+
+    let refIssues: ValidationIssue[]
+    try {
+      refIssues = await plannedTaskRefIssues(plannedTaskIds)
+    } catch (e) {
+      return err('DB_ERROR', 'Не удалось проверить дела шаблона', e)
+    }
+    if (refIssues.length) {
+      lastValidationErrors.value = refIssues
+      return inputError(refIssues) ?? err('VALIDATION_ERROR', refIssues[0]?.message ?? '')
     }
 
     const tpl: DayTemplate = {
@@ -202,6 +232,7 @@ export const useDaysStore = defineStore('days', () => {
       gridStepMin: 15,
       accentColor: input.accentColor,
       repeatRule: normalizeRule(input.repeatRule), // FR-D-1: лишние для type поля не сохраняем
+      plannedTaskIds,
       createdAt: Date.now(),
     }
     try {
@@ -224,7 +255,15 @@ export const useDaysStore = defineStore('days', () => {
     const cur = templateById(id)
     if (!cur) return err('NOT_FOUND', 'Шаблон не найден')
 
-    const merged: DayTemplate = { ...cur, ...patch, name: patch.name?.trim() ?? cur.name }
+    const plannedTaskIds = normalizePlannedTaskIds(
+      patch.plannedTaskIds === undefined ? cur.plannedTaskIds : patch.plannedTaskIds,
+    )
+    const merged: DayTemplate = {
+      ...cur,
+      ...patch,
+      name: patch.name?.trim() ?? cur.name,
+      plannedTaskIds,
+    }
     merged.repeatRule = normalizeRule(merged.repeatRule)
 
     const issues = validate(merged, id)
@@ -232,6 +271,17 @@ export const useDaysStore = defineStore('days', () => {
     if (invalid) {
       lastValidationErrors.value = issues
       return invalid
+    }
+
+    let refIssues: ValidationIssue[]
+    try {
+      refIssues = await plannedTaskRefIssues(plannedTaskIds)
+    } catch (e) {
+      return err('DB_ERROR', 'Не удалось проверить дела шаблона', e)
+    }
+    if (refIssues.length) {
+      lastValidationErrors.value = refIssues
+      return inputError(refIssues) ?? err('VALIDATION_ERROR', refIssues[0]?.message ?? '')
     }
 
     try {

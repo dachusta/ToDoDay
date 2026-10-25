@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Скаффолд](Скаффолд-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Документ закрывает этап 10 плана реализации MVP (ТЗ §8.2): **все критерии приёмки ТЗ §9 отмечены**. Каждая строка — критерий, чем он обеспечен в коде и чем проверен. Составлен в ревизии 1.19.0 (журнал, приложение Ш); источник критериев — [ТЗ §9](ТЗ-ToDoDay.md), там же они отмечены `[x]`.
+Документ закрывает этап 10 плана реализации MVP (ТЗ §8.2) и доработку FR-D-7 ревизии 1.20.0: **все критерии приёмки ТЗ §9 отмечены**. Каждая строка — критерий, чем он обеспечен в коде и чем проверен. Составлен в ревизии 1.19.0 (журнал, приложение Ш), дополнен в 1.20.0 (приложение Щ); источник критериев — [ТЗ §9](ТЗ-ToDoDay.md), там же они отмечены `[x]`.
 
 | Пункт | Критерий                                                                                                                                                          | Чем обеспечен                                                                                                            | Чем проверен                                                                                                    |
 | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
@@ -60,7 +60,14 @@
 | 52    | Приложение работает офлайн                                                                                                                                        | `quasar.config.ts` (секция `pwa`, GenerateSW), `src-pwa/manifest.json`, стартовый экран в `index.html`                   | `test/pwa/offline.spec.ts` (манифест предкеша = вся сборка, `NavigationRoute` → `index.html`), `pnpm build:pwa` |
 | 53    | Устанавливается как PWA                                                                                                                                           | `src-pwa/manifest.json` (192/512, maskable, standalone), `injectPwaMetaTags`                                             | `test/pwa/manifest.spec.ts`                                                                                     |
 | 54    | Есть ru/en, light/dark                                                                                                                                            | `src/i18n/ru`, `src/i18n/en`, `settingsStore.setTheme` (Light/Dark/Auto), `App.vue`                                      | `test/i18n/keys.spec.ts`, `test/components/settingsPage.spec.ts`                                               |
-| 55    | Все строки интерфейса, включая настройки и служебные тексты, из i18n                                                                                              | словари `src/i18n/**` (300 ключей), карта `errors.*` для кодов `Result`, стартовый экран и `ErrorNotFound.vue`           | `test/i18n/completeness.spec.ts`, `test/i18n/keys.spec.ts`                                                      |
+| 55    | Все строки интерфейса, включая настройки и служебные тексты, из i18n                                                                                              | словари `src/i18n/**` (318 ключей), карта `errors.*` для кодов `Result`, стартовый экран и `ErrorNotFound.vue`           | `test/i18n/completeness.spec.ts`, `test/i18n/keys.spec.ts`                                                      |
+| 56    | Список дел шаблона добавляется, удаляется и переставляется в форме и диалогом с карточки; дубли и мусор нормализуются (FR-D-7)                                      | `TemplateTaskList.vue`, `TemplateTaskPicker.vue`, `TemplateTasksDialog.vue`, `normalizePlannedTaskIds`                   | `test/components/dayTemplateForm.spec.ts`, `test/components/daysPage.spec.ts`, `test/services/templateTasks.spec.ts` |
+| 57    | Сохранение шаблона с отсутствующей ссылкой отклоняется `TASK_NOT_FOUND`; архивное дело разрешено (FR-D-7)                                                          | `validatePlannedTaskRefs`, `daysStore.createTemplate/updateTemplate` (`db.tasks.bulkGet`)                                | `test/services/dayValidator.spec.ts`, `test/stores/days.spec.ts`                                                |
+| 58    | День по шаблону открывается с делами в «Нераспределённых» (`startMin: null`, снимок и длительность из дела) (FR-D-7, FR-B-4)                                      | `services/templateTasks.ts` (`buildPlannedPlacements`), `cycleStore.buildDayInstance`                                    | `test/services/templateTasks.spec.ts`, `test/stores/cycle.spec.ts`                                             |
+| 59    | Повторный `initialize`, `resolveCurrentDay` и правка шаблона не дублируют и не меняют заготовки открытого дня (FR-D-3)                                             | заготовки создаются только в `buildDayInstance`; экземпляр читается из БД                                                | `test/stores/cycle.spec.ts`                                                                                     |
+| 60    | Архивные и отсутствующие дела не попадают в день; hard delete чистит ссылки во всех шаблонах (FR-D-7, FR-T-3)                                                      | `buildPlannedPlacements` (skip), `tasksStore.deleteTask` (транзакция `db.tasks` + `db.dayTemplates`)                     | `test/services/templateTasks.spec.ts`, `test/stores/tasks.spec.ts`                                              |
+| 61    | Старый файл без `plannedTaskIds` импортируется с пустым списком, новый экспорт всегда содержит поле (FR-SET-4/5)                                                   | `settingsStore.exportAll`/`importAll` + `normalizeDayTemplate`                                                           | `test/stores/settings.spec.ts`                                                                                  |
+| 62    | Завершение дня и его отмена работают с заготовками; статистика учитывает их как размещения (FR-E-2/FR-E-3, FR-S-1)                                                  | `completeDay`/`cancelCompletion` (снимок placements), `aggregateStats`                                                    | `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts`, `test/services/stats.spec.ts`             |
 
 ## Нефункциональные критерии этапа 10 (ТЗ §7 и §8.2)
 
@@ -73,7 +80,7 @@
 | Focus-trap в модалках                                            | `src/components/common/FocusTrap.vue` (`inert` на `#q-app`), `aria-modal` QDialog, возврат фокуса на триггер                            | `test/a11y/focus.spec.ts`                                                                          |
 | `aria-live` для переноса                                         | регион `live` (перенос/статус) и `live-slot` (слот под указателем) в `DayBoard.vue`                                                     | `test/components/dayBoard.spec.ts`, `test/components/dayBoardPerf.spec.ts`                         |
 | FCP < 1.5 c на 3G                                                | стартовый экран в `index.html` (разметка и стиль inline, JS — модулем), единственный блокирующий ресурс — CSS Quasar ≈36 KB gzip        | `test/pwa/offline.spec.ts` (печатает оценку: ≈1.97 с по профилю Lighthouse Slow 3G 3 × 400 мс RTT) |
-| `pnpm build` / `pnpm build:pwa`                                  | сборка SPA и PWA                                                                                                                        | отчёты сборки: `dist/spa`, `dist/pwa` (70 записей предкеша)                                        |
+| `pnpm build` / `pnpm build:pwa`                                  | сборка SPA и PWA                                                                                                                        | отчёты сборки: `dist/spa`, `dist/pwa` (манифест предкеша покрывает всю сборку)                     |
 | Тесты: покрытие ≥ 70 %                                           | `vitest.config.ts` (пороги `lines`/`functions` 70)                                                                                      | `pnpm test:coverage`                                                                               |
 
 ## Итог прогона 1.19.0
@@ -87,6 +94,19 @@
 | Сборка SPA | `pnpm build`         | Build succeeded (`dist/spa`)                                            |
 | Сборка PWA | `pnpm build:pwa`     | Build succeeded (`dist/pwa`), манифест предкеша покрывает всю сборку    |
 
+## Итог прогона 1.20.0 (FR-D-7)
+
+| Проверка   | Команда              | Результат                                                                          |
+| ---------- | -------------------- | ---------------------------------------------------------------------------------- |
+| Типы       | `pnpm typecheck`     | код 0                                                                              |
+| Линтер     | `pnpm lint`          | код 0, 0 предупреждений                                                            |
+| Тесты      | `pnpm test`          | 455 тестов в 39 файлах, все зелёные                                                |
+| Покрытие   | `pnpm test:coverage` | `services/*` — 99.57 % инструкций (100 % строк, `templateTasks.ts` — 100 %), `stores/*` — 87.75 % строк (порог ≥ 70 %) |
+| Сборка SPA | `pnpm build`         | Build succeeded (`dist/spa`)                                                       |
+| Сборка PWA | `pnpm build:pwa`     | Build succeeded (`dist/pwa`), service worker и манифест собраны                     |
+
+Новые тесты и дополнения — в контрактах §9 (блок FR-D-7) и [журнале](Журнал-правок-ToDoDay.md), приложение Щ. Требование FR-D-7 и вайрфреймы §3–§4 синхронизированы с кодом.
+
 **Ограничение окружения.** Приёмочный прогон в браузере в песочнице недоступен (приложения М §5, С §4, Т §4, У §4, Ф §4, Х §4 и Ц §4 журнала): состояния экранов проверены монтированием в jsdom, офлайн и первый кадр — разбором собранного `dist/pwa`, контраст — расчётом по WCAG. Ручной проход вайрфреймов и замер FCP инструментами браузера остаются задачей приёмки на стенде.
 
-Футер: версия документации 1.19.0, приложения журнала А–Ш.
+Футер: версия документации 1.20.0, приложения журнала А–Щ.

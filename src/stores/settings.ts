@@ -9,6 +9,7 @@ import type { Task } from 'src/models/task'
 import type { DayTemplate } from 'src/models/day'
 import type { CycleStateDto, DayInstance } from 'src/models/dayInstance'
 import { ok, err, type Result } from 'src/models/common'
+import { normalizeDayTemplate } from 'src/services/templateTasks'
 import { useTasksStore } from './tasks'
 import { useDaysStore } from './days'
 import { useStatsStore } from './stats'
@@ -333,7 +334,9 @@ export const useSettingsStore = defineStore('settings', () => {
         exportedAt: nowIso,
         data: {
           tasks,
-          dayTemplates,
+          // FR-D-7: в файле всегда есть plannedTaskIds, даже если запись в БД
+          // осталась от версии без этого поля (аддитивное изменение формата).
+          dayTemplates: dayTemplates.map(normalizeDayTemplate),
           dayInstances,
           cycleState,
           settings: buildSettingsBlock(),
@@ -388,7 +391,9 @@ export const useSettingsStore = defineStore('settings', () => {
             db.cycleState.clear(),
           ])
           await db.tasks.bulkAdd(toPlain(tasks))
-          await db.dayTemplates.bulkAdd(toPlain(dayTemplates))
+          // FR-D-7: старые файлы (версия 1.0 без поля) получают пустой список,
+          // поэтому все записи после импорта имеют одинаковую форму.
+          await db.dayTemplates.bulkAdd(toPlain(dayTemplates.map(normalizeDayTemplate)))
           await db.dayInstances.bulkAdd(toPlain(dayInstances))
           await db.cycleState.put(normalizeCycleState(validated.data.cycleState))
         })

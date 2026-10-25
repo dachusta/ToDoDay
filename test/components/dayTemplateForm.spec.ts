@@ -7,7 +7,9 @@ import { db } from 'src/services/db'
 import { i18n } from 'src/boot/i18n'
 import { useDaysStore } from 'src/stores/days'
 import { useSettingsStore } from 'src/stores/settings'
+import { useTasksStore } from 'src/stores/tasks'
 import type { DayTemplate, DayTemplateInput } from 'src/models/day'
+import type { Task } from 'src/models/task'
 import { quasarComponents, quasarDirectives, quasarPluginOptions } from '../vitest/quasar'
 import { freshPinia, flush, resetDatabase, resetStorage } from '../stores/helpers'
 
@@ -31,6 +33,7 @@ const input = (over: Partial<DayTemplateInput> = {}): DayTemplateInput => ({
   timeStart: '08:00',
   timeEnd: '22:00',
   repeatRule: { type: 'none' },
+  plannedTaskIds: [],
   ...over,
 })
 
@@ -311,5 +314,111 @@ describe('DayTemplateForm: редактирование (FR-D-3)', () => {
     // форма пишет только шаблон, экземпляров в БД нет вовсе
     expect(await db.dayInstances.count()).toBe(0)
     expect(wrapper.emitted('saved')).toHaveLength(1)
+  })
+})
+
+describe('DayTemplateForm: дела шаблона (FR-D-7)', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  const seedTask = async (id: string, over: Partial<Task> = {}): Promise<void> => {
+    await db.tasks.add({
+      id,
+      title: `дело ${id}`,
+      priority: 'medium',
+      color: '#2196F3',
+      durationMin: 30,
+      archived: false,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    })
+  }
+
+  const selectedIds = (): string[] =>
+    $$('[data-test="template-tasks"] [data-task]').map(
+      node => node.getAttribute('data-task') ?? '',
+    )
+
+  it('добавляет дела через выбор и сохраняет plannedTaskIds', async () => {
+    await seedTask('a', { title: 'Первое' })
+    await seedTask('b', { title: 'Второе' })
+    await mountForm()
+    await useTasksStore().loadAll()
+    await flush()
+
+    expect($('[data-test="template-tasks-empty"]')).not.toBeNull()
+
+    await click('[data-test="add-task"]')
+    await flush()
+    expect($('[data-test="tasks-search"]')).not.toBeNull()
+
+    await click('[data-task-checkbox="a"]')
+    await click('[data-task-checkbox="b"]')
+    await click('[data-test="tasks-apply"]')
+    await flush()
+
+    expect(selectedIds()).toEqual(['a', 'b'])
+
+    await setText('[data-test="name"]', 'С делами')
+    await save()
+
+    const stored = await storedTemplates()
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.plannedTaskIds).toEqual(['a', 'b'])
+  })
+
+  it('предзаполняет список, переставляет и убирает дела', async () => {
+    await seedTask('a')
+    await seedTask('b')
+    await seedTask('archived', { archived: true })
+    const days = useDaysStore()
+    const created = await days.createTemplate(
+      input({ name: 'С делами', plannedTaskIds: ['a', 'b', 'archived'] }),
+    )
+    if (!created.ok) throw new Error('шаблон не создан')
+
+    await mountForm(created.data)
+    await useTasksStore().loadAll()
+    await flush()
+
+    expect(selectedIds()).toEqual(['a', 'b', 'archived'])
+    expect($('[data-test="task-archived"]')).not.toBeNull()
+
+    await click('[data-test="template-tasks"] [data-task="a"] [data-test="task-down"]')
+    await flush()
+    expect(selectedIds()).toEqual(['b', 'a', 'archived'])
+
+    await click('[data-test="template-tasks"] [data-task="archived"] [data-test="task-remove"]')
+    await flush()
+    expect(selectedIds()).toEqual(['b', 'a'])
+
+    await save()
+    const stored = await storedTemplates()
+    expect(stored[0]?.plannedTaskIds).toEqual(['b', 'a'])
+  })
+
+  it('показывает ошибку, если ссылка на дело пропала', async () => {
+    await seedTask('gone')
+    await mountForm()
+    await useTasksStore().loadAll()
+    await flush()
+
+    await click('[data-test="add-task"]')
+    await flush()
+    await click('[data-task-checkbox="gone"]')
+    await click('[data-test="tasks-apply"]')
+    await flush()
+
+    // Гонка с удалением в другой вкладке: ссылка осталась в форме, дела в БД нет
+    await db.tasks.delete('gone')
+    await setText('[data-test="name"]', 'С битой ссылкой')
+    await save()
+
+    expect($('[data-test="error-tasks"]')).not.toBeNull()
+    expect(await storedTemplates()).toHaveLength(0)
   })
 })

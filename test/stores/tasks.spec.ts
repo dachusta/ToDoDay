@@ -324,4 +324,48 @@ describe('useTasksStore: приёмки ТЗ §9 «По делам»', () => {
       priority: 'critical',
     })
   })
+
+  it('FR-D-7: hard delete вычищает ссылку из шаблонов, архивация — нет', async () => {
+    await db.tasks.bulkAdd([
+      seedTask({ id: 'a', archived: true }),
+      seedTask({ id: 'b' }),
+    ])
+    await db.dayTemplates.bulkAdd([
+      {
+        id: 't1',
+        name: 'Первый',
+        order: 0,
+        timeStart: '08:00',
+        timeEnd: '22:00',
+        gridStepMin: 15,
+        accentColor: '#4CAF50',
+        repeatRule: { type: 'none' },
+        plannedTaskIds: ['a', 'b'],
+        createdAt: 1,
+      },
+      {
+        id: 't2',
+        name: 'Второй',
+        order: 1,
+        timeStart: '08:00',
+        timeEnd: '22:00',
+        gridStepMin: 15,
+        accentColor: '#4CAF50',
+        repeatRule: { type: 'none' },
+        plannedTaskIds: ['b'],
+        createdAt: 1,
+      },
+    ])
+
+    const store = useTasksStore()
+    await store.loadAll()
+
+    // Архивация ссылку не трогает: дело можно вернуть из архива (FR-T-3)
+    expect((await store.archiveTask('b')).ok).toBe(true)
+    expect((await db.dayTemplates.get('t1'))?.plannedTaskIds).toEqual(['a', 'b'])
+
+    expect((await store.deleteTask('a')).ok).toBe(true)
+    expect((await db.dayTemplates.get('t1'))?.plannedTaskIds).toEqual(['b'])
+    expect((await db.dayTemplates.get('t2'))?.plannedTaskIds).toEqual(['b'])
+  })
 })

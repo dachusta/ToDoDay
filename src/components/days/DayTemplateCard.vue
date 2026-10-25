@@ -1,9 +1,9 @@
 <template>
   <!--
     Карточка шаблона дня (вайрфреймы §3.1): ручка ⠿, номер в цикле, название с
-    акцентным цветом, диапазон времени и человекочитаемое правило. Число дел и
-    «часы занято» не показываются — у шаблона нет размещений, они живут в
-    экземпляре дня.
+    акцентным цветом, диапазон времени, человекочитаемое правило и число
+    подготовленных дел (FR-D-7). «Часы занято» не показываются: размещений у
+    шаблона нет, они появляются только в экземпляре дня.
   -->
   <div
     class="day-template-card"
@@ -43,6 +43,11 @@
           class="day-template-card__rule"
           data-test="rule"
         >{{ ruleText }}</span>
+        <span aria-hidden="true">·</span>
+        <span
+          class="day-template-card__tasks"
+          data-test="tasks-count"
+        >{{ t('days.tasksCount', { n: template.plannedTaskIds?.length ?? 0 }) }}</span>
       </div>
     </div>
 
@@ -102,6 +107,17 @@
               </q-item-section>
               <q-item-section>{{ t('days.edit') }}</q-item-section>
             </q-item>
+            <q-item
+              v-close-popup
+              clickable
+              data-action="tasks"
+              @click="emit('action', 'tasks')"
+            >
+              <q-item-section avatar>
+                <q-icon name="checklist" />
+              </q-item-section>
+              <q-item-section>{{ t('days.editTasks') }}</q-item-section>
+            </q-item>
             <q-separator />
             <q-item
               v-close-popup
@@ -142,7 +158,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  action: [id: 'edit' | 'delete']
+  /** 'tasks' — быстрое редактирование списка дел (FR-D-7). */
+  action: [id: 'edit' | 'tasks' | 'delete']
   /** Сдвиг в цикле на delta позиций: -1 вверх, +1 вниз. */
   move: [delta: number]
   /** Нажатие на ручку ⠿: начало перетаскивания (pointer events, ТЗ §4.1). */
