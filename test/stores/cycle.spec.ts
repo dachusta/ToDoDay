@@ -861,3 +861,250 @@ describe('useCycleStore: перенос невыполненных дел (FR-E-
   })
 })
 
+describe('useCycleStore: просмотр предыдущих и следующих дней (FR-C-6)', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  afterEach(() => {
+    useCycleStore().dispose()
+  })
+
+  it('будущий день показывает план, не меняя активный экземпляр и БД', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('Завтрашнее')
+    await useDayPlansStore().loadAll()
+    const tomorrow = addDaysISO(todayISO(), 1)
+    const tomorrowPlan = await createPlan({
+      name: 'Завтра',
+      date: tomorrow,
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const activeId = cycle.currentInstance?.id
+    const countBefore = await db.dayInstances.count()
+
+    const result = await cycle.showNextDay()
+
+    expect(result.ok).toBe(true)
+    expect(cycle.viewDate).toBe(tomorrow)
+    expect(cycle.isViewingActiveDay).toBe(false)
+    expect(cycle.viewKind).toBe('plan')
+    expect(cycle.displayInstance?.planId).toBe(tomorrowPlan.id)
+    expect(cycle.displayInstance?.placements).toHaveLength(1)
+    expect(cycle.displayReadOnly).toBe(true)
+    expect(cycle.displayConflicts).toEqual([])
+    expect(cycle.currentInstance?.id).toBe(activeId)
+    expect(await db.dayInstances.count()).toBe(countBefore)
+
+    cycle.showActiveDay()
+    expect(cycle.isViewingActiveDay).toBe(true)
+    expect(cycle.viewDate).toBe(todayISO())
+  })
+
+  it('вчерашний завершённый день открывается своим фактом только для чтения', async () => {
+    const yesterday = addDaysISO(todayISO(), -1)
+    await db.dayInstances.add({
+      id: 'yesterday',
+      planId: null,
+      templateId: null,
+      date: yesterday,
+      status: 'completed',
+      placements: [
+        {
+          id: 'done-placement',
+          taskId: 'task-1',
+          startMin: 60,
+          durationMin: 30,
+          status: 'done',
+          placedAt: 1,
+          taskSnapshot: { title: 'Вчерашнее', color: '#2196F3', priority: 'high' },
+        },
+      ],
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      createdAt: 1,
+      completedAt: 2,
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const activeId = cycle.currentInstance?.id
+
+    const result = await cycle.openDay(yesterday)
+
+    expect(result.ok).toBe(true)
+    expect(cycle.viewKind).toBe('saved')
+    expect(cycle.displayInstance?.id).toBe('yesterday')
+    expect(cycle.displayInstance?.status).toBe('completed')
+    expect(cycle.displayInstance?.placements[0]).toMatchObject({
+      id: 'done-placement',
+      status: 'done',
+    })
+    expect(cycle.displayReadOnly).toBe(true)
+    expect(cycle.currentInstance?.id).toBe(activeId)
+    expect(cycle.isViewingActiveDay).toBe(false)
+  })
+
+  it('дата без записи и без плана даёт пустой просмотр', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const target = addDaysISO(todayISO(), -3)
+
+    const result = await cycle.openDay(target)
+
+    expect(result.ok).toBe(true)
+    expect(cycle.viewKind).toBe('empty')
+    expect(cycle.displayInstance?.date).toBe(target)
+    expect(cycle.displayInstance?.placements).toEqual([])
+    expect(cycle.displayReadOnly).toBe(true)
+  })
+
+  it('прошедшая дата без записи, но с планом показывает план с пометкой', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('Плановое')
+    await useDayPlansStore().loadAll()
+    const target = addDaysISO(todayISO(), -2)
+    const plan = await createPlan({
+      name: 'Пропущенный план',
+      date: target,
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+
+    const result = await cycle.openDay(target)
+
+    expect(result.ok).toBe(true)
+    expect(cycle.viewKind).toBe('plan')
+    expect(cycle.displayInstance?.planId).toBe(plan.id)
+    expect(cycle.displayInstance?.placements).toHaveLength(1)
+  })
+
+  it('некорректная дата отклоняется, просмотр остаётся прежним', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+
+    const result = await cycle.openDay('2026-02-30')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR')
+    expect(cycle.isViewingActiveDay).toBe(true)
+  })
+
+  it('resetSessionState сбрасывает просмотр на активный день', async () => {
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    await cycle.openDay(addDaysISO(todayISO(), 1))
+
+    cycle.resetSessionState()
+
+    expect(cycle.viewDateOverride).toBeNull()
+    expect(cycle.viewRecord).toBeNull()
+    expect(cycle.viewError).toBe(false)
+  })
+})
+
+describe('useCycleStore: завершение с открытием следующего дня (FR-C-3)', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  afterEach(() => {
+    useCycleStore().dispose()
+  })
+
+  it('обычное завершение не создаёт следующий экземпляр', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const instanceId = cycle.currentInstance?.id
+    const countBefore = await db.dayInstances.count()
+
+    const result = await cycle.completeDay({})
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.id).toBe(instanceId)
+    expect(cycle.currentInstance?.status).toBe('completed')
+    expect(cycle.currentInstance?.date).toBe(todayISO())
+    expect(cycle.cycleState?.manualShiftDate).toBeNull()
+    expect(await db.dayInstances.count()).toBe(countBefore)
+  })
+
+  it('openNext создаёт следующий день и пишет manualShiftDate', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      name: 'Сегодня',
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await createPlan({
+      name: 'Завтра',
+      date: tomorrow,
+      plannedPlacements: [{ id: 'pp2', taskId: task.id, startMin: 120, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const todayInstanceId = cycle.currentInstance?.id
+
+    const result = await cycle.completeDay({}, [], { openNext: true })
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.date).toBe(tomorrow)
+    expect(cycle.currentInstance?.planId).toBe(cycle.currentPlan?.id)
+    expect(cycle.cycleState?.manualShiftDate).toBe(todayISO())
+    expect((await db.dayInstances.get(todayInstanceId ?? ''))?.status).toBe('completed')
+    expect(cycle.nextInstanceId).toBe(cycle.currentInstance?.id)
+  })
+
+  it('openNext при уже выполненном сдвиге возвращает SHIFT_ALREADY_DONE_TODAY', async () => {
+    await useTasksStore().loadAll()
+    await useDayPlansStore().loadAll()
+    await createPlan({})
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    await db.cycleState.update('current', { manualShiftDate: todayISO() })
+    if (cycle.cycleState) cycle.cycleState.manualShiftDate = todayISO()
+
+    const result = await cycle.completeDay({}, [], { openNext: true })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('SHIFT_ALREADY_DONE_TODAY')
+    expect(cycle.currentInstance?.status).toBe('active')
+  })
+
+  it('из активного будущего дня вторая кнопка сдвига скрыта', async () => {
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await db.dayInstances.add({
+      id: 'future-active',
+      planId: null,
+      templateId: null,
+      date: tomorrow,
+      status: 'active',
+      placements: [],
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      createdAt: 1,
+    })
+    await db.cycleState.update('current', { activeInstanceId: 'future-active' })
+    const cycle = useCycleStore()
+
+    await cycle.initialize()
+
+    expect(cycle.currentInstance?.date).toBe(tomorrow)
+    expect(cycle.canShiftNext).toBe(true)
+    expect(cycle.canOpenNextDay).toBe(false)
+  })
+})
+

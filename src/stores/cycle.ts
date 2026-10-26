@@ -6,7 +6,12 @@ import { format } from 'date-fns'
 import { db, ensureCycleState, toPlain } from 'src/services/db'
 import { resolveShiftTargets } from 'src/services/repeat'
 import { detectConflicts, fitInDay, isValidStartMin } from 'src/services/scheduler'
-import { buildSlots, todayISO } from 'src/services/dates'
+import { addDaysISO, buildSlots, isValidISODate, todayISO } from 'src/services/dates'
+import {
+  buildDayViewInstance,
+  pickDayInstanceForDate,
+  type DayViewKind,
+} from 'src/services/dayView'
 import type { DayInstance, Placement, CarryOverEntry, CycleStateDto } from 'src/models/dayInstance'
 import type { DayPlan, DayPlanMode } from 'src/models/day'
 import { planMode } from 'src/models/day'
@@ -58,6 +63,17 @@ export const useCycleStore = defineStore('cycle', () => {
   const skippedAutoPromptDate = ref<string | null>(null)
   const dayChangeInFlight = ref(false)
 
+  /**
+   * Просматриваемая дата (FR-C-6). `null` — показывать активный день.
+   * Просмотр живёт только в памяти сессии: в БД и экспорт не попадает.
+   */
+  const viewDateOverride = ref<string | null>(null)
+  const viewRecord = ref<DayInstance | null>(null)
+  const viewLoading = ref(false)
+  const viewError = ref(false)
+  /** Номер запроса просмотра: быстрые клики не перезаписывают новый день старым. */
+  let viewRequest = 0
+
   const draggingTaskId = ref<string | null>(null)
   const dragSource = ref<'list' | 'board' | null>(null)
   const hoveredSlot = ref<number | null>(null)
@@ -106,6 +122,96 @@ export const useCycleStore = defineStore('cycle', () => {
   )
 
   const isCurrentDayEmpty = computed(() => isVirtualInstance.value)
+
+  // --- Просмотр предыдущих и следующих дней (FR-C-6) ----------------------
+  const viewDate = computed(
+    () => viewDateOverride.value ?? currentInstance.value?.date ?? currentDate.value,
+  )
+
+  const isViewingActiveDay = computed(
+    () =>
+      currentInstance.value !== null &&
+      (viewDateOverride.value === null ||
+        viewDateOverride.value === currentInstance.value.date),
+  )
+
+  /** Экземпляр, который рисует доска: активный, сохранённый или предпросмотр. */
+  const displayInstance = computed<DayInstance | null>(() => {
+    const active = currentInstance.value
+    if (active === null) return null
+    if (isViewingActiveDay.value) return active
+    if (viewRecord.value !== null && viewRecord.value.date === viewDate.value) {
+      return viewRecord.value
+    }
+    return buildDayViewInstance(
+      viewDate.value,
+      plansStore().resolvedPlanForDate(viewDate.value),
+      useTasksStore().tasks,
+    )
+  })
+
+  const viewKind = computed<DayViewKind>(() => {
+    if (isViewingActiveDay.value) return 'active'
+    if (viewRecord.value !== null && viewRecord.value.date === viewDate.value) {
+      return 'saved'
+    }
+    return plansStore().resolvedPlanForDate(viewDate.value) !== null ? 'plan' : 'empty'
+  })
+
+  /**
+   * План просматриваемого дня. У сохранённого факта удалённый план не
+   * подменяется другим планом на дату — шапка должна честно показать
+   * «План дня удалён». Для активного дня сохраняется прежняя цепочка
+   * `currentPlan` с легаси-`templateId` и выбором по дате.
+   */
+  const displayPlan = computed<DayPlan | null>(() => {
+    const inst = displayInstance.value
+    if (inst === null) return null
+    if (isViewingActiveDay.value) return currentPlan.value
+    const plans = plansStore()
+    const byPlanId = plans.planById(inst.planId)
+    if (byPlanId) return byPlanId
+    if (inst.planId) return null
+    return plans.planById(inst.templateId) ?? plans.resolvedPlanForDate(inst.date)
+  })
+
+  const displayIsPlanMissing = computed(() => {
+    const inst = displayInstance.value
+    return (
+      inst !== null &&
+      inst.planId !== null &&
+      inst.planId !== undefined &&
+      !plansStore().planById(inst.planId)
+    )
+  })
+
+  const displaySlots = computed<Slot[]>(() => {
+    const inst = displayInstance.value
+    if (inst === null) return []
+    return buildSlots(inst.timeStart, inst.timeEnd)
+  })
+
+  const displayConflicts = computed<Conflict[]>(() =>
+    detectConflicts(displayInstance.value?.placements ?? []),
+  )
+
+  const displayHasConflicts = computed(() => displayConflicts.value.length > 0)
+
+  const displayUnallocatedPlacements = computed(() =>
+    (displayInstance.value?.placements ?? []).filter(
+      p => p.startMin === null && p.removed !== true,
+    ),
+  )
+
+  const displayRemovedPlacements = computed(() =>
+    (displayInstance.value?.placements ?? []).filter(p => p.removed === true),
+  )
+
+  const displayRemovedCount = computed(() => displayRemovedPlacements.value.length)
+
+  const displayReadOnly = computed(
+    () => !isViewingActiveDay.value || displayInstance.value?.status !== 'active',
+  )
 
   const slots = computed<Slot[]>(() => {
     const inst = currentInstance.value
@@ -176,6 +282,18 @@ export const useCycleStore = defineStore('cycle', () => {
   const canComplete = computed(() => currentInstance.value?.status === 'active')
 
   /**
+   * Завершить и открыть следующий проживаемый день. Из активного дня,
+   * датированного будущим (ранний сдвиг), ручной переход вперёд не имеет
+   * определённой цели: `resolveShiftTargets` для него ушёл бы назад в «сегодня»,
+   * поэтому кнопка там скрыта.
+   */
+  const canOpenNextDay = computed(() => {
+    void now.value
+    const inst = currentInstance.value
+    return canShiftNext.value && inst !== null && inst.date <= todayISO()
+  })
+
+  /**
    * Дата, в которую уйдёт перенос при завершении: новый день сдвига, сегодняшний
    * день после просроченного или следующий календарный. Используется диалогом
    * завершения для подписи «перенести на …».
@@ -192,9 +310,9 @@ export const useCycleStore = defineStore('cycle', () => {
     })
   })
 
-  /** Плановое время перемещённого размещения — для подписи «план: HH:mm». */
+  /** Плановое время размещения — для подписи «план: HH:mm». */
   function plannedTimeFor(placement: Placement): number | null {
-    return plannedStartMin(placement, currentPlan.value)
+    return plannedStartMin(placement, displayPlan.value)
   }
 
   function isUnplanned(placement: Placement): boolean {
@@ -455,7 +573,66 @@ export const useCycleStore = defineStore('cycle', () => {
     return buildDayInstance(plan, targetDate)
   }
 
-  // --- Синхронизация плана и факта ----------------------------------------
+  // --- Просмотр предыдущих и следующих дней (FR-C-6) ----------------------
+  function resetViewToActive(): void {
+    viewRequest += 1
+    viewDateOverride.value = null
+    viewRecord.value = null
+    viewLoading.value = false
+    viewError.value = false
+  }
+
+  /**
+   * Открыть день только для просмотра. Активный экземпляр и `cycleState` не
+   * меняются; сохранённый факт читается из Dexie, будущая дата материализуется
+   * из плана в памяти. Ошибка чтения не сбрасывает активный день.
+   */
+  async function openDay(date: string): Promise<Result<void>> {
+    if (!isValidISODate(date)) {
+      return err('VALIDATION_ERROR', 'Некорректная дата', { field: 'date' })
+    }
+    endDrag()
+    if (currentInstance.value?.date === date) {
+      resetViewToActive()
+      return ok(undefined)
+    }
+
+    viewDateOverride.value = date
+    viewRecord.value = null
+    viewError.value = false
+    const request = ++viewRequest
+    viewLoading.value = true
+    try {
+      const rows = await db.dayInstances.where('date').equals(date).toArray()
+      if (request !== viewRequest) return ok(undefined)
+      viewRecord.value = pickDayInstanceForDate(rows)
+      return ok(undefined)
+    } catch (e) {
+      if (request === viewRequest) viewError.value = true
+      return err('DB_ERROR', 'Не удалось загрузить выбранный день', e)
+    } finally {
+      if (request === viewRequest) viewLoading.value = false
+    }
+  }
+
+  function showPreviousDay(): Promise<Result<void>> {
+    return openDay(addDaysISO(viewDate.value, -1))
+  }
+
+  function showNextDay(): Promise<Result<void>> {
+    return openDay(addDaysISO(viewDate.value, 1))
+  }
+
+  function showActiveDay(): void {
+    endDrag()
+    resetViewToActive()
+  }
+
+  function reloadViewedDay(): Promise<Result<void>> {
+    if (isViewingActiveDay.value) return Promise.resolve(ok(undefined))
+    return openDay(viewDate.value)
+  }
+
   async function reconcileCurrentWithPlan(plan: DayPlan): Promise<void> {
     const inst = currentInstance.value
     if (!inst) return
@@ -561,16 +738,34 @@ export const useCycleStore = defineStore('cycle', () => {
   }
 
   // --- Завершение дня ------------------------------------------------------
+  /**
+   * Завершить активный день. `options.openNext` — прежний ручной сдвиг
+   * (FR-C-3): после фиксации отметок открывается следующий проживаемый день.
+   * Обычный вызов без флага следующий экземпляр не создаёт.
+   */
   async function completeDay(
     marks: Record<string, 'done' | 'skipped'>,
     carryIds: readonly string[] = [],
+    options: { openNext?: boolean } = {},
   ): Promise<Result<void>> {
     const inst = currentInstance.value
     if (!inst || inst.status !== 'active') return err('DAY_NOT_ACTIVE', 'Нет активного дня')
 
+    const today = todayISO()
+    if (options.openNext) {
+      if (cycleState.value?.manualShiftDate === today) {
+        return err('SHIFT_ALREADY_DONE_TODAY', 'Сдвиг в эти сутки уже выполнен')
+      }
+      if (inst.date > today) {
+        return err('CONSTRAINT_VIOLATION', 'Нельзя открыть следующий день из будущего')
+      }
+      shiftPending.value = true
+      shiftMode.value = inst.date === today ? 'early' : 'overdue'
+      completionSource.value = 'shift'
+    }
+
     const wasShift = shiftPending.value
     const wasVirtual = isVirtualInstance.value
-    const today = todayISO()
     const prevManual = cycleState.value?.manualShiftDate ?? null
     const prevCarry = cloneCarryOvers(cycleState.value?.carryOvers ?? [])
 
@@ -649,6 +844,11 @@ export const useCycleStore = defineStore('cycle', () => {
       carryOversSnapshot.value = null
       manualShiftDateSnapshot.value = null
       nextInstanceId.value = null
+      if (options.openNext) {
+        shiftPending.value = false
+        shiftMode.value = null
+        completionSource.value = null
+      }
       return err('DB_ERROR', 'Не удалось завершить день', e)
     }
 
@@ -678,6 +878,9 @@ export const useCycleStore = defineStore('cycle', () => {
     completing.value = false
 
     await refreshCurrentInstance()
+    // Завершение относится к активному дню: просмотр другого дня сбрасывается,
+    // иначе после сдвига доска осталась бы на старой дате.
+    resetViewToActive()
 
     void useStatsStore()
       .recompute()
@@ -739,6 +942,7 @@ export const useCycleStore = defineStore('cycle', () => {
       completionSource.value = null
       completing.value = false
       await refreshCurrentInstance()
+      resetViewToActive()
       void useStatsStore()
         .recompute()
         .then(r => {
@@ -799,6 +1003,9 @@ export const useCycleStore = defineStore('cycle', () => {
       return
     }
     if (!settings.askToCompleteOnNewDay) return
+    // Диалог относится к активному дню: доска не должна остаться на просмотре
+    // другой даты, иначе дата в диалоге и на фоне разойдутся.
+    showActiveDay()
     completionSource.value = 'auto'
     completing.value = true
   }
@@ -1206,6 +1413,7 @@ export const useCycleStore = defineStore('cycle', () => {
     loading.value = false
     initialized.value = false
     planSyncQueue = Promise.resolve()
+    resetViewToActive()
     endDrag()
   }
 
@@ -1219,14 +1427,21 @@ export const useCycleStore = defineStore('cycle', () => {
     lastCompletedInstanceId, placementsSnapshot, nextInstanceId,
     shiftPending, shiftMode, completionSource, skippedAutoPromptDate,
     draggingTaskId, dragSource, hoveredSlot,
+    viewDateOverride, viewRecord, viewLoading, viewError,
     currentDate, currentPlan, currentPlanMode, isPlanless, isPlanMissing,
     isCurrentDayEmpty, isVirtualInstance,
+    viewDate, isViewingActiveDay, displayInstance, viewKind, displayPlan,
+    displayIsPlanMissing, displaySlots, displayConflicts, displayHasConflicts,
+    displayUnallocatedPlacements, displayRemovedPlacements, displayRemovedCount,
+    displayReadOnly,
     slots, placementsBySlot,
     conflicts, hasConflicts, unallocatedPlacements, removedPlacements,
-    removedCount, dayProgress, unplannedCount, canShiftNext, canComplete,
+    removedCount, dayProgress, unplannedCount, canShiftNext, canOpenNextDay, canComplete,
     carryTargetDate,
     plannedTimeFor, isUnplanned,
-    initialize, resolveCurrentDay, completeDay, cancelCompletion, checkDayChange,
+    initialize, resolveCurrentDay, openDay, showPreviousDay, showNextDay,
+    showActiveDay, reloadViewedDay,
+    completeDay, cancelCompletion, checkDayChange,
     startCompletion, dismissCompletion,
     skipPendingPlacementsForTask, shiftToNextDay, dispose, resetSessionState,
     syncCurrentDayWithPlan,

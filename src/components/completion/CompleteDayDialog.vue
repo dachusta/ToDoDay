@@ -200,12 +200,21 @@
             @click="close"
           />
           <q-btn
+            v-if="canOpenNext && source === 'manual' && !shiftPending"
+            outline
+            no-caps
+            color="primary"
+            :label="t('completion.confirmAndNext')"
+            data-test="completion-confirm-next"
+            @click="confirm(true)"
+          />
+          <q-btn
             unelevated
             no-caps
             color="primary"
             :label="t('completion.confirm')"
             data-test="completion-confirm"
-            @click="confirm"
+            @click="confirm(false)"
           />
         </div>
       </q-card-actions>
@@ -242,6 +251,8 @@ const props = withDefaults(
     timeFormat?: TimeFormat
     /** Подпись целевой даты переноса («Вторник · 24 сентября»). */
     carryDateLabel?: string
+    /** Можно завершить и сразу открыть следующий проживаемый день (FR-C-3). */
+    canOpenNext?: boolean
   }>(),
   {
     source: null,
@@ -250,12 +261,17 @@ const props = withDefaults(
     timeFormat: '24h',
     removedCount: 0,
     carryDateLabel: '',
+    canOpenNext: false,
   },
 )
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  submit: [payload: { marks: Record<string, 'done' | 'skipped'>; carryIds: string[] }]
+  submit: [payload: {
+    marks: Record<string, 'done' | 'skipped'>
+    carryIds: string[]
+    openNext: boolean
+  }]
 }>()
 
 const { t } = useI18n()
@@ -333,7 +349,7 @@ function close() {
 }
 
 /** Файл отметок для completeDay: всё неотмеченное станет skipped (FR-E-2). */
-function confirm() {
+function confirm(openNext: boolean) {
   const marks: Record<string, 'done' | 'skipped'> = {}
   const carryIds: string[] = []
   for (const placement of props.placements) {
@@ -341,7 +357,7 @@ function confirm() {
     marks[placement.id] = done ? 'done' : 'skipped'
     if (!done && carry.value[placement.id] === true) carryIds.push(placement.id)
   }
-  emit('submit', { marks, carryIds })
+  emit('submit', { marks, carryIds, openNext })
 }
 </script>
 
@@ -413,6 +429,7 @@ function confirm() {
 
 .completion__buttons {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }

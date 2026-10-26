@@ -109,6 +109,19 @@ export default {
   day: {
     complete: 'Complete day',
     next: 'Next day',
+    previous: 'Previous day',
+    backToActive: 'Back to current day',
+    relativeToday: 'Today',
+    relativeYesterday: 'Yesterday',
+    relativeTomorrow: 'Tomorrow',
+    // browsing previous and future days (FR-C-6)
+    viewCompleted: 'Completed day — view only',
+    viewSaved: 'Saved day — view only',
+    viewFuturePlan: 'Future day plan — view only',
+    viewPlanNoRecord: 'This day was not opened — showing the plan',
+    viewNoData: 'No saved data for this day',
+    viewError: 'Could not load the selected day',
+    viewOpened: 'Opened day: {date}',
     unallocated: 'Unallocated',
     // number of overlapping pairs in the banner (FR-B-3): pairs, not cards.
     // Three choices — vue-i18n convention: 0 | 1 | the rest
@@ -181,6 +194,7 @@ export default {
     unmarkAll: 'Unmark all',
     back: 'Back to day',
     confirm: 'Confirm',
+    confirmAndNext: 'Complete and open next day',
     skipOnce: 'Skip this prompt once',
     shiftHint: 'A new day will start after confirmation',
     nothingToMark: 'No placements in this day',

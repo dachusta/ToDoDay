@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DayBoardPage from 'src/pages/DayBoardPage.vue'
 import { i18n } from 'src/boot/i18n'
 import { db } from 'src/services/db'
-import { todayISO } from 'src/services/dates'
+import { addDaysISO, todayISO } from 'src/services/dates'
 import { TASK_DRAG_MIME } from 'src/services/taskDrag'
 import { SLOT_HEIGHT } from 'src/models/cycle'
 import { useCycleStore } from 'src/stores/cycle'
@@ -506,6 +506,125 @@ describe('DayBoard: шапка, сетка и пустой день (FR-B-1, FR-
     const narrow = await mountPage(800)
     expect(narrow.wrapper.find('[data-test="tasks-panel"]').exists()).toBe(false)
     expect(narrow.wrapper.find('[data-test="day-board"]').exists()).toBe(true)
+  })
+})
+
+describe('DayBoard: просмотр следующего и предыдущего дня (FR-C-6)', () => {
+  beforeEach(prepare)
+  afterEach(teardown)
+
+  it('«Следующий день» показывает план будущей даты без изменения активного дня', async () => {
+    await virtualDay()
+    const task = await seedTask('Завтрашнее')
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await createPlan({
+      name: 'Завтра',
+      date: tomorrow,
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    const activeId = cycle.currentInstance?.id
+    const { wrapper } = await mountPage()
+
+    await wrapper.find('[data-test="next-day"]').trigger('click')
+    await flush()
+
+    expect(cycle.viewDate).toBe(tomorrow)
+    expect(cycle.viewKind).toBe('plan')
+    expect(cycle.currentInstance?.id).toBe(activeId)
+    expect(wrapper.find('[data-test="board-relative"]').text()).toBe(
+      i18n.global.t('day.relativeTomorrow'),
+    )
+    expect(wrapper.find('[data-test="view-banner"]').text()).toBe(
+      i18n.global.t('day.viewFuturePlan'),
+    )
+    expect(wrapper.find('[data-test="plan-name"]').text()).toBe('Завтра')
+    expect(wrapper.findAll('[data-placement]')).toHaveLength(1)
+    expect(wrapper.find('.placement-card__menu-button').exists()).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tasks-panel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="back-to-active"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="back-to-active"]').trigger('click')
+    await flush()
+
+    expect(cycle.isViewingActiveDay).toBe(true)
+    expect(wrapper.find('[data-test="view-banner"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
+  })
+
+  it('«Предыдущий день» открывает вчерашний завершённый день только для чтения', async () => {
+    await virtualDay()
+    const task = await seedTask('Вчерашнее')
+    const yesterday = addDaysISO(todayISO(), -1)
+    const plan = await createPlan({
+      name: 'Вчера',
+      date: yesterday,
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    await db.dayInstances.add({
+      id: 'yesterday',
+      planId: plan.id,
+      templateId: null,
+      date: yesterday,
+      status: 'completed',
+      placements: [
+        placement({
+          id: 'p-yesterday',
+          taskId: task.id,
+          startMin: 60,
+          status: 'done',
+          taskSnapshot: { title: task.title, color: task.color, priority: task.priority },
+          plannedId: 'pp1',
+        }),
+      ],
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      createdAt: 1,
+      completedAt: 2,
+    })
+    const cycle = useCycleStore()
+    const { wrapper } = await mountPage()
+
+    await wrapper.find('[data-test="prev-day"]').trigger('click')
+    await flush()
+
+    expect(cycle.viewKind).toBe('saved')
+    expect(cycle.displayInstance?.id).toBe('yesterday')
+    expect(wrapper.find('[data-test="board-relative"]').text()).toBe(
+      i18n.global.t('day.relativeYesterday'),
+    )
+    expect(wrapper.find('[data-test="view-banner"]').text()).toBe(
+      i18n.global.t('day.viewCompleted'),
+    )
+    expect(wrapper.find('[data-placement="p-yesterday"]').exists()).toBe(true)
+    expect(wrapper.find('[data-placement="p-yesterday"]').attributes('data-status')).toBe('done')
+    expect(wrapper.find('.placement-card__menu-button').exists()).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="tasks-panel"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="back-to-active"]').trigger('click')
+    await flush()
+    expect(cycle.isViewingActiveDay).toBe(true)
+    expect(wrapper.find('[data-test="view-banner"]').exists()).toBe(false)
+  })
+
+  it('дата без записи и плана показывает пустой просмотр без CTA создания', async () => {
+    await virtualDay()
+    const { wrapper } = await mountPage()
+
+    await wrapper.find('[data-test="prev-day"]').trigger('click')
+    await flush()
+
+    expect(useCycleStore().viewKind).toBe('empty')
+    expect(wrapper.find('[data-test="view-banner"]').text()).toBe(
+      i18n.global.t('day.viewNoData'),
+    )
+    expect(wrapper.find('[data-test="view-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="setup-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="take-task"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="next-day"]').exists()).toBe(true)
   })
 })
 

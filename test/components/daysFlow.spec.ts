@@ -291,16 +291,16 @@ describe('Модуль «Дни» в реальном каркасе прило�
     expect((await cycle.setPlacementStatus(plannedPlacement.id, 'done')).ok).toBe(true)
     await flush()
 
-    await click('[data-test="shift-next"]')
+    await click('[data-test="complete-day"]')
     await waitUntil(() => $('[data-test="completion-list"]') !== null)
     await flush()
-    expect($('[data-test="completion-shift"]')).not.toBeNull()
+    expect($('[data-test="completion-shift"]')).toBeNull()
     expect($('[data-test="completion-unplanned"]')).not.toBeNull()
     expect($('[data-test="completion-progress"]')?.textContent).toBe(
       i18n.global.t('completion.doneCount', { done: 1, total: 2 }),
     )
 
-    await click('[data-test="completion-confirm"]')
+    await click('[data-test="completion-confirm-next"]')
     await waitUntil(() => cycle.currentInstance?.date === tomorrow)
     await flush()
 
@@ -318,7 +318,7 @@ describe('Модуль «Дни» в реальном каркасе прило�
     // Следующий день открыт по своему плану, сдвиг в эти сутки закрыт
     expect(cycle.currentPlan?.id).toBe(tomorrowPlan.id)
     expect($('[data-test="plan-name"]')?.textContent).toBe('Завтра')
-    expect($('[data-test="shift-next"]')).toBeNull()
+    expect($('[data-test="next-day"]')).not.toBeNull()
     expect($('[data-test="cancel-completion"]')).not.toBeNull()
   })
 
@@ -337,9 +337,9 @@ describe('Модуль «Дни» в реальном каркасе прило�
     await waitUntil(() => $('[data-test="plan-name"]')?.textContent === 'Сегодня')
     const todayInstanceId = cycle.currentInstance?.id ?? ''
 
-    await click('[data-test="shift-next"]')
+    await click('[data-test="complete-day"]')
     await waitUntil(() => $('[data-test="completion-list"]') !== null)
-    await click('[data-test="completion-confirm"]')
+    await click('[data-test="completion-confirm-next"]')
 
     const tomorrow = addDaysISO(todayISO(), 1)
     await waitUntil(() => cycle.currentInstance?.date === tomorrow)

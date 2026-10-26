@@ -288,26 +288,28 @@ describe('Завершение дня: шапка доски и сдвиг на 
     expect(wrapper.find('[data-test="plan-none"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="board-template"]').text()).toContain('08:00–22:00')
     expect(wrapper.find('[data-test="open-plan"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="prev-day"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="next-day"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
   })
 
-  it('сдвиг в те же сутки: отказ стора показывается предупреждением (§9.3)', async () => {
+  it('повторный сдвиг в те же сутки: отказ стора показывается предупреждением (§9.3)', async () => {
     const task = await newTask('Зарядка')
     await createPlan({ plannedPlacements: [planned('pp1', task.id, 60)] })
     const cycle = await initializeCycle()
     const { wrapper } = await mountPage()
     const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
 
-    // Второй сдвиг за сутки отклоняется стором; кнопка в этот момент ещё видна
-    // (гонка с другой вкладкой) — UI обязан показать текст по коду ошибки.
-    vi.spyOn(cycle, 'shiftToNextDay').mockResolvedValue({
+    // Гонка с другой вкладкой: кнопка ещё видна, но стор уже отказывает сдвигу.
+    vi.spyOn(cycle, 'completeDay').mockResolvedValue({
       ok: false,
       error: { code: 'SHIFT_ALREADY_DONE_TODAY', message: '' },
     })
 
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await flush()
+    await clickBody('[data-test="completion-confirm-next"]')
     await flush()
 
     expect(notify).toHaveBeenCalledTimes(1)
@@ -315,7 +317,7 @@ describe('Завершение дня: шапка доски и сдвиг на 
     expect(notify.mock.calls[0]?.[1]).toBe('warning')
   })
 
-  it('«Следующий день» открывает диалог, а подтверждение — план завтрашней даты', async () => {
+  it('диалог завершения открывает план завтрашней даты кнопкой «Завершить и открыть следующий»', async () => {
     const todayTask = await newTask('Зарядка')
     const tomorrowTask = await newTask('Чтение')
     const tomorrow = addDaysISO(todayISO(), 1)
@@ -332,19 +334,20 @@ describe('Завершение дня: шапка доски и сдвиг на 
     const todayInstanceId = cycle.currentInstance?.id ?? ''
 
     const { wrapper } = await mountPage()
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
 
-    // Диалог сдвига: подсказка о новом дне, разового пропуска нет (FR-C-4)
+    // Диалог обычного завершения: вторая кнопка выполняет прежний ручной сдвиг.
     expect(completionOpen()).toBe(true)
     expect(dialogMounted()).toBe(true)
-    expect(bodyText('[data-test="completion-shift"]')).toBe(
-      i18n.global.t('completion.shiftHint'),
-    )
+    expect(bodyEl('[data-test="completion-shift"]')).toBeNull()
     expect(bodyEl('[data-test="completion-skip-once"]')).toBeNull()
     expect(bodyText('[data-test="completion-plan"]')).toBe('Сегодня')
+    expect(bodyText('[data-test="completion-confirm-next"]')).toBe(
+      i18n.global.t('completion.confirmAndNext'),
+    )
 
-    await clickBody('[data-test="completion-confirm"]')
+    await clickBody('[data-test="completion-confirm-next"]')
     await waitUntil(() => cycle.currentInstance?.date === tomorrow)
     await flush()
 
@@ -361,7 +364,7 @@ describe('Завершение дня: шапка доски и сдвиг на 
     expect(cycle.canShiftNext).toBe(false)
     expect(cycle.currentPlan?.name).toBe('Завтра')
     expect(wrapper.find('[data-test="plan-name"]').text()).toBe('Завтра')
-    expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="next-day"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
   })
@@ -377,9 +380,9 @@ describe('Завершение дня: шапка доски и сдвиг на 
     const todayInstanceId = cycle.currentInstance?.id ?? ''
 
     const { wrapper } = await mountPage()
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
-    await clickBody('[data-test="completion-confirm"]')
+    await clickBody('[data-test="completion-confirm-next"]')
     await waitUntil(() => cycle.currentInstance?.date === tomorrow)
     await flush()
 
@@ -391,7 +394,7 @@ describe('Завершение дня: шапка доски и сдвиг на 
     expect(wrapper.find('[data-test="empty-day"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="plan-none"]').text()).toBe(i18n.global.t('day.noPlan'))
     expect(wrapper.find('[data-test="complete-day"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="shift-next"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="next-day"]').exists()).toBe(true)
   })
 })
 
@@ -857,10 +860,10 @@ describe('Перенос невыполненных дел в диалоге з�
     const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
 
     const { wrapper } = await mountPage()
-    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
     await flush()
     await clickBody(`[data-test="completion-carry-${placement.id}"]`)
-    await clickBody('[data-test="completion-confirm"]')
+    await clickBody('[data-test="completion-confirm-next"]')
     await waitForState(() => cycle.currentInstance?.date === addDaysISO(todayISO(), 1))
     await flush()
 

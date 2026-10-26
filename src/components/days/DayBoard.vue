@@ -10,11 +10,38 @@
     data-test="day-board"
   >
     <header class="day-board__header">
-      <div
-        class="day-board__date"
-        data-test="board-date"
-      >
-        {{ dateLabel }}
+      <div class="day-board__nav">
+        <q-btn
+          flat
+          dense
+          no-caps
+          icon="chevron_left"
+          :label="t('day.previous')"
+          data-test="prev-day"
+          @click="cycle.showPreviousDay()"
+        />
+        <div class="day-board__date-wrap">
+          <div
+            class="day-board__date"
+            data-test="board-date"
+          >
+            {{ dateLabel }}
+          </div>
+          <span
+            v-if="relativeLabel"
+            class="day-board__relative"
+            data-test="board-relative"
+          >{{ relativeLabel }}</span>
+        </div>
+        <q-btn
+          flat
+          dense
+          no-caps
+          icon-right="chevron_right"
+          :label="t('day.next')"
+          data-test="next-day"
+          @click="cycle.showNextDay()"
+        />
       </div>
       <div
         class="day-board__template"
@@ -32,7 +59,7 @@
           data-test="plan-name"
         >{{ plan.name }}</span>
         <span
-          v-else-if="cycle.isPlanMissing"
+          v-else-if="cycle.displayIsPlanMissing"
           class="day-board__template-name"
           data-test="plan-deleted"
         >{{ t('day.planDeleted') }}</span>
@@ -63,17 +90,7 @@
           @click="onOpenPlan"
         />
         <q-btn
-          v-if="cycle.canShiftNext"
-          outline
-          no-caps
-          color="primary"
-          icon-right="arrow_forward"
-          :label="t('day.next')"
-          data-test="shift-next"
-          @click="onShiftNext"
-        />
-        <q-btn
-          v-if="cycle.canComplete"
+          v-if="cycle.canComplete && cycle.isViewingActiveDay"
           unelevated
           no-caps
           color="primary"
@@ -82,7 +99,7 @@
           @click="cycle.startCompletion()"
         />
         <q-btn
-          v-if="cycle.lastCompletedInstanceId"
+          v-if="cycle.lastCompletedInstanceId && cycle.isViewingActiveDay"
           outline
           no-caps
           color="primary"
@@ -91,8 +108,46 @@
           data-test="cancel-completion"
           @click="onCancelCompletion"
         />
+        <q-btn
+          v-if="!cycle.isViewingActiveDay"
+          outline
+          no-caps
+          color="primary"
+          icon="today"
+          :label="t('day.backToActive')"
+          data-test="back-to-active"
+          @click="cycle.showActiveDay()"
+        />
       </div>
     </header>
+
+    <q-banner
+      v-if="cycle.viewError"
+      dense
+      class="bg-negative text-white q-mb-sm"
+      data-test="view-error"
+    >
+      {{ t('day.viewError') }}
+      <template #action>
+        <q-btn
+          flat
+          no-caps
+          color="white"
+          :label="t('common.retry')"
+          data-test="view-retry"
+          @click="cycle.reloadViewedDay()"
+        />
+      </template>
+    </q-banner>
+
+    <q-banner
+      v-if="viewBannerText"
+      dense
+      class="bg-grey-3 text-black q-mb-sm"
+      data-test="view-banner"
+    >
+      {{ viewBannerText }}
+    </q-banner>
 
     <q-banner
       v-if="showConflictBanner"
@@ -101,11 +156,11 @@
       data-test="conflict-banner"
     >
       <span aria-hidden="true">⚠</span>
-      {{ cycle.conflicts.length }} {{ t('day.conflicts', cycle.conflicts.length) }}
+      {{ cycle.displayConflicts.length }} {{ t('day.conflicts', cycle.displayConflicts.length) }}
     </q-banner>
 
     <div
-      v-if="cycle.isCurrentDayEmpty"
+      v-if="cycle.isViewingActiveDay && cycle.isCurrentDayEmpty"
       class="day-board__empty"
       data-test="empty-day"
     >
@@ -136,6 +191,16 @@
     </div>
 
     <div
+      v-else-if="viewKind === 'empty' && !cycle.isViewingActiveDay"
+      class="day-board__empty"
+      data-test="view-empty"
+    >
+      <div class="text-subtitle2">
+        {{ t('day.viewNoData') }}
+      </div>
+    </div>
+
+    <div
       v-else-if="placements.length === 0 && !readOnly"
       class="day-board__hint"
       data-test="no-placements"
@@ -152,8 +217,9 @@
     </div>
 
     <DayGrid
+      :key="cycle.viewDate"
       ref="gridRef"
-      :slots="cycle.slots"
+      :slots="cycle.displaySlots"
       :placements="placements"
       :conflict-ids="conflictIds"
       :read-only="readOnly"
@@ -173,7 +239,7 @@
     />
 
     <UnallocatedZone
-      :placements="cycle.unallocatedPlacements"
+      :placements="cycle.displayUnallocatedPlacements"
       :read-only="readOnly"
       :dragging-id="drag.draggingId.value"
       :day-start-min="dayStartMin"
@@ -186,7 +252,7 @@
     />
 
     <RemovedPlannedZone
-      :placements="cycle.removedPlacements"
+      :placements="cycle.displayRemovedPlacements"
       :read-only="readOnly"
       :day-start-min="dayStartMin"
       :time-format="timeFormat"
@@ -229,13 +295,14 @@
       :time-format="timeFormat"
       :removed-count="cycle.removedCount"
       :carry-date-label="carryDateLabel"
+      :can-open-next="cycle.canOpenNextDay"
       @submit="onCompleteDay"
     />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useNow } from '@vueuse/core'
@@ -249,7 +316,7 @@ import { formatDayLabel, formatTimeRange, ruleTextDescriptor } from './dayFormat
 import { weekdayLabelKey } from './dayRepeat'
 import { usePlacementDrag } from './usePlacementDrag'
 import type { PlacementActionId } from './placementActions'
-import { formatClock, minutesOfDay, todayISO } from 'src/services/dates'
+import { addDaysISO, formatClock, minutesOfDay, todayISO } from 'src/services/dates'
 import type { Slot } from 'src/models/cycle'
 import type { Placement } from 'src/models/dayInstance'
 import type { PlacementStatus } from 'src/models/enums'
@@ -270,16 +337,18 @@ const announcement = ref('')
 const hoverAnnouncement = ref('')
 const now = useNow({ interval: 60_000 })
 
-const plan = computed(() => cycle.currentPlan)
-const placements = computed<Placement[]>(() => cycle.currentInstance?.placements ?? [])
+const plan = computed(() => cycle.displayPlan)
+const placements = computed<Placement[]>(() => cycle.displayInstance?.placements ?? [])
 const completionPlacements = computed(() =>
-  placements.value.filter(placement => placement.removed !== true),
+  (cycle.currentInstance?.placements ?? []).filter(placement => placement.removed !== true),
 )
 const timeFormat = computed(() => settings.timeFormat)
-const readOnly = computed(() => cycle.currentInstance?.status !== 'active')
+const readOnly = computed(() => cycle.displayReadOnly)
 const dayStartMin = computed(() =>
-  cycle.currentInstance ? minutesOfDay(cycle.currentInstance.timeStart) : 0,
+  cycle.displayInstance ? minutesOfDay(cycle.displayInstance.timeStart) : 0,
 )
+
+const viewKind = computed(() => cycle.viewKind)
 
 /** Подпись даты, в которую уйдут выбранные для переноса невыполненные дела. */
 const carryDateLabel = computed(() => {
@@ -287,21 +356,42 @@ const carryDateLabel = computed(() => {
   return date ? formatDayLabel(date, settings.language) : ''
 })
 
-const dateLabel = computed(() => {
-  const instance = cycle.currentInstance
-  if (!instance) return ''
-  return formatDayLabel(instance.date, settings.language)
+const dateLabel = computed(() => formatDayLabel(cycle.viewDate, settings.language))
+
+/** «Сегодня/Вчера/Завтра» рядом с датой: помогает не потеряться при просмотре. */
+const relativeLabel = computed(() => {
+  void now.value
+  const today = todayISO()
+  if (cycle.viewDate === today) return t('day.relativeToday')
+  if (cycle.viewDate === addDaysISO(today, -1)) return t('day.relativeYesterday')
+  if (cycle.viewDate === addDaysISO(today, 1)) return t('day.relativeTomorrow')
+  return ''
 })
 
 const timeRange = computed(() => {
-  const instance = cycle.currentInstance
+  const instance = cycle.displayInstance
   if (!instance) return ''
   return formatTimeRange(instance.timeStart, instance.timeEnd, timeFormat.value)
 })
 
 const planLabel = computed(() => {
   if (plan.value) return plan.value.name
-  return cycle.isPlanMissing ? t('day.planDeleted') : t('day.noPlan')
+  return cycle.displayIsPlanMissing ? t('day.planDeleted') : t('day.noPlan')
+})
+
+/** Пояснение, почему доска только для чтения (FR-C-6). */
+const viewBannerText = computed(() => {
+  if (cycle.isViewingActiveDay) return ''
+  void now.value
+  if (viewKind.value === 'saved') {
+    return cycle.displayInstance?.status === 'completed'
+      ? t('day.viewCompleted')
+      : t('day.viewSaved')
+  }
+  if (viewKind.value === 'plan') {
+    return cycle.viewDate > todayISO() ? t('day.viewFuturePlan') : t('day.viewPlanNoRecord')
+  }
+  return t('day.viewNoData')
 })
 
 const planRuleText = computed(() => {
@@ -313,15 +403,15 @@ const planRuleText = computed(() => {
 
 const isToday = computed(() => {
   void now.value
-  return cycle.currentInstance?.date === todayISO()
+  return cycle.viewDate === todayISO()
 })
 
 const nowStartMin = computed<number | null>(() => {
   void now.value
-  const instance = cycle.currentInstance
+  const instance = cycle.displayInstance
   if (!instance || !isToday.value) return null
   const offset = minutesOfDay(format(now.value, 'HH:mm')) - dayStartMin.value
-  const dayLength = cycle.slots.length * 15
+  const dayLength = cycle.displaySlots.length * 15
   if (offset < 0 || offset > dayLength) return null
   return offset
 })
@@ -329,14 +419,23 @@ const nowStartMin = computed<number | null>(() => {
 const conflictIds = computed(() => {
   const ids = new Set<string>()
   if (!settings.showConflicts) return ids
-  for (const conflict of cycle.conflicts) {
+  for (const conflict of cycle.displayConflicts) {
     ids.add(conflict.placementIds[0])
     ids.add(conflict.placementIds[1])
   }
   return ids
 })
 
-const showConflictBanner = computed(() => settings.showConflicts && cycle.conflicts.length > 0)
+const showConflictBanner = computed(
+  () => settings.showConflicts && cycle.displayConflicts.length > 0,
+)
+
+watch(
+  () => cycle.viewDate,
+  () => {
+    announcement.value = t('day.viewOpened', { date: dateLabel.value })
+  },
+)
 
 /** Плановое время только для отклонившихся размещений: «план: HH:mm». */
 const plannedStarts = computed(() => {
@@ -358,7 +457,7 @@ const completionOpen = computed({
 const drag = usePlacementDrag({
   gridRef,
   readOnly: () => readOnly.value,
-  slots: () => cycle.slots,
+  slots: () => cycle.displaySlots,
   hoveredSlot: () => cycle.hoveredSlot,
   onHover: index => cycle.setHoveredSlot(index),
   onDrop: (placementId, slot) => {
@@ -400,27 +499,18 @@ function goTasks() {
 }
 
 function onOpenPlan() {
-  const planId = cycle.currentPlan?.id
+  const planId = plan.value?.id
   if (planId) void router.push({ name: 'day-plan', params: { id: planId } })
 }
 
 // --- Завершение дня ------------------------------------------------------
-async function onShiftNext() {
-  const result = await cycle.shiftToNextDay()
-  if (result.ok) return
-  const message =
-    result.error.code === 'SHIFT_ALREADY_DONE_TODAY'
-      ? t('day.shiftBlockedToday')
-      : t('day.shiftNotActive')
-  ui.notify(message, 'warning', undefined, 5000)
-}
-
 async function onCompleteDay(payload: {
   marks: Record<string, 'done' | 'skipped'>
   carryIds: string[]
+  openNext: boolean
 }) {
-  const { marks, carryIds } = payload
-  const result = await cycle.completeDay(marks, carryIds)
+  const { marks, carryIds, openNext } = payload
+  const result = await cycle.completeDay(marks, carryIds, { openNext })
   if (result.ok) {
     const message =
       carryIds.length > 0
@@ -432,6 +522,16 @@ async function onCompleteDay(payload: {
       { label: t('common.undo'), handler: () => void onCancelCompletion() },
       5000,
     )
+    return
+  }
+
+  if (result.error.code === 'SHIFT_ALREADY_DONE_TODAY') {
+    ui.notify(t('day.shiftBlockedToday'), 'warning', undefined, 5000)
+    return
+  }
+
+  if (result.error.code === 'DAY_NOT_ACTIVE') {
+    ui.notify(t('day.shiftNotActive'), 'warning', undefined, 5000)
     return
   }
 
@@ -607,9 +707,43 @@ function onDragEnd() {
   margin-bottom: 8px;
 }
 
+.day-board__nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.day-board__nav .q-btn {
+  flex: 0 0 auto;
+}
+
+.day-board__date-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 160px;
+}
+
 .day-board__date {
   font-size: 16px;
   font-weight: 500;
+  text-align: center;
+}
+
+.day-board__relative {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--app-surface-muted);
+  color: var(--app-meta);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 18px;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .day-board__template {

@@ -40,7 +40,7 @@
       class="row q-col-gutter-md"
     >
       <div
-        v-if="wide"
+        v-if="wide && !cycle.displayReadOnly"
         class="col-auto"
       >
         <TaskDragPanel

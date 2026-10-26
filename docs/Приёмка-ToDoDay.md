@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [Архив скаффолда](Скаффолд-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Версия: 2.3.0 (MVP). Источник критериев — [ТЗ §9](ТЗ-ToDoDay.md); формулировки перечитаны под модель 2.0 (журнал, приложение Ы), ревизию 2.2.0 (перенос, длительность, статистика дня) и ревизию 2.3.0 (перенос невыполненных дел, FR-E-4). Критерии сгруппированы по областям: дела, планы, доска, завершение, сдвиги, статистика, отклонения и статистика дня, настройки и данные, НФТ; 76 сгруппированных строк покрывают 79 пунктов §9 (часть пунктов объединена). В каждой строке — проверяемый критерий, существующие пути кода и тестов; все пути проверены на ревизии 2.3.0.
+Версия: 2.4.0 (MVP). Источник критериев — [ТЗ §9](ТЗ-ToDoDay.md); формулировки перечитаны под модель 2.0 (журнал, приложение Ы), ревизию 2.2.0 (перенос, длительность, статистика дня), ревизию 2.3.0 (перенос невыполненных дел, FR-E-4) и ревизию 2.4.0 (просмотр предыдущих и следующих дней, FR-C-6). Критерии сгруппированы по областям: дела, планы, доска, завершение, сдвиги, просмотр дней, статистика, отклонения и статистика дня, настройки и данные, НФТ; 80 сгруппированных строк покрывают 83 пункта §9 (часть пунктов объединена). В каждой строке — проверяемый критерий, существующие пути кода и тестов; все пути проверены на ревизии 2.4.0.
 
 Модель 2.0 заменила прежнюю пару «сущность дня + отдельный список» единым `DayPlan` с режимами «Один день» / «По дням недели» / «По числам месяца» / «Без даты». Поэтому пункты ТЗ §9 о порядке и повторяемости перечитаны как критерии режимов плана, уникальности даты и приоритета плана на дату; отдельного счётчика повторов в модели нет.
 
@@ -61,21 +61,30 @@
 | 34 | После подтверждения день получает статус `completed`; попытка изменить завершённый день отклоняется `DAY_NOT_ACTIVE` (FR-E-1, FR-E-2) | `src/stores/cycle.ts` (`completeDay`), `src/components/days/DayBoard.vue` (`readOnly`) | `test/stores/cycle.spec.ts`, `test/components/dayBoard.spec.ts`, `test/components/dayCompletion.spec.ts` |
 | 35 | Отмена завершения доступна всю сессию кнопкой в шапке, восстанавливает снимок отметок, удаляет созданный этим завершением день (в том числе пустой) и пересчитывает статистику (FR-E-3) | `src/stores/cycle.ts` (`cancelCompletion`, `lastCompletedInstanceId`), `src/components/days/DayBoard.vue` | `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts`, `test/components/daysFlow.spec.ts` |
 | 36 | Пустой виртуальный день: отмечать нечего, авто-диалог не открывается, подтверждение сохраняет день без размещений в историю (FR-D-6, FR-E-2) | `src/stores/cycle.ts` (`completeDay`), `src/components/completion/CompleteDayDialog.vue` (`nothingToMark`) | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts` |
-| 37 | «Следующий день →» открывает диалог с подсказкой о новом дне; после подтверждения открывается день по плану целевой даты (FR-C-3) | `src/stores/cycle.ts` (`shiftToNextDay`), `src/components/completion/CompleteDayDialog.vue` (`shiftPending`) | `test/components/dayCompletion.spec.ts`, `test/components/daysFlow.spec.ts` |
+| 37 | Обычное «Завершить день» фиксирует отметки и не создаёт следующий экземпляр; кнопка «Завершить и открыть следующий» в диалоге выполняет прежний ручной сдвиг и открывает день по плану целевой даты (FR-C-3) | `src/stores/cycle.ts` (`completeDay` с `{ openNext: true }`, `shiftToNextDay` как программная точка), `src/components/completion/CompleteDayDialog.vue` (`canOpenNext`, `confirmAndNext`) | `test/components/dayCompletion.spec.ts`, `test/components/daysFlow.spec.ts`, `test/stores/cycle.spec.ts` |
 | 37а | В диалоге завершения невыполненное дело можно выбрать кнопкой «Перенести»; в завершённом дне оно остаётся `skipped`, в целевом создаётся `pending` + `unplanned` + `plannedId: null`, план не меняется (FR-E-1, FR-E-2, FR-E-4) | `src/components/completion/CompleteDayDialog.vue` (`carry`, `carryIds`), `src/stores/cycle.ts` (`completeDay`), `src/services/carryOver.ts` (`buildCarryOvers`) | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts`, `test/services/carryOver.spec.ts` |
 | 37б | Перенос сохраняет время суток и уходит в «Нераспределённые» при невместимости; применяется в первый активный день с `targetDate <= date`, материализует день без плана, не теряется при пропущенном дне и разрешает дубль в плане (FR-E-4) | `src/services/carryOver.ts` (`resolveCarryTargetDate`, `applyCarryOvers`), `src/stores/cycle.ts` (`resolveCurrentDay`, `applyPendingCarryOversToCurrent`, `carryTargetDate`) | `test/services/carryOver.spec.ts`, `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts` |
 | 37в | Перенос работает при обычном завершении, сдвиге и авто-диалоге; при авто-сдвиге без диалога выбора нет; отмена восстанавливает очередь и удаляет созданный день вместе с перенесённым (FR-E-3, FR-E-4, FR-C-3, FR-C-4) | `src/stores/cycle.ts` (`completeDay`, `cancelCompletion`, `carryOversSnapshot`), `src/components/days/DayBoard.vue` (`onCompleteDay`) | `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts` |
+| 37г | В ручном диалоге завершения вторая кнопка «Завершить и открыть следующий» доступна только при `canOpenNextDay`; обычное подтверждение её не заменяет и следующий день не открывает (FR-C-3) | `src/stores/cycle.ts` (`canOpenNextDay`, `completeDay`), `src/components/completion/CompleteDayDialog.vue` | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts` |
 
 ## Сдвиги
 
 | № | Критерий | Чем обеспечен | Чем проверен |
 | --- | --- | --- | --- |
-| 38 | «Следующий день» доступна только активному дню; повторный ручной сдвиг в те же сутки даёт `SHIFT_ALREADY_DONE_TODAY`, сдвиг завершённого — `DAY_NOT_ACTIVE` (FR-C-3) | `src/stores/cycle.ts` (`canShiftNext`, `shiftToNextDay`) | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts` |
+| 38 | «Завершить и открыть следующий» доступна только активному дню и при `manualShiftDate !== сегодня`; повторный ручной сдвиг в те же сутки даёт `SHIFT_ALREADY_DONE_TODAY`, сдвиг завершённого — `DAY_NOT_ACTIVE` (FR-C-3) | `src/stores/cycle.ts` (`canOpenNextDay`, `completeDay`), `src/components/completion/CompleteDayDialog.vue` | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts` |
+| 38а | Из активного дня, датированного будущим после раннего сдвига, вторая кнопка скрыта: `canOpenNextDay` требует дату `<= сегодня` (FR-C-3) | `src/stores/cycle.ts` (`canOpenNextDay`), `src/components/days/DayBoard.vue` | `test/stores/cycle.spec.ts` |
 | 39 | Ручной сдвиг в те же сутки открывает день на «завтра» с планом завтрашней даты; второй день на ту же дату не создаётся, `manualShiftDate` фиксируется (FR-C-3) | `src/stores/cycle.ts` (`completeDay`, `buildShiftedInstance`), `src/services/repeat.ts` (`resolveShiftTargets`) | `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts`, `test/components/daysFlow.spec.ts` |
 | 40 | Сдвиг просроченного дня и авто-сдвиг в полночь ведут на «сегодня» (`overdue`/`midnight`), а не на завтра (FR-C-3, FR-C-4) | `src/services/repeat.ts` (`resolveShiftTargets`), `src/stores/cycle.ts` (`checkDayChange`, `autoShift`) | `test/services/repeat.spec.ts`, `test/components/dayCompletion.spec.ts` |
 | 41 | При смене суток авто-диалог открывается по настройке «Спрашивать о завершении»; разовый пропуск молчит до перезагрузки; подтверждение просроченного дня открывает сегодняшний, отмена возвращает вчерашний (FR-C-4) | `src/stores/cycle.ts` (`checkDayChange`, `dismissCompletion`, `skippedAutoPromptDate`), `src/components/completion/CompleteDayDialog.vue` | `test/components/dayCompletion.spec.ts` |
 | 42 | Повторная инициализация не создаёт второй экземпляр уже открытого дня (`initializePromise` объединяет параллельные вызовы) | `src/stores/cycle.ts` (`initialize`, `initializePromise`, `resolveCurrentDay`) | `test/stores/cycle.spec.ts` |
 | 43 | Все календарные даты идут через `services/dates.ts`; в исходниках нет `new Date('YYYY-MM-DD')` и `toISOString()` для дат (ТЗ §2.8) | `src/services/dates.ts`, правило `no-restricted-syntax` в `eslint.config.js` | `test/services/dates.spec.ts`, `test/config/lint.spec.ts`, `pnpm lint` |
+
+## Просмотр дней
+
+| № | Критерий | Чем обеспечен | Чем проверен |
+| --- | --- | --- | --- |
+| 38б | «← Предыдущий день» и «Следующий день →» меняют только `viewDate`; активный экземпляр, `cycleState` и число записей в Dexie не меняются; «К текущему дню» возвращает активный день (FR-C-6) | `src/stores/cycle.ts` (`openDay`, `showPreviousDay`, `showNextDay`, `showActiveDay`), `src/components/days/DayBoard.vue` | `test/stores/cycle.spec.ts`, `test/components/dayBoard.spec.ts` |
+| 38в | Завершённый сохранённый день открывается read-only со статусами; будущая дата — материализованный план; прошедшая без записи — план с пометкой; пустая — сообщение без CTA; описания в `viewKind` и `displayReadOnly` (FR-C-6) | `src/services/dayView.ts` (`pickDayInstanceForDate`, `buildDayViewInstance`), `src/stores/cycle.ts` (`displayInstance`, `viewKind`, `displayReadOnly`), `src/components/days/DayBoard.vue` | `test/services/dayView.spec.ts`, `test/stores/cycle.spec.ts`, `test/components/dayBoard.spec.ts` |
 
 ## Статистика
 
@@ -129,13 +138,13 @@
 
 **FCP.** Цель ТЗ — менее 1.5 c; проверяемый бюджет теста — 2.0 c. Оценка ≈1.97 c получена арифметикой по размеру критического пути на профиле Lighthouse Slow 3G (400 кбит/с, 400 мс RTT), а не браузерным замером. Достижение цели < 1.5 c не подтверждено: браузерный замер и ручной проход остаются задачей стенда. Тест проверяет только бюджет 2.0 c.
 
-## Итог прогона 2.3.0
+## Итог прогона 2.4.0
 
 | Проверка | Команда | Результат |
 | --- | --- | --- |
 | Типы | `pnpm typecheck` | код 0 |
 | Линтер | `pnpm lint` | код 0, 0 предупреждений |
-| Тесты | `pnpm test` | 504 теста в 43 файлах, все зелёные |
+| Тесты | `pnpm test` | 523 теста в 44 файлах, все зелёные |
 | Покрытие | `pnpm test:coverage` | пороги покрытия (≥ 70%) соблюдены |
 | Сборка SPA | `pnpm build` | Build succeeded (`dist/spa`) |
 | Сборка PWA | `pnpm build:pwa` | Build succeeded (`dist/pwa`); офлайн-манифест и установка проверены тестами |
@@ -145,4 +154,4 @@
 
 **Ограничение окружения.** Приёмочный прогон в браузере в песочнице недоступен: состояния экранов проверены монтированием в jsdom, офлайн и первый кадр — разбором собранного `dist/pwa`, контраст — расчётом по WCAG. Ручной проход вайрфреймов, браузерный замер FCP и установка PWA на устройстве остаются задачей приёмки на стенде.
 
-Футер: версия документации 2.3.0, приложения журнала А–Я.
+Футер: версия документации 2.4.0, приложения журнала А–АА.
