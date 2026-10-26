@@ -134,6 +134,7 @@ describe('useStatsStore: API статистики (контракты §4)', () 
       }),
       instance({
         id: 'new',
+        timeStart: '10:00',
         placements: [placement({ id: 'p-new', taskId: 'a', startMin: 60, durationMin: 15 })],
       }),
     ])
@@ -146,6 +147,9 @@ describe('useStatsStore: API статистики (контракты §4)', () 
     if (!first.ok) return
     expect(first.data.map(h => h.date)).toEqual([todayISO(), yesterday])
     expect(first.data[0]?.startMin).toBe(60)
+    // Начало дня берётся из экземпляра: 10:00 = 600 минут от полуночи
+    expect(first.data[0]?.dayStartMin).toBe(600)
+    expect(first.data[1]?.dayStartMin).toBe(480)
     expect(first.data[0]?.completedAt).toBeUndefined()
 
     const second = await store.loadTaskHistory('a')

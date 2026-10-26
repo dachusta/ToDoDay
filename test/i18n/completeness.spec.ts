@@ -155,7 +155,7 @@ describe('i18n: словари ru и en (НФТ ТЗ §7)', () => {
     ])
 
     // История размещений: шесть ключей (время / без времени × три формы длительности)
-    const entry = { date: '2026-10-09', durationMin: 30, status: 'done' } as never
+    const entry = { date: '2026-10-09', durationMin: 30, dayStartMin: 480, status: 'done' } as never
     for (const durationMin of [15, 60, 90]) {
       for (const startMin of [75, null]) {
         built.add(

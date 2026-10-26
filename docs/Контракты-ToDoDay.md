@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [Архив скаффолда](Скаффолд-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Версия: 2.1.0 (MVP). Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (`defineStore('name', () => {...})`), типизированы, работают поверх Dexie (IndexedDB). Имена, типы и алгоритмы сверены с `src/stores`, `src/services` и `test`; история решений — в [журнале](Журнал-правок-ToDoDay.md).
+Версия: 2.1.1 (MVP). Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (`defineStore('name', () => {...})`), типизированы, работают поверх Dexie (IndexedDB). Имена, типы и алгоритмы сверены с `src/stores`, `src/services` и `test`; история решений — в [журнале](Журнал-правок-ToDoDay.md).
 
 ## 0. Общие принципы
 
@@ -776,7 +776,8 @@ interface OverallStats {
 interface PlacementHistoryEntry {
   instanceId: string;
   date: string;         // ISO
-  startMin: number | null;
+  startMin: number | null;  // смещение от DayInstance.timeStart, как у Placement
+  dayStartMin: number;      // минуты от полуночи для DayInstance.timeStart: время строки = dayStartMin + startMin
   durationMin: number;
   status: PlacementStatus;
   unplanned?: boolean;
@@ -785,7 +786,7 @@ interface PlacementHistoryEntry {
 }
 ```
 
-`StatsPeriod` и `StatsSortField` объявлены в `src/services/stats.ts`; стор реэкспортирует типы. `unplanned` считается по `Placement.unplanned === true`, включая убранные из плана (они тоже внеплановые). `pending` в `OverallStats` отсутствует: агрегация идёт по завершённым дням, где `pending` всегда 0.
+`StatsPeriod` и `StatsSortField` объявлены в `src/services/stats.ts`; стор реэкспортирует типы. `unplanned` считается по `Placement.unplanned === true`, включая убранные из плана (они тоже внеплановые). `pending` в `OverallStats` отсутствует: агрегация идёт по завершённым дням, где `pending` всегда 0. В `PlacementHistoryEntry` `startMin` сохраняет смысл смещения от начала дня, а `dayStartMin` фиксирует само начало дня экземпляра: подпись времени в истории — это время суток `dayStartMin + startMin`, а не смещение от полуночи.
 
 ### 4.2 Getters
 
@@ -839,7 +840,7 @@ const instances = await db.dayInstances
 | setPeriod | Сохраняет `period` и сразу вызывает `recompute(p)` |
 | subscribe | liveQuery на `completed` `dayInstances`; при изменениях применяет агрегаты, сохраняя текущий период |
 | recompute | Читает только завершённые экземпляры, пересчитывает `taskStats`/`overallStats`/`allTimeStats`, при изменении агрегатов очищает `history`. Ошибка — `DB_ERROR` и не влияет на завершение дня |
-| loadTaskHistory | Читает завершённые экземпляры, собирает историю по `taskId`, сортирует по дате вниз, кэширует; повторный вызов отдаёт кэш |
+| loadTaskHistory | Читает завершённые экземпляры, собирает историю по `taskId` (включая `dayStartMin` из `instance.timeStart`), сортирует по дате вниз, кэширует; повторный вызов отдаёт кэш |
 | resetCache | Обнуляет агрегаты, `overallStats`, `allTimeStats`, историю и `initialized`; подписку снимает `unsubscribe()`, БД не трогает |
 
 ### 4.6 Взаимодействие
@@ -1168,4 +1169,4 @@ function setGlobalError(err: AppError | null): void;
 
 ---
 
-Журнал правок — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md). Версия документации — 2.1.0.
+Журнал правок — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md). Версия документации — 2.1.1.

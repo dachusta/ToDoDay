@@ -494,7 +494,7 @@ describe('TaskStatsPage: сводка дела и история размеще�
           placement({
             id: 'p-old',
             taskId: 'a',
-            startMin: 540,
+            startMin: 60,
             status: 'skipped',
             taskSnapshot: { title: 'Зарядка', color: '#4CAF50', priority: 'high' },
           }),
@@ -506,7 +506,7 @@ describe('TaskStatsPage: сводка дела и история размеще�
           placement({
             id: 'p-new',
             taskId: 'a',
-            startMin: 495,
+            startMin: 15,
             durationMin: 15,
             taskSnapshot: { title: 'Зарядка', color: '#4CAF50', priority: 'high' },
           }),
@@ -564,13 +564,38 @@ describe('TaskStatsPage: сводка дела и история размеще�
     await db.dayInstances.add(
       instance({
         id: 'today',
-        placements: [placement({ id: 'p1', taskId: 'a', startMin: 495 })],
+        placements: [placement({ id: 'p1', taskId: 'a', startMin: 15 })],
       }),
     )
     useSettingsStore().setTimeFormat('12h')
 
     const { wrapper } = await mountTaskStats()
     expect(wrapper.get('.stats-history__row').text()).toContain('8:15 AM')
+  })
+
+  it('считает время от начала дня, а не от полуночи (FR-S-4)', async () => {
+    await db.tasks.add(seedTask({ id: 'a', title: 'Зарядка' }))
+    await db.dayInstances.bulkAdd([
+      instance({
+        id: 'yesterday',
+        date: addDaysISO(todayISO(), -1),
+        timeStart: '08:00',
+        placements: [placement({ id: 'p-old', taskId: 'a', startMin: 0, durationMin: 15 })],
+      }),
+      instance({
+        id: 'today',
+        timeStart: '09:30',
+        placements: [placement({ id: 'p-new', taskId: 'a', startMin: 0, durationMin: 15 })],
+      }),
+    ])
+
+    const { wrapper } = await mountTaskStats()
+    const rows = wrapper.findAll('.stats-history__row')
+    // История отсортирована по дате вниз: у сегодняшнего дня своё начало — 09:30
+    expect(rows[0]?.text()).toContain('09:30')
+    expect(rows[1]?.text()).toContain('08:00')
+    // Смещение 0 — первый слот дня, а не полночь (дефект «00:00»)
+    expect(wrapper.text()).not.toContain('00:00')
   })
 
   it('берёт подпись из снимка, если дело удалено жёстко (FR-S-2/FR-T-6)', async () => {
@@ -616,7 +641,8 @@ describe('statsFormat: строка истории размещений', () => 
     const entry = {
       instanceId: 'i1',
       date: '2025-09-23',
-      startMin: 495,
+      startMin: 15,
+      dayStartMin: 480,
       durationMin: 30,
       status: 'done' as const,
     }
@@ -637,6 +663,24 @@ describe('statsFormat: строка истории размещений', () => 
       key: 'stats.historyRowNoTimeHM',
       params: { day: '23', month: 'Sep', weekday: 'Tu', h: 1, m: 30 },
     })
+  })
+
+  it('прибавляет начало дня к смещению размещения (FR-S-4)', () => {
+    const entry = {
+      instanceId: 'i1',
+      date: '2025-09-23',
+      startMin: 0,
+      dayStartMin: 480,
+      durationMin: 15,
+      status: 'done' as const,
+    }
+
+    // Первый слот дня, начинающегося в 08:00, — это 08:00, а не 00:00
+    expect(historyRowDescriptor(entry, 'ru', '24h').params.time).toBe('08:00')
+    // У дня с началом 09:30 смещение 30 минут — это 10:00
+    expect(
+      historyRowDescriptor({ ...entry, dayStartMin: 570, startMin: 30 }, 'ru', '24h').params.time,
+    ).toBe('10:00')
   })
 
   it('все шесть ключей строки есть в словарях', async () => {

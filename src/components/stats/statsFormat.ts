@@ -32,7 +32,9 @@ function durationPart(minutes: number): { suffix: 'N' | 'H' | 'HM'; params: Reco
 /**
  * Строка истории размещений: «23 сен, пн · 30 мин · 08:15» (вайрфреймы §7.3).
  * Месяц и день недели берутся из date-fns с локалью настроек, время — из общего
- * форматтера FR-SET-3, поэтому 12-часовой вид применяется и здесь.
+ * форматтера FR-SET-3, поэтому 12-часовой вид применяется и здесь. `startMin`
+ * размещения — смещение от начала дня (`DayInstance.timeStart`), а не время
+ * суток (контракты §4.1), поэтому к нему прибавляется `dayStartMin` записи.
  *
  * Ключей строки шесть: две формы времени (с временем и «без времени» — так
  * выглядит нераспределённое размещение, FR-B-5) на три формы длительности.
@@ -56,7 +58,9 @@ export function historyRowDescriptor(
     ...duration.params,
   }
   const withTime = entry.startMin !== null
-  if (entry.startMin !== null) params.time = formatMinutesOfDay(entry.startMin, timeFormat)
+  if (entry.startMin !== null) {
+    params.time = formatMinutesOfDay(entry.dayStartMin + entry.startMin, timeFormat)
+  }
 
   const keys = {
     withTime: { N: 'stats.historyRowN', H: 'stats.historyRowH', HM: 'stats.historyRowHM' },

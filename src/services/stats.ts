@@ -34,7 +34,14 @@ export interface OverallStats {
 export interface PlacementHistoryEntry {
   instanceId: string
   date: string
+  /** Смещение размещения от начала дня, как у `Placement.startMin` (не время суток). */
   startMin: number | null
+  /**
+   * Начало дня экземпляра в минутах от полуночи (`minutesOfDay(instance.timeStart)`):
+   * время в строке истории = `dayStartMin + startMin`. У каждого дня своё значение,
+   * поэтому оно хранится в записи, а не передаётся отдельно.
+   */
+  dayStartMin: number
   durationMin: number
   status: PlacementStatus
   unplanned?: boolean

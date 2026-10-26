@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { liveQuery, type Subscription } from 'dexie'
 import { db } from 'src/services/db'
-import { todayISO } from 'src/services/dates'
+import { minutesOfDay, todayISO } from 'src/services/dates'
 import { aggregateStats } from 'src/services/stats'
 import type {
   PlacementHistoryEntry,
@@ -179,6 +179,9 @@ export const useStatsStore = defineStore('stats', () => {
               instanceId: inst.id,
               date: inst.date,
               startMin: p.startMin,
+              // Placement.startMin — смещение от начала дня: для подписи нужен
+              // абсолютный час начала дня этого экземпляра (контракты §4.1)
+              dayStartMin: minutesOfDay(inst.timeStart),
               durationMin: p.durationMin,
               status: p.status,
               unplanned: p.unplanned === true,
