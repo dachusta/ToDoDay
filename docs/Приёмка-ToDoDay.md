@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [Архив скаффолда](Скаффолд-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Версия: 2.1.1 (MVP). Источник критериев — [ТЗ §9](ТЗ-ToDoDay.md); формулировки перечитаны под модель 2.0 (журнал, приложение Ы). Критерии сгруппированы по областям: дела, планы, доска, завершение, сдвиги, статистика, настройки и данные, НФТ; 68 сгруппированных строк покрывают 77 пунктов §9 (часть пунктов объединена). В каждой строке — проверяемый критерий, существующие пути кода и тестов; все пути проверены на ревизии 2.1.1.
+Версия: 2.2.0 (MVP). Источник критериев — [ТЗ §9](ТЗ-ToDoDay.md); формулировки перечитаны под модель 2.0 (журнал, приложение Ы) и ревизию 2.2.0 (перенос, длительность, статистика дня). Критерии сгруппированы по областям: дела, планы, доска, завершение, сдвиги, статистика, отклонения и статистика дня, настройки и данные, НФТ; 72 сгруппированные строки покрывают 77 пунктов §9 (часть пунктов объединена). В каждой строке — проверяемый критерий, существующие пути кода и тестов; все пути проверены на ревизии 2.2.0.
 
 Модель 2.0 заменила прежнюю пару «сущность дня + отдельный список» единым `DayPlan` с режимами «Один день» / «По дням недели» / «По числам месяца» / «Без даты». Поэтому пункты ТЗ §9 о порядке и повторяемости перечитаны как критерии режимов плана, уникальности даты и приоритета плана на дату; отдельного счётчика повторов в модели нет.
 
@@ -47,7 +47,7 @@
 | 25 | Дело, не влезающее в интервал дня, уходит в «Нераспределённые» (`startMin = null`) с предупреждением (FR-B-4, FR-B-5) | `src/services/scheduler.ts` (`fitInDay`), `src/stores/cycle.ts` (`placeTask`), `src/components/days/UnallocatedZone.vue` | `test/services/scheduler.spec.ts`, `test/components/dayBoard.spec.ts` |
 | 26 | Невалидный `startMin` даёт `VALIDATION_ERROR`, размещение не меняется (FR-B-4) | `src/stores/cycle.ts` (`movePlacement`), `src/services/scheduler.ts` (`isValidStartMin`) | `test/stores/cycle.spec.ts` |
 | 27 | Контекстное меню размещения содержит все действия: статусы, «Изменить длительность», «Заменить дело», «Переместить в слот…», «Убрать из дня» (FR-B-7) | `src/components/days/placementActions.ts`, `src/components/days/PlacementActions.vue`, `src/components/days/PlacementEditDialogs.vue` | `test/components/dayBoard.spec.ts`, `test/components/dayPlanPage.spec.ts` |
-| 28 | Плановое дело, изменённое в «Сегодня», получает бейдж «внепланово» и подпись «план: HH:mm» с прежним плановым временем (FR-B-8) | `src/services/dayPlans.ts` (`isPlacementUnplanned`, `plannedStartMin`), `src/components/days/PlacementCard.vue`, `src/components/days/DayBoard.vue` (`plannedStarts`) | `test/components/dayBoard.spec.ts`, `test/stores/cycle.spec.ts` |
+| 28 | Плановое дело, перенесённое в «Сегодня», получает бейдж «перенесено» и подпись «план: HH:mm»; изменение длительности — бейдж «длительность» и пару «прежняя → новая» (прежняя зачёркнута); внеплановым это не считается (FR-B-8) | `src/services/dayPlans.ts` (`placementDeviation`, `plannedStartMin`), `src/components/days/PlacementCard.vue`, `src/components/days/DayBoard.vue` (`plannedStarts`), `src/stores/cycle.ts` (`refreshDeviation`) | `test/components/dayBoard.spec.ts`, `test/stores/cycle.spec.ts` |
 | 29 | Убранное плановое дело попадает в «Убрано из плана», не меняет план и возвращается в день кнопкой «Вернуть в день» (FR-B-8) | `src/stores/cycle.ts` (`removePlacement`, `restorePlacement`), `src/components/days/RemovedPlannedZone.vue` | `test/components/dayBoard.spec.ts`, `test/components/dayCompletion.spec.ts` |
 | 30 | Шапка доски показывает дату, имя плана, диапазон и правило, «Открыть план»; без плана — «Без плана», у удалённого — «План дня удалён» (FR-D-3, FR-D-4, FR-D-6) | `src/components/days/DayBoard.vue`, `src/components/days/dayFormat.ts` | `test/components/dayBoard.spec.ts`, `test/components/dayCompletion.spec.ts` |
 | 31 | С 1024 px есть панель дел, до 1024 px её нет; панель — источник переноса и не показывает архивные дела (ТЗ §5.1, FR-T-4) | `src/pages/DayBoardPage.vue`, `src/pages/DayPlanPage.vue`, `src/components/tasks/TaskDragPanel.vue` | `test/components/dayBoard.spec.ts`, `test/components/dayPlanPage.spec.ts`, `test/layouts/mainLayout.spec.ts` |
@@ -81,10 +81,19 @@
 | 44 | Счётчики `placed`, `done`, `skipped` и `rate` считаются корректно | `src/services/stats.ts` (`aggregateStats`) | `test/services/stats.spec.ts`, `test/components/statsPage.spec.ts` |
 | 45 | В разбивку попадают только дела с размещениями в завершённых днях периода; строки «0 размещено / 0 выполнено» нет (FR-S-2) | `src/services/stats.ts` (`aggregateStats` формирует `perTask` только по размещениям) | `test/services/stats.spec.ts`, `test/components/statsPage.spec.ts` |
 | 46 | Рейт 0% показывается только при `placed > 0` и `done = 0`; прочерк «—» остаётся только для 0/0 (FR-S-2) | `src/services/stats.ts` (`rate = null`), `src/components/tasks/taskFormat.ts` (`rateText`), `src/components/stats/StatsProgress.vue` | `test/services/stats.spec.ts`, `test/components/statsPage.spec.ts`, `test/services/taskValidator.spec.ts` |
-| 47 | Внеплановые размещения считаются в итоговой сводке и по каждому делу (FR-S-5) | `src/services/stats.ts` (`OverallStats.unplanned`, `TaskStats.unplanned`), `src/components/stats/StatsSummary.vue`, `src/components/stats/StatsTable.vue` | `test/services/stats.spec.ts`, `test/stores/cycle.spec.ts` |
-| 48 | История дела показывает дату, время (время суток с учётом начала дня экземпляра), длительность и статус, отмечает внеплановые и убранные размещения; незавершённые дни не входят (FR-S-4, FR-S-5) | `src/pages/TaskStatsPage.vue`, `src/components/stats/TaskStatsHistory.vue`, `src/components/stats/statsFormat.ts`, `src/stores/stats.ts` (`loadTaskHistory`) | `test/components/statsPage.spec.ts`, `test/stores/stats.spec.ts` |
+| 47 | Отклонения считаются отдельно: внеплановые, перенесённые и с изменённой длительностью — свои счётчики в итоговой сводке и по каждому делу (FR-S-5) | `src/services/stats.ts` (`OverallStats`/`TaskStats`: `unplanned`, `shifted`, `durationChanged`), `src/components/stats/StatsSummary.vue`, `src/components/stats/StatsTable.vue`, `src/components/stats/StatsCards.vue` | `test/services/stats.spec.ts`, `test/stores/cycle.spec.ts`, `test/components/statsPage.spec.ts` |
+| 48 | История дела группируется по дню экземпляра, показывает время (время суток с учётом начала дня), длительность и статус, отмечает «перенесено», «изменена длительность», «внепланово» и «убрано из плана»; незавершённые дни не входят (FR-S-4, FR-S-5) | `src/pages/TaskStatsPage.vue`, `src/components/stats/TaskStatsHistory.vue`, `src/components/stats/statsFormat.ts`, `src/stores/stats.ts` (`loadTaskHistory`) | `test/components/statsPage.spec.ts`, `test/stores/stats.spec.ts` |
 | 49 | Периоды 7 дней / 30 дней / всё время пересчитывают сводку и строки; дефолт — «всё время»; сортировка по колонкам работает (FR-S-3) | `src/pages/StatsPage.vue`, `src/stores/stats.ts` (`setPeriod`, `setSort`), `src/components/stats/StatsTable.vue`, `src/components/stats/StatsCards.vue` | `test/components/statsPage.spec.ts`, `test/stores/stats.spec.ts` |
 | 50 | Статистика пересчитывается при изменении завершённых дней без ручного обновления (FR-S-1) | `src/stores/cycle.ts` (`completeDay` → `recompute`), `src/stores/stats.ts` (`subscribe`) | `test/components/statsPage.spec.ts`, `test/stores/stats.spec.ts`, `test/components/dayCompletion.spec.ts` |
+
+## Отклонения и статистика дня
+
+| № | Критерий | Чем обеспечен | Чем проверен |
+| --- | --- | --- | --- |
+| 69 | Перенос планового дела по времени ставит `shifted` и не попадает в `unplanned`; добавление, замена и удаление остаются внеплановыми; план не меняется (FR-B-8) | `src/services/dayPlans.ts` (`placementDeviation`, `refreshPlacementDeviation`), `src/stores/cycle.ts` (`movePlacement`, `placeTask`, `replacePlacement`, `removePlacement`) | `test/services/dayPlans.spec.ts`, `test/stores/cycle.spec.ts`, `test/components/dayBoard.spec.ts` |
+| 70 | Изменение длительности ставит `durationChanged` (в том числе у добавленного дела), перенос + длительность дают оба признака, уход в «Нераспределённые» не считается переносом; база `plannedDurationMin` сохраняется (FR-B-8, FR-S-5) | `src/services/dayPlans.ts` (`placementDeviation`), `src/stores/cycle.ts` (`changePlacementDuration`, `refreshDeviation`), `src/components/days/PlacementCard.vue` | `test/services/dayPlans.spec.ts`, `test/stores/cycle.spec.ts`, `test/components/dayBoard.spec.ts` |
+| 71 | В «Статистике» есть блок «По дням», клик открывает `/stats/day/:date`; страница показывает сводку из семи чисел и дела дня с отметками (FR-S-6) | `src/pages/StatsPage.vue`, `src/pages/DayStatsPage.vue`, `src/components/stats/DayStatsList.vue`, `src/stores/stats.ts` (`visibleDayStats`, `loadDayStats`), `src/services/stats.ts` (`aggregateDayRollups`, `buildDayStats`) | `test/components/statsPage.spec.ts`, `test/components/dayStatsPage.spec.ts`, `test/stores/stats.spec.ts`, `test/services/stats.spec.ts` |
+| 72 | В статистику дня входят только завершённые экземпляры; день — `DayInstance.date` (просроченный вчерашний день остаётся вчерашним); несколько экземпляров на дату суммируются; пустой день отличается от отсутствующего (FR-S-6) | `src/services/stats.ts` (`buildDayStats`: `instances`), `src/stores/stats.ts` (`loadDayStats`), `src/pages/DayStatsPage.vue` | `test/components/dayStatsPage.spec.ts`, `test/services/stats.spec.ts`, `test/stores/stats.spec.ts` |
 
 ## Настройки и данные
 
@@ -116,13 +125,13 @@
 
 **FCP.** Цель ТЗ — менее 1.5 c; проверяемый бюджет теста — 2.0 c. Оценка ≈1.97 c получена арифметикой по размеру критического пути на профиле Lighthouse Slow 3G (400 кбит/с, 400 мс RTT), а не браузерным замером. Достижение цели < 1.5 c не подтверждено: браузерный замер и ручной проход остаются задачей стенда. Тест проверяет только бюджет 2.0 c.
 
-## Итог прогона 2.1.1
+## Итог прогона 2.2.0
 
 | Проверка | Команда | Результат |
 | --- | --- | --- |
 | Типы | `pnpm typecheck` | код 0 |
 | Линтер | `pnpm lint` | код 0, 0 предупреждений |
-| Тесты | `pnpm test` | 437 тестов в 41 файле, все зелёные |
+| Тесты | `pnpm test` | 470 тестов в 42 файлах, все зелёные |
 | Покрытие | `pnpm test:coverage` | пороги покрытия (≥ 70%) соблюдены |
 | Сборка SPA | `pnpm build` | Build succeeded (`dist/spa`) |
 | Сборка PWA | `pnpm build:pwa` | Build succeeded (`dist/pwa`); офлайн-манифест и установка проверены тестами |
@@ -132,4 +141,4 @@
 
 **Ограничение окружения.** Приёмочный прогон в браузере в песочнице недоступен: состояния экранов проверены монтированием в jsdom, офлайн и первый кадр — разбором собранного `dist/pwa`, контраст — расчётом по WCAG. Ручной проход вайрфреймов, браузерный замер FCP и установка PWA на устройстве остаются задачей приёмки на стенде.
 
-Футер: версия документации 2.1.1, приложения журнала А–Э.
+Футер: версия документации 2.2.0, приложения журнала А–Ю.

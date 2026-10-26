@@ -163,6 +163,15 @@ describe('AppBar и активный раздел', () => {
     expect(isBackRoute(asNavRoute(taskStats))).toBe(true)
   })
 
+  it('подэкран /stats/day/:date держит «Статистику» и даёт кнопку «назад»', () => {
+    const dayStats = routeByName.get('day-stats')
+    expect(dayStats?.path).toBe('stats/day/:date')
+    expect(dayStats?.props).toBe(true)
+    expect(activeNavName(asNavRoute(dayStats))).toBe('stats')
+    expect(navTitleKey(asNavRoute(dayStats))).toBe('nav.stats')
+    expect(isBackRoute(asNavRoute(dayStats))).toBe(true)
+  })
+
   it('страница дела подставляет имя дела в meta.titleKey и AppBar показывает его как есть', () => {
     // Вайрфреймы §7.3: заголовок подэкрана — имя дела. Страница пишет его в тот же
     // meta.titleKey, поэтому navTitle отличает готовое имя от ключа словаря.

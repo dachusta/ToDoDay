@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [Архив скаффолда](Скаффолд-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Версия: 2.1.1 (MVP). Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (`defineStore('name', () => {...})`), типизированы, работают поверх Dexie (IndexedDB). Имена, типы и алгоритмы сверены с `src/stores`, `src/services` и `test`; история решений — в [журнале](Журнал-правок-ToDoDay.md).
+Версия: 2.2.0 (MVP). Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (`defineStore('name', () => {...})`), типизированы, работают поверх Dexie (IndexedDB). Имена, типы и алгоритмы сверены с `src/stores`, `src/services` и `test`; история решений — в [журнале](Журнал-правок-ToDoDay.md).
 
 ## 0. Общие принципы
 
@@ -139,7 +139,10 @@ export interface Placement {
   placedAt: number;
   taskSnapshot: TaskSnapshot;
   plannedId?: string | null;  // null — добавлено в «Сегодня» вне плана
-  unplanned?: boolean;        // добавлено или изменено относительно плана
+  unplanned?: boolean;        // нет плановой основы: добавлено/заменено/убрано
+  shifted?: boolean;          // плановое дело перенесено по времени (дело и длительность те же)
+  durationChanged?: boolean;  // длительность отличается от плановой/исходной
+  plannedDurationMin?: number; // базовая длительность для сравнения и подписи «было → стало»
   removed?: boolean;          // убрано из плана; остаётся фактом до завершения
 }
 
@@ -455,7 +458,7 @@ weekdays и monthdays между собой не конфликтуют — пр
 
 ## 3. useCycleStore
 
-Ответственность: разрешение текущего дня по плану, материализация `DayInstance`, синхронизация плана с фактом, внеплановые изменения, ручной сдвиг, завершение и автопереход. Файл — `src/stores/cycle.ts`.
+Ответственность: разрешение текущего дня по плану, материализация `DayInstance`, синхронизация плана с фактом, отклонения (`unplanned`/`shifted`/`durationChanged`), ручной сдвиг, завершение и автопереход. Файл — `src/stores/cycle.ts`.
 
 ### 3.1 State
 
@@ -512,11 +515,11 @@ interface CycleStoreState {
 | removedPlacements | ComputedRef<Placement[]> | Размещения с `removed === true` — «Убрано из плана» |
 | removedCount | ComputedRef<number> | Длина `removedPlacements` |
 | dayProgress | ComputedRef<{done; skipped; pending; total}> | Прогресс без `removed`: убранные показываются отдельным блоком и не раздувают счётчик |
-| unplannedCount | ComputedRef<number> | Размещения с `unplanned === true` и не `removed` |
+| unplannedCount | ComputedRef<number> | Размещения с `unplanned === true` и не `removed`; перенос и изменение длительности сюда не входят |
 | canShiftNext | ComputedRef<boolean> | `status === 'active'` и `manualShiftDate !== todayISO()`; авто-сдвиг это поле не пишет, поэтому после полуночного сдвига ручной доступен (FR-C-4) |
 | canComplete | ComputedRef<boolean> | `status === 'active'`; для виртуального пустого дня тоже true |
 | plannedTimeFor | (placement: Placement) => number \| null | Плановый `startMin` по `plannedId` — для подписи «план: HH:mm» |
-| isUnplanned | (placement: Placement) => boolean | `removed`, нет плана/`plannedId`, нет элемента плана или отличается `startMin`/`durationMin`/`taskId` |
+| isUnplanned | (placement: Placement) => boolean | Только «нет плановой основы»: `removed`, нет плана/`plannedId`, нет элемента плана или отличается `taskId` (по `placementDeviation`). Перенос и изменение длительности возвращают `false` |
 
 ```
 interface Slot {
@@ -662,29 +665,29 @@ cur = currentInstance
 - `syncCurrentDayWithPlan(planId)` — публичная точка для страниц/тестов: находит план, иначе `NOT_FOUND`; ставит изменение `{kind:'updated'}` в очередь и возвращает `ok`/`DB_ERROR`. Очередь `planSyncQueue` не даёт быстрым правкам плана обгонять друг друга.
 - `applyPlanChange`: `deleted` — факт дня сохраняется, шапка покажет «План дня удалён»; `template` — игнорируется. План считается текущим, если совпал `planId`/легаси `templateId`, если это конкретный день на дату экземпляра или если у экземпляра `planId === null`, а `resolvedPlanForDate(inst.date)` указывает на этот план.
 - Для виртуального дня — `resolveCurrentDay({ force: true })`; для материализованного: точный день на дату перекрывает повторяющийся (`inst.planId = plan.id`), иначе при `planId === null` план подставляется; затем `reconcileCurrentWithPlan(plan)`.
-- `reconcileCurrentWithPlan` вызывает `reconcileInstanceWithPlan` (сервис): неизменённые плановые размещения получают новые время/дело/длительность, внеплановые отклонения и `removed` сохраняются, новые позиции плана добавляются, удалённые из плана `pending`-позиции исчезают, а отмеченные/изменённые остаются фактом с `plannedId: null`. Виртуальный день при этом материализуется (`put` + `activeInstanceId`), материализованный просто `put`; затем экземпляр перечитывается. Ошибка фоновой записи не отменяет сохранение плана (emit ловит её и пишет `console.warn`).
+- `reconcileCurrentWithPlan` вызывает `reconcileInstanceWithPlan` (сервис): неизменённые плановые размещения получают новые время/дело/длительность, отклонения (`unplanned`/`shifted`/`durationChanged`) и `removed` сохраняются, новые позиции плана добавляются, удалённые из плана `pending`-позиции исчезают, а отмеченные/изменённые/перенесённые остаются фактом с `plannedId: null`. У отклонения с совпадающим `taskId` базовая длительность синхронизируется с планом, затем признаки пересчитываются по новому плану. Виртуальный день при этом материализуется (`put` + `activeInstanceId`), материализованный просто `put`; затем экземпляр перечитывается. Ошибка фоновой записи не отменяет сохранение плана (emit ловит её и пишет `console.warn`).
 
 #### placeTask(taskId, startMin)
 
 - Нет активного дня — `DAY_NOT_ACTIVE`; дела нет — `NOT_FOUND`; дело архивное — `CONSTRAINT_VIOLATION` (FR-T-3).
 - `startMin === null` допустим; число проверяется `scheduler.isValidStartMin` (целое, кратно 15, ≥ 0), иначе `VALIDATION_ERROR` с `details.field = 'startMin'` (без snap к сетке). Валидный, но не помещающийся в `timeStart–timeEnd` слот превращается в `null` (`fitInDay`), это не ошибка (FR-B-4).
-- Создать `Placement` со снимком `{title, color, priority}`, `durationMin` дела, `status: 'pending'`, `placedAt: now`, `plannedId: null`, `unplanned: true`, `removed: false`; оптимистично добавить в `currentInstance.placements`.
+- Создать `Placement` со снимком `{title, color, priority}`, `durationMin` дела, `status: 'pending'`, `placedAt: now`, `plannedId: null`, `unplanned: true`, `shifted: false`, `durationChanged: false`, `plannedDurationMin: task.durationMin`, `removed: false`; оптимистично добавить в `currentInstance.placements`.
 - Если день виртуальный — первое размещение материализует его (`put` + `activeInstanceId` в одной транзакции). Ошибка БД — откат массива (и `activeInstanceId`, если он был выставлен) и `DB_ERROR`.
 
 #### movePlacement(placementId, newStartMin)
 
 - Активный день, иначе `DAY_NOT_ACTIVE`; размещение ищется в текущем экземпляре, иначе `NOT_FOUND`.
-- Валидация `newStartMin` как в `placeTask`; не помещается — `null`. Сохраняются `taskSnapshot` и `durationMin`; `plannedId` не меняется. После смены слота `unplanned` пересчитывается через `isPlacementUnplanned` (перенос планового дела становится внеплановым, возврат на плановое место может снять флаг). Оптимистично + persist; при ошибке откат слота и флага.
+- Валидация `newStartMin` как в `placeTask`; не помещается — `null`. Сохраняются `taskSnapshot` и `durationMin`; `plannedId` не меняется. После смены слота признаки пересчитываются через `refreshPlacementDeviation`: у планового дела с тем же `taskId` и той же длительностью ставится `shifted` (если слот есть и время отличается), `unplanned` остаётся `false`; возврат на плановое время снимает `shifted`. У добавленного/заменённого дела перенос по времени переносом не считается. Оптимистично + persist; при ошибке откат слота, `unplanned`, `shifted`, `durationChanged`.
 
 #### removePlacement(placementId), restorePlacement(placementId)
 
-- `removePlacement`: если у размещения есть `plannedId` и элемент ещё есть в `currentPlan`, размещение не удаляется, а помечается `removed: true`, `unplanned: true`, `status: 'skipped'` — оно остаётся фактом до завершения и учитывается как пропущенное. Если это внеплановое добавление (или планового элемента уже нет), размещение удаляется из массива. План не меняется.
-- `restorePlacement`: только для `removed`; снять `removed`, поставить `pending`. Если элемент плана существует — вернуть `taskId`, `startMin`, `durationMin` из плана, `unplanned: false` и актуальный снимок дела; иначе оставить `unplanned: true`. Ошибка persist откатывает флаги.
+- `removePlacement`: если у размещения есть `plannedId` и элемент ещё есть в `currentPlan`, размещение не удаляется, а помечается `removed: true`, `unplanned: true`, `shifted: false`, `durationChanged: false`, `status: 'skipped'` — оно остаётся фактом до завершения и учитывается как пропущенное. Если это внеплановое добавление (или планового элемента уже нет), размещение удаляется из массива. План не меняется.
+- `restorePlacement`: только для `removed`; снять `removed`, поставить `pending`. Если элемент плана существует — вернуть `taskId`, `startMin`, `durationMin` из плана, `plannedDurationMin = element.durationMin`, пересчитать признаки (обычно плановый факт) и актуальный снимок дела; иначе оставить `unplanned: true`, `shifted: false`, а `durationChanged` посчитать по `plannedDurationMin`. Ошибка persist откатывает флаги.
 
 #### replacePlacement(), changePlacementDuration()
 
-- `replacePlacement`: новое дело должно существовать и быть неархивным (`NOT_FOUND`/`CONSTRAINT_VIOLATION`); `taskSnapshot` и `durationMin` берутся с нового дела, `status`/`placedAt` не меняются; если новый размер не помещается с текущим `startMin`, слот становится `null`. `unplanned` пересчитывается; при ошибке откат `taskId`, слота, длительности, снимка и флага.
-- `changePlacementDuration`: `newDurationMin` — целое 15..1425 кратно 15, иначе `VALIDATION_ERROR` с `details.field = 'durationMin'`; `Task.durationMin` не меняется. Не помещается — `startMin = null`; нераспределённое остаётся null. Оптимистично + persist с откатом.
+- `replacePlacement`: новое дело должно существовать и быть неархивным (`NOT_FOUND`/`CONSTRAINT_VIOLATION`); `taskSnapshot` и `durationMin` берутся с нового дела, `plannedDurationMin` — тоже длительность нового дела (сама замена не считается изменением длительности), `status`/`placedAt` не меняются; если новый размер не помещается с текущим `startMin`, слот становится `null`. Признаки пересчитываются: `unplanned: true`, `shifted: false`, `durationChanged: false`; при ошибке откат `taskId`, слота, длительности, снимка, `plannedDurationMin` и флагов.
+- `changePlacementDuration`: `newDurationMin` — целое 15..1425 кратно 15, иначе `VALIDATION_ERROR` с `details.field = 'durationMin'`; `Task.durationMin` не меняется. Не помещается — `startMin = null`; нераспределённое остаётся null. У планового дела ставится `durationChanged`, у добавленного/заменённого — сравнение с `plannedDurationMin`. Если фактический `startMin === null`, `shifted` не ставится. Оптимистично + persist с откатом.
 
 #### setPlacementStatus(), skipPendingPlacementsForTask(), dispose(), resetSessionState()
 
@@ -706,8 +709,8 @@ cur = currentInstance
 | shiftToNextDay | Ставит `shiftPending`/`shiftMode` и открывает диалог; БД не пишет |
 | startCompletion / dismissCompletion | Открывает/закрывает диалог; авто-закрытие ставит `skippedAutoPromptDate`, настройки не меняет |
 | placeTask | Первое дело в виртуальном дне материализует экземпляр и `activeInstanceId`; валидный не помещающийся слот → `null` |
-| movePlacement / replacePlacement / changePlacementDuration | Меняют только факт, снимок/план не переписывают; `unplanned` пересчитывается; откат при ошибке БД |
-| removePlacement / restorePlacement | Плановое дело уходит в `removed` и возвращается; внеплановое удаляется/восстанавливается как внеплановое. План не меняется |
+| movePlacement / replacePlacement / changePlacementDuration | Меняют только факт, снимок/план не переписывают; признаки `unplanned`/`shifted`/`durationChanged` пересчитываются; откат при ошибке БД |
+| removePlacement / restorePlacement | Плановое дело уходит в `removed` (перенос/длительность снимаются) и возвращается плановым; внеплановое удаляется/восстанавливается как внеплановое. План не меняется |
 | syncCurrentDayWithPlan / onDayPlanChanged | Создание/правка/удаление плана синхронизируются с открытым фактом через `reconcileInstanceWithPlan`; удаление плана факт не стирает |
 | skipPendingPlacementsForTask | Побочный эффект FR-T-3: pending-размещения архивного дела → skipped |
 | dispose / resetSessionState | Снимает подписки / сбрасывает сессию перед переинициализацией |
@@ -737,6 +740,9 @@ interface StatsState {
   // не зависят от period, считаются из того же набора завершённых экземпляров
   allTimeStats: Ref<Map<string /*taskId*/, TaskStats>>;
   history: Ref<Map<string /*taskId*/, PlacementHistoryEntry[]>>;
+  // Сводка по дням для блока «По дням» (FR-S-6): считается из того же набора
+  // завершённых экземпляров, период фильтруется в visibleDayStats
+  dayStats: Ref<Map<string /*date*/, DayRollup>>;
 
   // UI-фильтр
   period: Ref<StatsPeriod>;       // '7d' | '30d' | 'all', дефолт 'all'
@@ -748,7 +754,9 @@ interface StatsState {
 }
 
 type StatsPeriod = '7d' | '30d' | 'all';
-type StatsSortField = 'title' | 'rate' | 'done' | 'skipped' | 'placed' | 'unplanned';
+type StatsSortField =
+  | 'title' | 'rate' | 'done' | 'skipped' | 'placed'
+  | 'unplanned' | 'shifted' | 'durationChanged';
 
 interface TaskStats {
   taskId: string;
@@ -758,8 +766,10 @@ interface TaskStats {
   placed: number;
   done: number;
   skipped: number;
-  pending: number;      // при выборке только completed всегда 0; поле оставлено для будущей агрегации
+  pending: number;      // при выборке только completed всегда 0
   unplanned?: number;   // размещений с unplanned === true
+  shifted?: number;     // размещений с shifted === true
+  durationChanged?: number; // размещений с durationChanged === true
   rate: number | null;  // done / (done + skipped), null если 0/0
 }
 
@@ -768,6 +778,8 @@ interface OverallStats {
   done: number;
   skipped: number;
   unplanned?: number;
+  shifted?: number;
+  durationChanged?: number;
   rate: number | null;
   periodStart: string | null;  // ISO или null для 'all'
   periodEnd: string;
@@ -775,28 +787,57 @@ interface OverallStats {
 
 interface PlacementHistoryEntry {
   instanceId: string;
-  date: string;         // ISO
+  placementId: string;      // ключ строки: в одном дне у дела может быть несколько записей
+  date: string;             // ISO
   startMin: number | null;  // смещение от DayInstance.timeStart, как у Placement
-  dayStartMin: number;      // минуты от полуночи для DayInstance.timeStart: время строки = dayStartMin + startMin
+  dayStartMin: number;      // минуты от полуночи для DayInstance.timeStart
   durationMin: number;
+  plannedDurationMin: number; // базовая длительность для «было → стало»
   status: PlacementStatus;
   unplanned?: boolean;
+  shifted?: boolean;
+  durationChanged?: boolean;
   removed?: boolean;
   completedAt?: number;
 }
+
+interface DayStatsTotals {
+  placed: number; done: number; skipped: number;
+  unplanned: number; shifted: number; durationChanged: number;
+  rate: number | null;
+}
+
+interface DayRollup extends DayStatsTotals { date: string; }
+
+interface DayStatsEntry {
+  instanceId: string; placementId: string; taskId: string;
+  title: string; color: string; priority: Priority;
+  startMin: number | null; dayStartMin: number;
+  durationMin: number; plannedDurationMin: number;
+  status: PlacementStatus;
+  unplanned: boolean; shifted: boolean; durationChanged: boolean; removed: boolean;
+}
+
+interface DayStats {
+  date: string;
+  instances: number; // отличает «нет завершённого дня» от «день без дел»
+  totals: DayStatsTotals;
+  entries: DayStatsEntry[];
+}
 ```
 
-`StatsPeriod` и `StatsSortField` объявлены в `src/services/stats.ts`; стор реэкспортирует типы. `unplanned` считается по `Placement.unplanned === true`, включая убранные из плана (они тоже внеплановые). `pending` в `OverallStats` отсутствует: агрегация идёт по завершённым дням, где `pending` всегда 0. В `PlacementHistoryEntry` `startMin` сохраняет смысл смещения от начала дня, а `dayStartMin` фиксирует само начало дня экземпляра: подпись времени в истории — это время суток `dayStartMin + startMin`, а не смещение от полуночи.
+`StatsPeriod` и `StatsSortField` объявлены в `src/services/stats.ts`; стор реэкспортирует типы. `unplanned`, `shifted` и `durationChanged` считаются по флагам размещений (`Placement.unplanned/shifted/durationChanged`), независимо друг от друга; перенос и изменение длительности не входят в `unplanned`. `pending` в `OverallStats` отсутствует: агрегация идёт по завершённым дням, где `pending` всегда 0. В `PlacementHistoryEntry` `startMin` сохраняет смысл смещения от начала дня, а `dayStartMin` фиксирует само начало дня экземпляра: подпись времени в истории — это время суток `dayStartMin + startMin`. `DayStats` собирается `buildDayStats` из завершённых экземпляров одной даты; несколько экземпляров на дату суммируются.
 
 ### 4.2 Getters
 
 | Getter | Тип | Описание |
 | --- | --- | --- |
 | visibleTaskStats | ComputedRef<TaskStats[]> | С учётом `period` (уже в `taskStats`) и сортировки; `rate === null` всегда в конце в обоих направлениях |
+| visibleDayStats | ComputedRef<DayRollup[]> | Дни выбранного периода, новые сверху; фильтр по `overallStats.periodStart`/`periodEnd`. Дни без размещений в `dayStats` не попадают |
 | taskStatsById | (id: string) => TaskStats \| undefined | — |
 | allTimeStatsById | (id: string) => TaskStats \| undefined | Агрегаты за «всё время» для мини-сводки строки дела (FR-T-4). `undefined` — дело не размещалось, это не то же самое, что 0% (FR-S-2) |
 
-Сортировка `visibleTaskStats`: `title` — `localeCompare`; `rate` — числовой, null в конце; `done`/`skipped`/`placed`/`unplanned` — числовой (`unplanned ?? 0`); при равенстве — по названию.
+Сортировка `visibleTaskStats`: `title` — `localeCompare`; `rate` — числовой, null в конце; `done`/`skipped`/`placed`/`unplanned`/`shifted`/`durationChanged` — числовой (`?? 0`); при равенстве — по названию.
 
 ### 4.3 Actions
 
@@ -804,6 +845,7 @@ interface PlacementHistoryEntry {
 async function initialize(): Promise<Result<void>>;   // recompute + subscribe
 async function recompute(period?: StatsPeriod): Promise<Result<void>>;
 async function loadTaskHistory(taskId: string): Promise<Result<PlacementHistoryEntry[]>>;
+async function loadDayStats(date: string): Promise<Result<DayStats>>; // FR-S-6
 function setPeriod(p: StatsPeriod): void;             // триггерит recompute
 function setSort(field: StatsSortField, order?: 'asc' | 'desc'): void;
 function subscribe(): void;                           // liveQuery на completed dayInstances
@@ -825,29 +867,31 @@ const instances = await db.dayInstances
 
 Правила:
 
-- `pending` считается в своё поле, но не входит в знаменатель рейта. Поскольку выбираются только `completed`-экземпляры, в MVP `pending` всегда 0 (`completeDay` переводит всё в `done`/`skipped`).
+- `pending` считается в своё поле, но не входит в знаменатель рейта. Поскольку выбираются только `completed`-экземпляры, `pending` всегда 0 (`completeDay` переводит всё в `done`/`skipped`).
 - Дела с `archived = true` включаются в статистику; жёстко удалённые дела остаются по `taskSnapshot`.
-- `unplanned` увеличивается для каждого размещения с `unplanned === true`; учитывается и в `TaskStats`, и в `OverallStats`.
+- `unplanned` увеличивается для каждого размещения с `unplanned === true`; `shifted` — с `shifted === true`; `durationChanged` — с `durationChanged === true`. Учитываются и в `TaskStats`, и в `OverallStats`; признаки независимы (перенос + длительность дают оба счётчика).
+- `aggregateDayRollups(instances)` группирует завершённые экземпляры по `date`, суммирует несколько экземпляров на одну дату и пропускает даты без размещений. `buildDayStats(instances, date)` отдаёт `instances`, суммы и плоский список с `dayStartMin`, сортировкой по `startMin` (null в конце) и `plannedDurationMin`.
 - Подпись `title/color/priority` берётся из снимка с наибольшей датой экземпляра; при равной дате побеждает больший `placedAt` (FR-S-2). Два завершённых экземпляра на одну дату считаются оба.
 - Дело без размещений в завершённых экземплярах периода в `perTask` не попадает: строки «0 / 0» нет (FR-S-2). `rate = null` остаётся только у вырожденного случая `placed > 0` при `done + skipped = 0`.
-- `applyInstances` обновляет `taskStats`, `overallStats` и `allTimeStats` (для `'all'` переиспользует `perTask`, иначе считает `aggregateStats(..., 'all', today)`). Кэш `history` сбрасывается только при реальном изменении агрегатов: `sameAggregates` сравнивает `placed`/`done`/`skipped`/`unplanned` и число строк. Первое событие liveQuery после собственного `recompute` приносит то же состояние БД и не должно стирать историю, которую `TaskStatsPage` прочитал сразу после пересчёта.
-- `initialize()` = `recompute()` + `subscribe()`. `TaskStatsPage` вызывает `recompute()` → `loadTaskHistory()` → `subscribe()` именно в этом порядке; `StatsPage` достаточно `initialize()`.
+- `applyInstances` обновляет `taskStats`, `overallStats`, `allTimeStats` (для `'all'` переиспользует `perTask`, иначе считает `aggregateStats(..., 'all', today)`) и `dayStats` (`aggregateDayRollups`). Кэш `history` сбрасывается только при реальном изменении агрегатов: `sameAggregates` сравнивает `placed`/`done`/`skipped`/`unplanned`/`shifted`/`durationChanged` и число строк. Первое событие liveQuery после собственного `recompute` приносит то же состояние БД и не должно стирать историю, которую `TaskStatsPage` прочитал сразу после пересчёта.
+- `initialize()` = `recompute()` + `subscribe()`. `TaskStatsPage` вызывает `recompute()` → `loadTaskHistory()` → `subscribe()` именно в этом порядке; `StatsPage` достаточно `initialize()`; `DayStatsPage` вызывает `initialize()` → `loadDayStats(date)` и перечитывает деталь по событию `dayStats`.
 
 ### 4.5 Побочные эффекты
 
 | Action | Side effect |
 | --- | --- |
 | setPeriod | Сохраняет `period` и сразу вызывает `recompute(p)` |
-| subscribe | liveQuery на `completed` `dayInstances`; при изменениях применяет агрегаты, сохраняя текущий период |
-| recompute | Читает только завершённые экземпляры, пересчитывает `taskStats`/`overallStats`/`allTimeStats`, при изменении агрегатов очищает `history`. Ошибка — `DB_ERROR` и не влияет на завершение дня |
-| loadTaskHistory | Читает завершённые экземпляры, собирает историю по `taskId` (включая `dayStartMin` из `instance.timeStart`), сортирует по дате вниз, кэширует; повторный вызов отдаёт кэш |
-| resetCache | Обнуляет агрегаты, `overallStats`, `allTimeStats`, историю и `initialized`; подписку снимает `unsubscribe()`, БД не трогает |
+| subscribe | liveQuery на `completed` `dayInstances`; при изменениях применяет агрегаты и сводку по дням, сохраняя текущий период |
+| recompute | Читает только завершённые экземпляры, пересчитывает `taskStats`/`overallStats`/`allTimeStats`/`dayStats`, при изменении агрегатов очищает `history`. Ошибка — `DB_ERROR` и не влияет на завершение дня |
+| loadTaskHistory | Читает завершённые экземпляры, собирает историю по `taskId` (включая `placementId`, `dayStartMin`, `plannedDurationMin` и признаки), сортирует по дате вниз и по времени внутри дня, кэширует; повторный вызов отдаёт кэш |
+| loadDayStats | Читает завершённые экземпляры по индексу `date`, нормализует и собирает `DayStats` (`buildDayStats`); незавершённые не входят, несколько экземпляров на дату суммируются. Кэша нет — деталь перечитывается по событию `dayStats` |
+| resetCache | Обнуляет агрегаты, `overallStats`, `allTimeStats`, историю, `dayStats` и `initialized`; подписку снимает `unsubscribe()`, БД не трогает |
 
 ### 4.6 Взаимодействие
 
 - Читает: `db.dayInstances` напрямую, без других сторов.
 
-- Используется: `StatsPage`, `TaskStatsPage`, строкой дела на `TasksPage` (через `allTimeStatsById`, FR-T-4). Вызывается из `useCycleStore.completeDay`/`cancelCompletion` (`recompute`), обратной зависимости `statsStore → cycleStore` нет.
+- Используется: `StatsPage`, `TaskStatsPage`, `DayStatsPage`, строкой дела на `TasksPage` (через `allTimeStatsById`, FR-T-4). Вызывается из `useCycleStore.completeDay`/`cancelCompletion` (`recompute`), обратной зависимости `statsStore → cycleStore` нет.
 
 - `recompute` может вызываться страницей и подпиской; `period` при внешнем пересчёте не сбрасывается.
 
@@ -920,7 +964,7 @@ async function clearAll(): Promise<Result<void>>;
 }
 ```
 
-`exportAll`: собирает `tasks`, `dayPlans`, `dayInstances`, `cycleState` из Dexie и блок `settings` из localStorage (ключи §5.1), нормализует планы и экземпляры, сериализует в JSON и возвращает `Blob`. После успешного формирования обновляет `lastBackupAt` ISO-строкой. `version` — `2.0`; `exportedAt` — timestamp, а не календарная дата.
+`exportAll`: собирает `tasks`, `dayPlans`, `dayInstances`, `cycleState` из Dexie и блок `settings` из localStorage (ключи §5.1), нормализует планы и экземпляры, сериализует в JSON и возвращает `Blob`. После успешного формирования обновляет `lastBackupAt` ISO-строкой. `version` — `2.0`; `exportedAt` — timestamp, а не календарная дата. Новые поля `Placement` (`shifted`, `durationChanged`, `plannedDurationMin`) — аддитивные и необязательные, поэтому версия формата не меняется; импорт старого файла нормализует их дефолтами (`false`, `false`, `durationMin`) без переклассификации прошлых дней.
 
 `importAll`:
 
@@ -1046,7 +1090,7 @@ function setGlobalError(err: AppError | null): void;
 
 ## 8. Полный список действий по FR (трассируемость)
 
-Таблица связывает требования, actions, экраны и тесты. Для ревизии 2.0.0 добавлены FR-B-8 (внеплановые изменения) и FR-S-5 (статистика внеплановых); FR-D-2/FR-C-2 в прежнем смысле («order» и циклический указатель) моделью 2.0.0 не поддерживаются — порядок и выбор дня теперь задаются датой и режимом плана.
+Таблица связывает требования, actions, экраны и тесты. Для ревизии 2.0.0 добавлены FR-B-8 (отклонения в «Сегодня») и FR-S-5 (статистика отклонений); ревизия 2.2.0 разделила перенос и изменение длительности и добавила FR-S-6 (статистика дня); FR-D-2/FR-C-2 в прежнем смысле («order» и циклический указатель) моделью 2.0.0 не поддерживаются — порядок и выбор дня теперь задаются датой и режимом плана.
 
 | FR | Action | UI | Тест |
 | --- | --- | --- | --- |
@@ -1068,9 +1112,9 @@ function setGlobalError(err: AppError | null): void;
 | FR-B-3 | cycleStore.conflicts → `scheduler.detectConflicts` | DayBoard (баннер конфликтов) | scheduler, dayBoard, dayPlanPage |
 | FR-B-4 | cycleStore.placeTask/movePlacement (ветка «не помещается») + `scheduler.fitInDay` | DayBoard (нераспределённые) | scheduler, cycle, dayBoard |
 | FR-B-5 | cycleStore.unallocatedPlacements | UnallocatedZone | dayBoard, statsPage |
-| FR-B-6 | cycleStore.setPlacementStatus | PlacementCard (меню) | dayBoard, dayCompletion |
+| FR-B-6 | cycleStore.setPlacementStatus; признаки `unplanned`/`shifted`/`durationChanged`; подпись «план: HH:mm» | PlacementCard (бейджи, пара длительностей, меню) | dayBoard, dayCompletion |
 | FR-B-7 | cycleStore.changePlacementDuration/replacePlacement/removePlacement/setPlacementStatus | PlacementActions / PlacementEditDialogs | dayBoard, dayPlanPage |
-| FR-B-8 | cycleStore.placeTask/removePlacement/restorePlacement/`unplanned`/`removed`; `isUnplanned` | DayBoard, RemovedPlannedZone | cycle, dayBoard, dayCompletion |
+| FR-B-8 | cycleStore.placeTask/movePlacement/changePlacementDuration/replacePlacement/removePlacement/restorePlacement + `placementDeviation`; `unplanned`/`shifted`/`durationChanged`/`removed` | DayBoard, RemovedPlannedZone | cycle, dayBoard, dayCompletion, dayPlans (service) |
 | FR-C-1 | cycleStore.resolveCurrentDay + `repeat.resolvePlanForDate` | DayBoardPage | repeat, cycle |
 | FR-C-2 | Не применимо в 2.0.0: циклический указатель и `order` удалены; `lastCyclicTemplateId` — только легаси импорта | — | repeat (выбор по дате) |
 | FR-C-3 | cycleStore.shiftToNextDay + completeDay (`shiftMode` early/overdue, `repeat.resolveShiftTargets`) | DayBoardPage → «Следующий день» | cycle, dayCompletion, daysFlow |
@@ -1083,42 +1127,43 @@ function setGlobalError(err: AppError | null): void;
 | FR-S-1 | statsStore.recompute → `aggregateStats` | StatsPage | stats (service/store), statsPage |
 | FR-S-2 | statsStore.visibleTaskStats / отсутствие строк «0 / 0» | StatsPage, TaskStatsPage | stats, statsPage |
 | FR-S-3 | statsStore.setPeriod + `periodStartISO` | StatsPage (период) | stats, statsPage |
-| FR-S-4 | statsStore.loadTaskHistory | TaskStatsPage | stats, statsPage |
-| FR-S-5 | statsStore/`aggregateStats`: `unplanned` в TaskStats/OverallStats/истории | StatsPage, TaskStatsPage | stats, dayBoard, dayCompletion, cycle |
+| FR-S-4 | statsStore.loadTaskHistory (группировка по дням в UI) | TaskStatsPage | stats, statsPage |
+| FR-S-5 | statsStore/`aggregateStats`: `unplanned`/`shifted`/`durationChanged` в TaskStats/OverallStats/истории | StatsPage, TaskStatsPage | stats, dayBoard, dayCompletion, cycle |
+| FR-S-6 | statsStore.dayStats/visibleDayStats/loadDayStats + `aggregateDayRollups`/`buildDayStats` | StatsPage (блок «По дням»), DayStatsPage | statsPage, dayStatsPage, stats (store/service) |
 | FR-SET-1..9 | settingsStore.* + retrySettingsWrite | SettingsPage, AppBar | settingsPage, settings |
 | FR-SET-10 | settingsStore.clearAll | SettingsPage → «Очистить все данные» | settingsPage, settings |
 | ТЗ §2.8 | dates.* + `repeat.resolveShiftTargets` | — | dates, repeat, lint |
-| ТЗ §2.10 | — | — | cycle, daysFlow, dayCompletion (сценарии 1–9) |
+| ТЗ §2.10 | — | — | cycle, daysFlow, dayCompletion (сценарии 1–14) |
 
 ## 9. Тестирование
 
-`test/**/*.spec.ts` — 41 файл (Vitest), включая `test/config/docs.spec.ts` для проверки документации. Ниже — актуальная карта: по одному предложению на файл, без истории этапов. Мок БД — `fake-indexeddb` и тестовый Dexie-instance; компонентные тесты монтируют Quasar-каркас.
+`test/**/*.spec.ts` — 42 файла (Vitest), включая `test/config/docs.spec.ts` для проверки документации. Ниже — актуальная карта: по одному предложению на файл, без истории этапов. Мок БД — `fake-indexeddb` и тестовый Dexie-instance; компонентные тесты монтируют Quasar-каркас.
 
 **Сервисы (`test/services/`)**
 
 - `dataTransfer.spec.ts` — имя файла по локальной дате, скачивание Blob через временную ссылку с очисткой Object URL, выбор JSON-файла с отменой и повторным вызовом.
 - `dates.spec.ts` — локальные `todayISO`/`toLocalISO` без UTC-сдвига, календарный `addDaysISO`, `parseClock` только с шагом 15 и подписи 24/12 ч.
-- `dayPlans.spec.ts` — нормализация и миграция `plannedTaskIds`, материализация и копирование плана, сохранение отклонений при `reconcileInstanceWithPlan`, предикат `isPlacementUnplanned`.
+- `dayPlans.spec.ts` — нормализация и миграция `plannedTaskIds`, материализация и копирование плана, сохранение отклонений при `reconcileInstanceWithPlan`, классификация `placementDeviation` (перенос, длительность, добавление, замена, удаление, уход в `null`).
 - `dayValidator.spec.ts` — проверки имени/цвета/времени/даты, занятая дата, пустое правило и пересечения, размещения плана и отсутствующие ссылки.
 - `db.spec.ts` — `toPlain` разворачивает Proxy/вложенные объекты, `ensureCycleState` достраивает поля старой базы и не переписывает полную.
 - `repeat.spec.ts` — приоритет `resolvePlanForDate` (точная дата → числа → дни недели), `resolveShiftTargets` для early/midnight/overdue, `normalizeRule`/`validateRule`/`validateNoOverlap`.
 - `scheduler.spec.ts` — `isValidStartMin`, `fitInDay` по границам снимка экземпляра, `detectConflicts` без skipped/null/removed и с подсчётом пар.
-- `stats.spec.ts` — `aggregateStats`: пустые данные, нулевой рейт, `pending` вне знаменателя, `unplanned`, границы 7d/30d/all, снимок последней даты, две записи на дату.
+- `stats.spec.ts` — `aggregateStats`: пустые данные, нулевой рейт, `pending` вне знаменателя, `unplanned`/`shifted`/`durationChanged`, границы 7d/30d/all, снимок последней даты, две записи на дату; `aggregateDayRollups`/`buildDayStats` для статистики дня.
 - `taskDrag.spec.ts` — payload переноса в кастомном и запасном MIME-типах, `effectAllowed = 'copy'`, `null` для чужого переноса и без `dataTransfer`.
 - `taskValidator.spec.ts` — границы `validateTaskInput`, форматтеры длительности, рейта (`null` → «—») и мини-сводки.
 
 **Сторы (`test/stores/`)**
 
-- `cycle.spec.ts` — план на дату и виртуальный день, внеплановые изменения без правки плана, `removed` и возврат, завершение/сдвиг/отмена, архивные размещения, гонки инициализации.
+- `cycle.spec.ts` — план на дату и виртуальный день, перенос/длительность/внеплановые изменения без правки плана, `removed` и возврат, завершение/сдвиг/отмена, архивные размещения, гонки инициализации, признаки отклонений в статистике.
 - `dayPlans.spec.ts` — CRUD и уникальность даты, пересечения правил, копирование заготовки, действия сетки, запрет правки/удаления активного плана, сдвиг времени, emitter и `resolvedPlanForDate`.
 - `settings.spec.ts` — экспорт 2.0, импорт 1.0 и 2.0, отклонение битых файлов, `STORAGE_ERROR` с повтором settings, очистка Dexie/localStorage и защита `busy`.
-- `stats.spec.ts` — `initialize`, сортировка колонок с «—» в конце, liveQuery-пересчёт, кэш истории, `setPeriod` и `resetCache`.
+- `stats.spec.ts` — `initialize`, сортировка колонок с «—» в конце, liveQuery-пересчёт, кэш истории с `placementId` и признаками, `dayStats`/`visibleDayStats`/`loadDayStats`, `setPeriod` и `resetCache`.
 - `tasks.spec.ts` — счётчики/сортировка/liveQuery, неизменность снимков размещений, дубликат с суффиксом, hard delete только архива, очистка ссылок из планов.
 
 **Компоненты (`test/components/`)**
 
 - `confirmDialog.spec.ts` — `uiStore.openConfirm`: появление диалога, подписи, резолв `true`/`false` и очистка состояния.
-- `dayBoard.spec.ts` — шапка/сетка/пустой день и удалённый план, конфликты и текущее время, drop/перенос, действия FR-B-7, внеплановые бейджи и «Убрано из плана», доступность и виртуализация.
+- `dayBoard.spec.ts` — шапка/сетка/пустой день и удалённый план, конфликты и текущее время, drop/перенос, действия FR-B-7, бейджи «внепланово»/«перенесено»/«длительность» и «Убрано из плана», доступность и виртуализация.
 - `dayBoardPerf.spec.ts` — доска на 100+ размещениях: виртуализация подписей, один слой карточек, отсутствие лишних перерисовок при наведении, `aria-live` слота.
 - `dayCompletion.spec.ts` — шапка и сдвиг, диалог с планом/внеплановыми/убранными, отмена, пустой день, просроченный день и авто-диалог.
 - `dayPlanForm.spec.ts` — дефолты и все режимы создания, inline-ошибки, правка без новой записи, копирование на основе другого плана и закрытие без сохранения.
@@ -1126,7 +1171,8 @@ function setGlobalError(err: AppError | null): void;
 - `daysFlow.spec.ts` — сквозной сценарий в реальном каркасе: создание плана на `/days`, открытие в «Сегодня» и редакторе, сдвиг, пустой день и отмена завершения.
 - `daysPage.spec.ts` — секции и бейджи, создание дня и копирование основы, запрет удаления активного плана, баннер конфликтов, `?create=` и ошибка загрузки.
 - `settingsPage.spec.ts` — четыре раздела, тема/язык/формат, тумблеры и первый день недели, экспорт/импорт/очистка, `busy`, «О приложении» и `backupLabel`.
-- `statsPage.spec.ts` — сводка/периоды/сортировка `StatsPage`, история и формат `TaskStatsPage`, переход по названию, `aria-sort`, карточки до 1024 px и независимость `allTimeStatsById`.
+- `statsPage.spec.ts` — сводка/периоды/сортировка `StatsPage`, блок «По дням» и переход на день, история с группировкой по дням и отметками, формат `TaskStatsPage`, переход по названию, `aria-sort`, карточки до 1024 px и независимость `allTimeStatsById`.
+- `dayStatsPage.spec.ts` — страница `/stats/day/:date`: дата и литеральный заголовок, сводка из семи чисел, дела дня и отметки, только завершённые дни, пустой день, невалидная дата и ошибка чтения.
 - `taskActions.spec.ts` — состав меню: у живого дела нет удаления/возврата, у архивного архивация заменена возвратом, удаление отделено и опасно.
 - `taskForm.spec.ts` — дефолты, отказ без названия, шаг 15 и границы, превью/HEX, создание, правка и архивное дело.
 - `tasksPage.spec.ts` — раскладка и пустые состояния, поиск/фильтры/сортировка, архивация/возврат/дублирование/удаление, мини-сводка, создание и перенос на доску.
@@ -1134,7 +1180,7 @@ function setGlobalError(err: AppError | null): void;
 **Каркас (`test/layouts/`)**
 
 - `mainLayout.spec.ts` — AppBar с заголовком/меню/overflow, drawer на 1280/1024/1023 px и нижняя таб-панель на 375 px.
-- `navigation.spec.ts` — порядок экранов ТЗ §5.1, «Настройки» только в drawer, «Ещё» пятым табом, границы 1024 px, меню overflow и заголовки подэкрана статистики.
+- `navigation.spec.ts` — порядок экранов ТЗ §5.1, «Настройки» только в drawer, «Ещё» пятым табом, границы 1024 px, меню overflow и заголовки подэкранов статистики (дела и дня).
 
 **Доступность (`test/a11y/`)**
 
@@ -1169,4 +1215,4 @@ function setGlobalError(err: AppError | null): void;
 
 ---
 
-Журнал правок — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md). Версия документации — 2.1.1.
+Журнал правок — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md). Версия документации — 2.2.0.

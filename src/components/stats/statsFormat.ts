@@ -1,15 +1,16 @@
-import { format } from 'date-fns'
-import { enUS, ru } from 'date-fns/locale'
-import { formatMinutesOfDay, parseISODate } from 'src/services/dates'
+import { formatMinutesOfDay } from 'src/services/dates'
 import { durationDescriptor } from 'src/components/tasks/taskFormat'
 import type { TimeFormat } from 'src/models/enums'
 import type { PlacementHistoryEntry } from 'src/services/stats'
 
 /**
- * Подписи экрана одного дела (FR-S-4, вайрфреймы §7.3). Как и в
- * `components/tasks/taskFormat.ts`, функции чистые и возвращают ключ i18n с
+ * Подписи строк истории одного дела (FR-S-4, вайрфреймы §7.3). Как и в
+ * `components/tasks/taskFormat.ts`, функция чистая и возвращает ключ i18n с
  * параметрами, а не готовую строку: перевод делает компонент через `t(...)`,
  * поэтому ни один язык не зашит в код (НФТ ТЗ §7).
+ *
+ * День в строке не повторяется: история группируется по дням, и заголовок
+ * группы даёт `dayFormat.formatDayLabel` — дата видна ровно один раз.
  */
 
 /** Ключ i18n вместе с параметрами: переводит компонент, а не сервис. */
@@ -17,9 +18,6 @@ export interface MessageDescriptor {
   key: string
   params: Record<string, string | number>
 }
-
-/** Локали date-fns — те же, что в шапке доски (components/days/DayBoard.vue). */
-const DATE_LOCALES = { ru, en: enUS } as const
 
 /** Часть ключа по форме длительности: 'n' — минуты, 'h' — часы, 'hm' — часы и минуты. */
 function durationPart(minutes: number): { suffix: 'N' | 'H' | 'HM'; params: Record<string, number> } {
@@ -30,11 +28,11 @@ function durationPart(minutes: number): { suffix: 'N' | 'H' | 'HM'; params: Reco
 }
 
 /**
- * Строка истории размещений: «23 сен, пн · 30 мин · 08:15» (вайрфреймы §7.3).
- * Месяц и день недели берутся из date-fns с локалью настроек, время — из общего
- * форматтера FR-SET-3, поэтому 12-часовой вид применяется и здесь. `startMin`
- * размещения — смещение от начала дня (`DayInstance.timeStart`), а не время
- * суток (контракты §4.1), поэтому к нему прибавляется `dayStartMin` записи.
+ * Строка истории размещений: «30 мин · 08:15» (вайрфреймы §7.3). Время — время
+ * суток из общего форматтера FR-SET-3, поэтому 12-часовой вид применяется и
+ * здесь. `startMin` размещения — смещение от начала дня
+ * (`DayInstance.timeStart`), а не время суток (контракты §4.1), поэтому к нему
+ * прибавляется `dayStartMin` записи.
  *
  * Ключей строки шесть: две формы времени (с временем и «без времени» — так
  * выглядит нераспределённое размещение, FR-B-5) на три формы длительности.
@@ -43,28 +41,26 @@ function durationPart(minutes: number): { suffix: 'N' | 'H' | 'HM'; params: Reco
  */
 export function historyRowDescriptor(
   entry: PlacementHistoryEntry,
-  language: 'ru' | 'en',
   timeFormat: TimeFormat,
 ): MessageDescriptor {
-  // ТЗ §2.8: разбор календарной даты — только через services/dates.ts
-  const date = parseISODate(entry.date)
-  const locale = DATE_LOCALES[language]
   const duration = durationPart(entry.durationMin)
-  const params: Record<string, string | number> = {
-    day: format(date, 'd', { locale }),
-    // Точка после сокращённого месяца («сент.») в подписи не нужна
-    month: format(date, 'LLL', { locale }).replace('.', ''),
-    weekday: format(date, 'EEEEEE', { locale }),
-    ...duration.params,
-  }
+  const params: Record<string, string | number> = { ...duration.params }
   const withTime = entry.startMin !== null
   if (entry.startMin !== null) {
     params.time = formatMinutesOfDay(entry.dayStartMin + entry.startMin, timeFormat)
   }
 
   const keys = {
-    withTime: { N: 'stats.historyRowN', H: 'stats.historyRowH', HM: 'stats.historyRowHM' },
-    noTime: { N: 'stats.historyRowNoTimeN', H: 'stats.historyRowNoTimeH', HM: 'stats.historyRowNoTimeHM' },
+    withTime: {
+      N: 'stats.historyRowTimeN',
+      H: 'stats.historyRowTimeH',
+      HM: 'stats.historyRowTimeHM',
+    },
+    noTime: {
+      N: 'stats.historyRowTimeNoTimeN',
+      H: 'stats.historyRowTimeNoTimeH',
+      HM: 'stats.historyRowTimeNoTimeHM',
+    },
   } as const
 
   return {

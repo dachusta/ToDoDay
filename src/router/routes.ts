@@ -55,6 +55,15 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: 'nav.stats', navKey: 'stats', back: true },
       },
       {
+        path: 'stats/day/:date',
+        name: 'day-stats',
+        component: () => import('pages/DayStatsPage.vue'),
+        props: true,
+        // Заголовок подэкрана — дата дня (вайрфреймы §7.4): страница подставляет
+        // литеральную подпись в meta.titleKey, раздел остаётся запасным.
+        meta: { titleKey: 'nav.stats', navKey: 'stats', back: true },
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: () => import('pages/SettingsPage.vue'),

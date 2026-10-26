@@ -19,6 +19,7 @@ import {
   normalizeDayInstance,
   plannedStartMin,
   reconcileInstanceWithPlan,
+  refreshPlacementDeviation,
 } from 'src/services/dayPlans'
 import { useTasksStore, onTaskArchived } from './tasks'
 import { onDayPlanChanged, useDayPlansStore } from './dayPlans'
@@ -750,8 +751,13 @@ export const useCycleStore = defineStore('cycle', () => {
     return ok(fitInDay(startMin, durationMin, inst) ? startMin : null)
   }
 
-  function refreshUnplanned(placement: Placement): void {
-    placement.unplanned = isPlacementUnplanned(placement, currentPlan.value)
+  /**
+   * Пересчитать отклонения размещения по текущему плану. Перенос и изменение
+   * длительности — такие же факты дня, как добавление, поэтому флаги живут
+   * вместе и обновляются одной функцией (services/dayPlans.ts).
+   */
+  function refreshDeviation(placement: Placement): void {
+    refreshPlacementDeviation(placement, currentPlan.value)
   }
 
   async function placeTask(taskId: string, startMin: number | null): Promise<Result<Placement>> {
@@ -777,6 +783,9 @@ export const useCycleStore = defineStore('cycle', () => {
       taskSnapshot: { title: task.title, color: task.color, priority: task.priority },
       plannedId: null,
       unplanned: true,
+      shifted: false,
+      durationChanged: false,
+      plannedDurationMin: task.durationMin,
       removed: false,
     }
 
@@ -807,13 +816,17 @@ export const useCycleStore = defineStore('cycle', () => {
     const prev = inst.placements
     const prevStart = placement.startMin
     const prevUnplanned = placement.unplanned ?? false
+    const prevShifted = placement.shifted ?? false
+    const prevDurationChanged = placement.durationChanged ?? false
     placement.startMin = resolved.data
-    refreshUnplanned(placement)
+    refreshDeviation(placement)
 
     const persisted = await persistPlacements(inst, prev, false, 'Не удалось перенести размещение')
     if (!persisted.ok) {
       placement.startMin = prevStart
       placement.unplanned = prevUnplanned
+      placement.shifted = prevShifted
+      placement.durationChanged = prevDurationChanged
       return persisted
     }
     return ok(undefined)
@@ -834,9 +847,13 @@ export const useCycleStore = defineStore('cycle', () => {
 
     if (planItem) {
       // Плановое дело не удаляем: оно остаётся фактом «убрано из плана» и
-      // учитывается в завершении как пропущенное.
+      // учитывается в завершении как пропущенное. Перенос и изменённая
+      // длительность при удалении теряют смысл — в статистике это
+      // пропущенное внеплановое дело.
       placement.removed = true
       placement.unplanned = true
+      placement.shifted = false
+      placement.durationChanged = false
       placement.status = 'skipped'
     } else {
       inst.placements = prev.filter(p => p.id !== placementId)
@@ -864,7 +881,7 @@ export const useCycleStore = defineStore('cycle', () => {
       placement.taskId = planItem.taskId
       placement.startMin = planItem.startMin
       placement.durationMin = planItem.durationMin
-      placement.unplanned = false
+      placement.plannedDurationMin = planItem.durationMin
       const task = useTasksStore().taskById(planItem.taskId)
       if (task) {
         placement.taskSnapshot = {
@@ -873,8 +890,12 @@ export const useCycleStore = defineStore('cycle', () => {
           priority: task.priority,
         }
       }
+      refreshDeviation(placement)
     } else {
       placement.unplanned = true
+      placement.shifted = false
+      placement.durationChanged =
+        placement.durationMin !== (placement.plannedDurationMin ?? placement.durationMin)
     }
 
     const persisted = await persistPlacements(inst, prev, false, 'Не удалось вернуть размещение')
@@ -884,6 +905,8 @@ export const useCycleStore = defineStore('cycle', () => {
       placement.removed = true
       placement.status = 'skipped'
       placement.unplanned = true
+      placement.shifted = false
+      placement.durationChanged = false
       return persisted
     }
     return ok(undefined)
@@ -921,11 +944,17 @@ export const useCycleStore = defineStore('cycle', () => {
     const prevDuration = placement.durationMin
     const prevSnapshot = { ...placement.taskSnapshot }
     const prevUnplanned = placement.unplanned ?? false
+    const prevShifted = placement.shifted ?? false
+    const prevDurationChanged = placement.durationChanged ?? false
+    const prevPlannedDuration = placement.plannedDurationMin
     placement.durationMin = task.durationMin
     placement.taskSnapshot = { title: task.title, color: task.color, priority: task.priority }
     placement.taskId = newTaskId
+    // Замена — внеплановое изменение: старой плановой основы у нового дела нет,
+    // поэтому базовой длительностью становится длительность нового дела.
+    placement.plannedDurationMin = task.durationMin
     if (prevStart !== null && !fitInDay(prevStart, task.durationMin, inst)) placement.startMin = null
-    refreshUnplanned(placement)
+    refreshDeviation(placement)
 
     const persisted = await persistPlacements(inst, prev, false, 'Не удалось заменить дело')
     if (!persisted.ok) {
@@ -934,6 +963,10 @@ export const useCycleStore = defineStore('cycle', () => {
       placement.durationMin = prevDuration
       placement.taskSnapshot = prevSnapshot
       placement.unplanned = prevUnplanned
+      placement.shifted = prevShifted
+      placement.durationChanged = prevDurationChanged
+      if (prevPlannedDuration === undefined) delete placement.plannedDurationMin
+      else placement.plannedDurationMin = prevPlannedDuration
       return persisted
     }
     return ok(undefined)
@@ -960,15 +993,19 @@ export const useCycleStore = defineStore('cycle', () => {
     const prevStart = placement.startMin
     const prevDuration = placement.durationMin
     const prevUnplanned = placement.unplanned ?? false
+    const prevShifted = placement.shifted ?? false
+    const prevDurationChanged = placement.durationChanged ?? false
     placement.durationMin = newDurationMin
     if (prevStart !== null && !fitInDay(prevStart, newDurationMin, inst)) placement.startMin = null
-    refreshUnplanned(placement)
+    refreshDeviation(placement)
 
     const persisted = await persistPlacements(inst, prev, false, 'Не удалось изменить длительность')
     if (!persisted.ok) {
       placement.startMin = prevStart
       placement.durationMin = prevDuration
       placement.unplanned = prevUnplanned
+      placement.shifted = prevShifted
+      placement.durationChanged = prevDurationChanged
       return persisted
     }
     return ok(undefined)

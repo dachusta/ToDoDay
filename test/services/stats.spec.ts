@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateStats, type StatsPeriod } from 'src/services/stats'
+import {
+  aggregateDayRollups,
+  aggregateStats,
+  buildDayStats,
+  type StatsPeriod,
+} from 'src/services/stats'
 import { addDaysISO } from 'src/services/dates'
 import type { DayInstance, Placement } from 'src/models/dayInstance'
 
@@ -46,6 +51,8 @@ describe('aggregateStats: пустые данные и нулевые знаме
       done: 0,
       skipped: 0,
       unplanned: 0,
+      shifted: 0,
+      durationChanged: 0,
       rate: null,
       periodStart: null,
       periodEnd: TODAY,
@@ -302,5 +309,138 @@ describe('aggregateStats: подпись из снимка и агрегация
 
     expect(perTask.get('a')).toMatchObject({ placed: 1, done: 1, skipped: 0, rate: 1 })
     expect(perTask.get('b')).toMatchObject({ placed: 2, done: 1, skipped: 1, rate: 0.5 })
+  })
+})
+
+describe('aggregateStats: перенос и изменение длительности считаются отдельно (FR-S-5)', () => {
+  it('перенесённое не попадает во внеплановые и считается своим счётчиком', () => {
+    const { overall, perTask } = run([
+      instance({
+        id: 'i1',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', shifted: true }),
+          placement({ id: 'p2', taskId: 'a', unplanned: true }),
+        ],
+      }),
+    ])
+
+    expect(overall).toMatchObject({ placed: 2, unplanned: 1, shifted: 1, durationChanged: 0 })
+    expect(perTask.get('a')).toMatchObject({
+      placed: 2,
+      unplanned: 1,
+      shifted: 1,
+      durationChanged: 0,
+    })
+  })
+
+  it('перенос и изменение длительности у одного размещения считаются оба', () => {
+    const { overall } = run([
+      instance({
+        id: 'i1',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', shifted: true, durationChanged: true }),
+        ],
+      }),
+    ])
+
+    expect(overall).toMatchObject({ placed: 1, shifted: 1, durationChanged: 1, unplanned: 0 })
+    // Статус и рейт считаются по тому же размещению: это подмножества placed
+    expect(overall.done).toBe(1)
+    expect(overall.rate).toBe(1)
+  })
+})
+
+describe('статистика дня (FR-S-6)', () => {
+  it('aggregateDayRollups суммирует несколько экземпляров одной даты', () => {
+    const rollups = aggregateDayRollups([
+      instance({
+        id: 'i1',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', status: 'done' }),
+          placement({ id: 'p2', taskId: 'b', status: 'skipped', unplanned: true }),
+        ],
+      }),
+      instance({
+        id: 'i2',
+        placements: [placement({ id: 'p3', taskId: 'a', status: 'done', shifted: true })],
+      }),
+    ])
+
+    expect(rollups.get(TODAY)).toMatchObject({
+      date: TODAY,
+      placed: 3,
+      done: 2,
+      skipped: 1,
+      unplanned: 1,
+      shifted: 1,
+      durationChanged: 0,
+      rate: 2 / 3,
+    })
+  })
+
+  it('aggregateDayRollups пропускает пустые дни', () => {
+    expect(aggregateDayRollups([instance({ id: 'empty' })]).size).toBe(0)
+  })
+
+  it('buildDayStats отдаёт записи дня, убранные, флаги и порядок по времени', () => {
+    const day = buildDayStats(
+      [
+        instance({
+          id: 'i1',
+          placements: [
+            placement({
+              id: 'late',
+              taskId: 'b',
+              startMin: 120,
+              taskSnapshot: { title: 'Позже', color: '#4CAF50', priority: 'low' },
+            }),
+            placement({
+              id: 'early',
+              taskId: 'a',
+              startMin: null,
+              status: 'skipped',
+              removed: true,
+              unplanned: true,
+              taskSnapshot: { title: 'Без времени', color: '#2196F3', priority: 'high' },
+            }),
+            placement({
+              id: 'middle',
+              taskId: 'a',
+              startMin: 60,
+              durationMin: 45,
+              plannedDurationMin: 30,
+              durationChanged: true,
+              shifted: true,
+              taskSnapshot: { title: 'Середина', color: '#F44336', priority: 'medium' },
+            }),
+          ],
+        }),
+      ],
+      TODAY,
+    )
+
+    expect(day.date).toBe(TODAY)
+    expect(day.instances).toBe(1)
+    expect(day.entries.map(entry => entry.placementId)).toEqual(['middle', 'late', 'early'])
+    expect(day.entries[0]).toMatchObject({
+      shifted: true,
+      durationChanged: true,
+      plannedDurationMin: 30,
+      dayStartMin: 480,
+    })
+    expect(day.entries[2]).toMatchObject({ startMin: null, removed: true, unplanned: true })
+    expect(day.totals).toMatchObject({
+      placed: 3,
+      done: 2,
+      skipped: 1,
+      unplanned: 1,
+      shifted: 1,
+      durationChanged: 1,
+    })
+  })
+
+  it('пустой завершённый день отличается от отсутствующего по instances', () => {
+    expect(buildDayStats([], TODAY)).toMatchObject({ instances: 0, totals: { placed: 0 } })
+    expect(buildDayStats([instance({ id: 'empty' })], TODAY).instances).toBe(1)
   })
 })

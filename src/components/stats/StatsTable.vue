@@ -82,6 +82,12 @@
             {{ row.unplanned }}
           </td>
           <td class="stats-table__cell--numeric">
+            {{ row.shifted }}
+          </td>
+          <td class="stats-table__cell--numeric">
+            {{ row.durationChanged }}
+          </td>
+          <td class="stats-table__cell--numeric">
             {{ rateText(row.rate) }}
           </td>
           <td class="stats-table__cell--progress">
@@ -134,6 +140,13 @@ const columns = computed<Column[]>(() => [
   { id: 'done', label: t('stats.columns.done'), sortable: true, numeric: true },
   { id: 'skipped', label: t('stats.columns.skipped'), sortable: true, numeric: true },
   { id: 'unplanned', label: t('stats.columns.unplanned'), sortable: true, numeric: true },
+  { id: 'shifted', label: t('stats.columns.shifted'), sortable: true, numeric: true },
+  {
+    id: 'durationChanged',
+    label: t('stats.columns.durationChanged'),
+    sortable: true,
+    numeric: true,
+  },
   { id: 'rate', label: t('stats.columns.rate'), sortable: true, numeric: true },
   { id: 'progress', label: t('stats.columns.progress'), sortable: false, numeric: false },
 ])

@@ -151,6 +151,9 @@ describe('useStatsStore: API статистики (контракты §4)', () 
     expect(first.data[0]?.dayStartMin).toBe(600)
     expect(first.data[1]?.dayStartMin).toBe(480)
     expect(first.data[0]?.completedAt).toBeUndefined()
+    // Ключ строки — размещение, а не только день: в одном дне их может быть несколько
+    expect(first.data[0]?.placementId).toBe('p-new')
+    expect(first.data[0]?.plannedDurationMin).toBe(15)
 
     const second = await store.loadTaskHistory('a')
     expect(second.ok).toBe(true)
@@ -198,11 +201,106 @@ describe('useStatsStore: API статистики (контракты §4)', () 
     await store.initialize()
     await store.loadTaskHistory('a')
     expect(store.taskStats.size).toBe(1)
+    expect(store.dayStats.size).toBe(1)
 
     store.resetCache()
     expect(store.taskStats.size).toBe(0)
     expect(store.overallStats).toBeNull()
     expect(store.history.size).toBe(0)
+    expect(store.dayStats.size).toBe(0)
     expect(store.initialized).toBe(false)
+  })
+
+  it('visibleDayStats отдаёт дни периода новыми сверху, loadDayStats — детали дня', async () => {
+    const yesterday = addDaysISO(todayISO(), -1)
+    const longAgo = addDaysISO(todayISO(), -100)
+    await db.dayInstances.bulkAdd([
+      instance({
+        id: 'today',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', shifted: true }),
+          placement({ id: 'p2', taskId: 'b', status: 'skipped', unplanned: true }),
+        ],
+      }),
+      instance({
+        id: 'yesterday',
+        date: yesterday,
+        placements: [
+          placement({ id: 'p3', taskId: 'a', durationChanged: true, plannedDurationMin: 15 }),
+        ],
+      }),
+      instance({
+        id: 'old',
+        date: longAgo,
+        placements: [placement({ id: 'p4', taskId: 'c' })],
+      }),
+    ])
+
+    const store = useStatsStore()
+    await store.initialize()
+    expect(store.visibleDayStats.map(day => day.date)).toEqual([todayISO(), yesterday, longAgo])
+    expect(store.visibleDayStats[0]).toMatchObject({
+      placed: 2,
+      done: 1,
+      skipped: 1,
+      unplanned: 1,
+      shifted: 1,
+      durationChanged: 0,
+    })
+
+    // Период фильтрует и «По дням», как «По делам»
+    store.setPeriod('7d')
+    await flush()
+    expect(store.visibleDayStats.map(day => day.date)).toEqual([todayISO(), yesterday])
+
+    const day = await store.loadDayStats(todayISO())
+    expect(day.ok).toBe(true)
+    if (!day.ok) return
+    expect(day.data.instances).toBe(1)
+    expect(day.data.totals).toMatchObject({ placed: 2, unplanned: 1, shifted: 1 })
+    expect(day.data.entries.map(entry => entry.placementId)).toEqual(['p1', 'p2'])
+
+    // Незавершённый день в статистику дня не входит
+    await db.dayInstances.add(
+      instance({
+        id: 'active',
+        date: yesterday,
+        status: 'active',
+        placements: [placement({ id: 'p-active', taskId: 'a' })],
+      }),
+    )
+    const activeDay = await store.loadDayStats(yesterday)
+    expect(activeDay.ok).toBe(true)
+    if (!activeDay.ok) return
+    expect(activeDay.data.instances).toBe(1)
+    expect(activeDay.data.entries.map(entry => entry.placementId)).toEqual(['p3'])
+  })
+
+  it('история отличает перенос и длительность от внепланового (FR-S-5)', async () => {
+    await db.dayInstances.add(
+      instance({
+        id: 'i1',
+        placements: [
+          placement({
+            id: 'moved',
+            taskId: 'a',
+            shifted: true,
+            durationChanged: true,
+            plannedDurationMin: 15,
+          }),
+        ],
+      }),
+    )
+    const store = useStatsStore()
+    await store.recompute()
+    const history = await store.loadTaskHistory('a')
+    expect(history.ok).toBe(true)
+    if (!history.ok) return
+    expect(history.data[0]).toMatchObject({
+      shifted: true,
+      durationChanged: true,
+      plannedDurationMin: 15,
+      unplanned: false,
+    })
   })
 })

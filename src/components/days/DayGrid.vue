@@ -83,6 +83,8 @@
           :day-start-min="dayStartMin"
           :time-format="timeFormat"
           :unplanned="placement.unplanned === true"
+          :shifted="placement.shifted === true"
+          :duration-changed="placement.durationChanged === true"
           :planned-start-min="plannedStarts?.get(placement.id) ?? null"
           :archived="archivedIds?.has(placement.id) === true"
           :mode="mode"

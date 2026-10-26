@@ -100,6 +100,53 @@
         :sort="{ field: stats.sortBy, order: stats.sortOrder }"
         @sort="onColumnSort"
       />
+
+      <!--
+        Блок «По дням» (FR-S-6, вайрфреймы §7.4): те же завершённые дни, что и
+        таблица, но с разбивкой по датам. Период применяется к списку так же,
+        как к «По делам»; клик открывает статистику конкретного дня.
+      -->
+      <div
+        v-if="stats.visibleDayStats.length > 0"
+        class="stats-page__days q-mt-lg"
+        data-test="stats-days"
+      >
+        <div class="text-subtitle1 q-mb-sm">
+          {{ t('stats.byDay') }}
+        </div>
+        <q-list separator>
+          <q-item
+            v-for="day in stats.visibleDayStats"
+            :key="day.date"
+            clickable
+            :to="{ name: 'day-stats', params: { date: day.date } }"
+            :aria-label="t('stats.dayLinkAria', { date: dayLabel(day.date) })"
+            :data-test="`stats-day-${day.date}`"
+          >
+            <q-item-section>
+              <q-item-label>{{ shortDayLabel(day.date) }}</q-item-label>
+              <q-item-label caption>
+                {{ t('stats.dayCounters', { done: day.done, skipped: day.skipped }) }}
+                <template v-if="day.unplanned > 0">
+                  · {{ t('stats.dayCountersUnplanned', { n: day.unplanned }) }}
+                </template>
+                <template v-if="day.shifted > 0">
+                  · {{ t('stats.dayCountersShifted', { n: day.shifted }) }}
+                </template>
+                <template v-if="day.durationChanged > 0">
+                  · {{ t('stats.dayCountersDuration', { n: day.durationChanged }) }}
+                </template>
+              </q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <q-icon
+                name="chevron_right"
+                aria-hidden="true"
+              />
+            </q-item-section>
+          </q-item>
+        </q-list>
+      </div>
     </template>
 
     <!-- Пустое состояние (вайрфреймы §9.4): данных ещё нет вовсе. -->
@@ -140,12 +187,15 @@ import { useI18n } from 'vue-i18n'
 import StatsSummary from 'src/components/stats/StatsSummary.vue'
 import StatsCards from 'src/components/stats/StatsCards.vue'
 import StatsTable from 'src/components/stats/StatsTable.vue'
+import { formatDayLabel, formatShortDateLabel } from 'src/components/days/dayFormat'
 import { useStatsStore } from 'src/stores/stats'
+import { useSettingsStore } from 'src/stores/settings'
 import type { StatsPeriod, StatsSortField } from 'src/services/stats'
 
 const { t } = useI18n()
 const $q = useQuasar()
 const stats = useStatsStore()
+const settings = useSettingsStore()
 
 const loadError = ref(false)
 
@@ -169,8 +219,20 @@ const sortOptions = computed(() => [
   { label: t('stats.columns.done'), value: 'done' },
   { label: t('stats.columns.skipped'), value: 'skipped' },
   { label: t('stats.columns.unplanned'), value: 'unplanned' },
+  { label: t('stats.columns.shifted'), value: 'shifted' },
+  { label: t('stats.columns.durationChanged'), value: 'durationChanged' },
   { label: t('stats.columns.rate'), value: 'rate' },
 ])
+
+/** Подпись дня в списке: «Пн, 23 сентября» (компактно, как в «Днях»). */
+function shortDayLabel(date: string): string {
+  return formatShortDateLabel(date, settings.language)
+}
+
+/** Полная подпись дня для aria-label ссылки: «Понедельник · 23 сентября». */
+function dayLabel(date: string): string {
+  return formatDayLabel(date, settings.language)
+}
 
 /** Агрегаты посчитаны хотя бы раз: различает «пусто» и «первая загрузка». */
 const initialized = computed(() => stats.initialized)

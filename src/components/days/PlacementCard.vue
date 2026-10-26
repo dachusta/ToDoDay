@@ -4,6 +4,9 @@
     приоритета, время начала и конца, состояние статуса иконкой (не чекбоксом) и
     рисунок ▶, пока локальное время внутри интервала. Пересечения подсвечиваются
     полосой с частичным наложением и иконкой ⚠ (FR-B-3), но остаются разрешёнными.
+    Отклонения от плана помечаются бейджами: «внепланово», «перенесено» и
+    «длительность» (у последнего рядом — прежняя длительность зачёркнутой и
+    новая).
 
     НФТ ТЗ §7: карточка — `role="button"`, `aria-pressed` только на время
     перетаскивания, `aria-label` с названием и временем; Enter/Space открывают
@@ -62,6 +65,16 @@
       data-test="placement-unplanned"
     >{{ t('placement.unplannedBadge') }}</span>
     <span
+      v-if="shifted"
+      class="placement-card__badge"
+      data-test="placement-shifted"
+    >{{ t('placement.shiftedBadge') }}</span>
+    <span
+      v-if="durationChanged"
+      class="placement-card__badge"
+      data-test="placement-duration-changed"
+    >{{ t('placement.durationBadge') }}</span>
+    <span
       v-if="plannedTime"
       class="placement-card__planned"
       data-test="placement-planned-time"
@@ -75,6 +88,27 @@
     <span class="placement-card__meta">
       <PriorityBadge :priority="placement.taskSnapshot.priority" />
       <span class="placement-card__time">{{ timeLabel }}</span>
+      <!--
+        Изменение длительности: прежняя длительность зачёркнута, новая — рядом.
+        Оба значения дублируются в aria-label карточки, поэтому здесь пара
+        скрыта от скринридера и не читается дважды (НФТ ТЗ §7).
+      -->
+      <span
+        v-if="durationChange"
+        class="placement-card__duration-change"
+        data-test="placement-duration-change"
+        aria-hidden="true"
+      >
+        <span
+          class="placement-card__planned"
+          data-test="placement-planned-duration"
+        >{{ durationChange.from }}</span>
+        <span>→</span>
+        <span
+          class="placement-card__duration"
+          data-test="placement-duration"
+        >{{ durationChange.to }}</span>
+      </span>
     </span>
 
     <q-btn
@@ -139,8 +173,12 @@ const props = withDefaults(
     /** Минуты от начала суток для instance.timeStart. */
     dayStartMin?: number
     timeFormat?: TimeFormat
-    /** Размещение добавлено или изменено в «Сегодня» относительно плана. */
+    /** Нет плановой основы: добавлено, заменено или убрано в «Сегодня». */
     unplanned?: boolean
+    /** Плановое дело перенесено по времени: дело и длительность те же. */
+    shifted?: boolean
+    /** Длительность изменена относительно плановой или исходной. */
+    durationChanged?: boolean
     /** Плановое время (смещение от начала дня) для подписи «план: HH:mm». */
     plannedStartMin?: number | null
     /** Дело в архиве (показывается в редакторе плана). */
@@ -159,6 +197,8 @@ const props = withDefaults(
     dayStartMin: 0,
     timeFormat: '24h',
     unplanned: false,
+    shifted: false,
+    durationChanged: false,
     plannedStartMin: null,
     archived: false,
     mode: 'day',
@@ -200,6 +240,27 @@ const plannedTime = computed(() => {
   return formatMinutesOfDay(props.dayStartMin + props.plannedStartMin, props.timeFormat)
 })
 
+/** Подпись длительности в словаре: «30 мин», «1 ч», «1 ч 30 мин» (FR-SET-3). */
+function durationText(minutes: number): string {
+  const { key, params } = durationDescriptor(minutes)
+  return t(key, params)
+}
+
+/**
+ * Пара «было → стало» для изменённой длительности. Показывается только когда
+ * базовая длительность известна и действительно отличается от фактической:
+ * легаси-записи без `plannedDurationMin` не должны получать ложную отметку.
+ */
+const durationChange = computed(() => {
+  if (!props.durationChanged) return null
+  const planned = props.placement.plannedDurationMin
+  if (planned === undefined || planned === props.placement.durationMin) return null
+  return {
+    from: durationText(planned),
+    to: durationText(props.placement.durationMin),
+  }
+})
+
 const ariaLabel = computed(() => {
   const title = props.placement.taskSnapshot.title
   const base =
@@ -216,11 +277,15 @@ const ariaLabel = computed(() => {
           status: statusText.value,
         })
   const unplanned = props.unplanned ? `, ${t('placement.unplannedBadge')}` : ''
+  const shifted = props.shifted ? `, ${t('placement.shiftedBadge')}` : ''
   const planned = plannedTime.value
     ? `, ${t('placement.plannedTime', { time: plannedTime.value })}`
     : ''
+  const duration = durationChange.value
+    ? `, ${t('placement.durationChangedAria', durationChange.value)}`
+    : ''
   const archived = props.archived ? `, ${t('placement.archived')}` : ''
-  return `${base}${unplanned}${planned}${archived}`
+  return `${base}${unplanned}${shifted}${planned}${duration}${archived}`
 })
 
 const menuAria = computed(() =>
@@ -233,6 +298,8 @@ const classes = computed(() => ({
   'placement-card--now': props.now,
   'placement-card--dragging': props.dragging,
   'placement-card--unplanned': props.unplanned,
+  'placement-card--shifted': props.shifted,
+  'placement-card--duration-changed': props.durationChanged,
   'placement-card--archived': props.archived,
   [`placement-card--${props.placement.status}`]: true,
 }))
@@ -452,6 +519,25 @@ onUnmounted(stopLocalListeners)
   line-height: 14px;
   white-space: nowrap;
   text-decoration: line-through;
+}
+
+/*
+  Пара «прежняя → новая» для изменённой длительности: те же 10 px, что и у
+  подписи «план: HH:mm», чтобы карточка не разъезжалась. Новая длительность
+  идёт обычным текстом — различие не только цветом и не только зачёркиванием.
+*/
+.placement-card__duration-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--app-meta);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.placement-card__duration {
+  color: var(--app-title);
 }
 
 .placement-card__meta {

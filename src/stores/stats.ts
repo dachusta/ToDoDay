@@ -3,8 +3,15 @@ import { computed, ref } from 'vue'
 import { liveQuery, type Subscription } from 'dexie'
 import { db } from 'src/services/db'
 import { minutesOfDay, todayISO } from 'src/services/dates'
-import { aggregateStats } from 'src/services/stats'
+import { normalizeDayInstance } from 'src/services/dayPlans'
+import {
+  aggregateDayRollups,
+  aggregateStats,
+  buildDayStats,
+} from 'src/services/stats'
 import type {
+  DayRollup,
+  DayStats,
   PlacementHistoryEntry,
   StatsPeriod,
   StatsSortField,
@@ -31,6 +38,8 @@ function compareStats(a: TaskStats, b: TaskStats, field: StatsSortField): number
     case 'skipped': return a.skipped - b.skipped
     case 'placed': return a.placed - b.placed
     case 'unplanned': return (a.unplanned ?? 0) - (b.unplanned ?? 0)
+    case 'shifted': return (a.shifted ?? 0) - (b.shifted ?? 0)
+    case 'durationChanged': return (a.durationChanged ?? 0) - (b.durationChanged ?? 0)
     default: return a.title.localeCompare(b.title)
   }
 }
@@ -45,6 +54,10 @@ export const useStatsStore = defineStore('stats', () => {
   // Кэш истории размещений (контракты §4.1). TaskStatsPage читает его без
   // повторного запроса; заполняется loadTaskHistory и сбрасывается recompute.
   const history = ref<Map<string, PlacementHistoryEntry[]>>(new Map())
+  // Сводка по дням для блока «По дням»: считается из того же набора завершённых
+  // экземпляров, что и агрегаты, поэтому отдельного запроса к БД не требует.
+  // Период применяется в геттере visibleDayStats.
+  const dayStats = ref<Map<string, DayRollup>>(new Map())
   const period = ref<StatsPeriod>('all')
   const sortBy = ref<StatsSortField>('title')
   const sortOrder = ref<'asc' | 'desc'>('asc')
@@ -68,6 +81,19 @@ export const useStatsStore = defineStore('stats', () => {
   const taskStatsById = (id: string) => taskStats.value.get(id)
 
   /**
+   * Дни выбранного периода, новые сверху. Период тот же, что у «По делам»:
+   * «всё время» (дефолт) показывает все завершённые дни с размещениями.
+   */
+  const visibleDayStats = computed(() => {
+    const overall = overallStats.value
+    if (!overall) return []
+    const start = overall.periodStart
+    return [...dayStats.value.values()]
+      .filter(day => (start === null || day.date >= start) && day.date <= overall.periodEnd)
+      .sort((a, b) => b.date.localeCompare(a.date))
+  })
+
+  /**
    * Агрегаты «всё время» для строки дела (FR-T-4). Экран «Дела» показывает по ним
    * «выполнено / пропущено» и рейт; `undefined` — дело ещё не размещалось, и это
    * не то же самое, что 0% (FR-S-2).
@@ -89,6 +115,8 @@ export const useStatsStore = defineStore('stats', () => {
       prev.done === next.done &&
       prev.skipped === next.skipped &&
       prev.unplanned === next.unplanned &&
+      prev.shifted === next.shifted &&
+      prev.durationChanged === next.durationChanged &&
       taskStats.value.size === taskCount
     )
   }
@@ -105,6 +133,9 @@ export const useStatsStore = defineStore('stats', () => {
     // aggregateStats. Второго запроса к БД поэтому не нужно.
     allTimeStats.value =
       target === 'all' ? perTask : aggregateStats(instances, 'all', today).perTask
+    // Сводка по дням — из того же набора: период фильтруется в visibleDayStats,
+    // поэтому переключение периода не требует нового чтения БД.
+    dayStats.value = aggregateDayRollups(instances)
     // Агрегаты изменились — кэш истории недействителен (контракты §4.1)
     if (!historyValid) history.value = new Map()
     initialized.value = true
@@ -163,6 +194,23 @@ export const useStatsStore = defineStore('stats', () => {
     return result
   }
 
+  /**
+   * Статистика конкретного дня: читает все завершённые экземпляры этой даты и
+   * собирает суммы и список размещений (контракты §4.2). Несколько экземпляров
+   * на одну дату суммируются — индекс `date` у `dayInstances` не уникален.
+   */
+  async function loadDayStats(date: string): Promise<Result<DayStats>> {
+    try {
+      const instances = await db.dayInstances.where('date').equals(date).toArray()
+      const completed = instances
+        .filter(instance => instance.status === 'completed')
+        .map(instance => normalizeDayInstance(instance))
+      return ok(buildDayStats(completed, date))
+    } catch (e) {
+      return err('DB_ERROR', 'Не удалось загрузить статистику дня', e)
+    }
+  }
+
   async function loadTaskHistory(taskId: string): Promise<Result<PlacementHistoryEntry[]>> {
     // Кэш: TaskStatsPage берёт историю без повторного запроса (контракты §4.2)
     const cached = history.value.get(taskId)
@@ -177,14 +225,20 @@ export const useStatsStore = defineStore('stats', () => {
           if (p.taskId === taskId) {
             out.push({
               instanceId: inst.id,
+              placementId: p.id,
               date: inst.date,
               startMin: p.startMin,
               // Placement.startMin — смещение от начала дня: для подписи нужен
               // абсолютный час начала дня этого экземпляра (контракты §4.1)
               dayStartMin: minutesOfDay(inst.timeStart),
               durationMin: p.durationMin,
+              // Легаси-записи не знают базовую длительность: она равна фактической,
+              // поэтому отметки «изменена длительность» у них нет.
+              plannedDurationMin: p.plannedDurationMin ?? p.durationMin,
               status: p.status,
               unplanned: p.unplanned === true,
+              shifted: p.shifted === true,
+              durationChanged: p.durationChanged === true,
               removed: p.removed === true,
               // exactOptionalPropertyTypes: необязательное поле не принимает явный undefined
               ...(inst.completedAt === undefined ? {} : { completedAt: inst.completedAt }),
@@ -192,7 +246,15 @@ export const useStatsStore = defineStore('stats', () => {
           }
         }
       }
-      out.sort((a, b) => b.date.localeCompare(a.date))
+      // Дата вниз, внутри дня — по времени: история группируется по дням, и
+      // строки одной группы должны идти в порядке дня (контракты §4.1).
+      out.sort((a, b) => {
+        const byDate = b.date.localeCompare(a.date)
+        if (byDate !== 0) return byDate
+        const aStart = a.startMin ?? Number.POSITIVE_INFINITY
+        const bStart = b.startMin ?? Number.POSITIVE_INFINITY
+        return aStart - bStart
+      })
       history.value.set(taskId, out)
       return ok(out)
     } catch (e) {
@@ -219,13 +281,15 @@ export const useStatsStore = defineStore('stats', () => {
     overallStats.value = null
     allTimeStats.value = new Map()
     history.value = new Map()
+    dayStats.value = new Map()
     initialized.value = false
   }
 
   return {
-    taskStats, overallStats, allTimeStats, history, period, sortBy, sortOrder, loading, initialized,
-    visibleTaskStats, taskStatsById, allTimeStatsById,
-    initialize, recompute, loadTaskHistory, setPeriod, setSort,
+    taskStats, overallStats, allTimeStats, history, dayStats,
+    period, sortBy, sortOrder, loading, initialized,
+    visibleTaskStats, visibleDayStats, taskStatsById, allTimeStatsById,
+    initialize, recompute, loadTaskHistory, loadDayStats, setPeriod, setSort,
     subscribe, unsubscribe, resetCache,
   }
 })

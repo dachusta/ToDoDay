@@ -368,6 +368,76 @@ describe('StatsPage: сводка и разбивка по делам (FR-S-1, F
     expect(router.currentRoute.value.params.id).toBe('a')
   })
 
+  it('показывает перенос и изменение длительности в сводке, таблице и «По дням» (FR-S-5, FR-S-6)', async () => {
+    await db.dayInstances.bulkAdd([
+      instance({
+        id: 'today',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', startMin: 0, shifted: true }),
+          placement({
+            id: 'p2',
+            taskId: 'a',
+            startMin: 60,
+            durationChanged: true,
+            plannedDurationMin: 15,
+          }),
+          placement({ id: 'p3', taskId: 'b', status: 'skipped', unplanned: true }),
+        ],
+      }),
+    ])
+    const { wrapper, router } = await mountStats()
+
+    expect(wrapper.get('[data-test="stats-summary-placed"]').text()).toContain('3')
+    expect(wrapper.get('[data-test="stats-summary-unplanned"]').text()).toContain('1')
+    expect(wrapper.get('[data-test="stats-summary-shifted"]').text()).toContain('1')
+    expect(wrapper.get('[data-test="stats-summary-durationChanged"]').text()).toContain('1')
+
+    // Колонки идут в порядке: размещ., вып., проп., внепл., перенесено, длительность, рейт
+    const cells = wrapper
+      .get('[data-test="stats-row-a"]')
+      .findAll('td.stats-table__cell--numeric')
+      .map(cell => cell.text())
+    expect(cells).toEqual(['2', '2', '0', '0', '1', '1', '100%'])
+
+    // Блок «По дням»: дата, счётчики и переход на страницу дня
+    expect(wrapper.find('[data-test="stats-days"]').exists()).toBe(true)
+    const day = wrapper.get(`[data-test="stats-day-${todayISO()}"]`)
+    expect(day.text()).toContain('вып. 2 · проп. 1')
+    expect(day.text()).toContain('внепл. 1')
+    expect(day.text()).toContain('перенес. 1')
+    expect(day.text()).toContain('изм. длит. 1')
+
+    await day.trigger('click')
+    // Переход на подэкран ленивого маршрута завершается после загрузки чанка
+    await vi.waitFor(
+      () => {
+        expect(router.currentRoute.value.name).toBe('day-stats')
+      },
+      { timeout: 10_000 },
+    )
+    expect(router.currentRoute.value.params.date).toBe(todayISO())
+  })
+
+  it('сортирует по перенесённым и изменённой длительности (FR-S-2)', async () => {
+    await db.dayInstances.bulkAdd([
+      instance({
+        id: 'today',
+        placements: [
+          placement({ id: 'a1', taskId: 'a', startMin: 0, shifted: true }),
+          placement({ id: 'a2', taskId: 'a', startMin: 60, durationChanged: true }),
+          placement({ id: 'b1', taskId: 'b', startMin: 120, shifted: true }),
+          placement({ id: 'b2', taskId: 'b', startMin: 180, shifted: true }),
+        ],
+      }),
+    ])
+    const { wrapper } = await mountStats()
+
+    await sortButton(wrapper, 'shifted').trigger('click')
+    expect(rowTitles(wrapper)[0]).toBe('дело b')
+    await sortButton(wrapper, 'durationChanged').trigger('click')
+    expect(rowTitles(wrapper)[0]).toBe('дело a')
+  })
+
   it('до 1024 px показывает карточки вместо таблицы, сорт — двумя полями (вайрфреймы §7.1)', async () => {
     await seedStats()
     const { wrapper } = await mountStats(375)
@@ -634,52 +704,96 @@ describe('TaskStatsPage: сводка дела и история размеще�
     expect(wrapper.find('[data-test="stats-history-empty"]').exists()).toBe(true)
     expect(wrapper.findAll('[data-test^="stats-summary-"]')).toHaveLength(0)
   })
+
+  it('группирует историю по дням и помечает перенос и изменение длительности (FR-S-4)', async () => {
+    const today = todayISO()
+    const yesterday = addDaysISO(today, -1)
+    await db.dayInstances.bulkAdd([
+      instance({
+        id: 'today',
+        placements: [
+          placement({ id: 'p1', taskId: 'a', startMin: 0, shifted: true }),
+          placement({
+            id: 'p2',
+            taskId: 'a',
+            startMin: 60,
+            durationChanged: true,
+            plannedDurationMin: 15,
+          }),
+        ],
+      }),
+      instance({
+        id: 'yesterday',
+        date: yesterday,
+        placements: [placement({ id: 'p3', taskId: 'a', startMin: 0 })],
+      }),
+    ])
+
+    const { wrapper } = await mountTaskStats()
+
+    // День указывается один раз — заголовком группы, а не в каждой строке
+    const groups = wrapper.findAll('[data-test^="stats-history-day-"]')
+    expect(groups.map(group => group.attributes('data-test'))).toEqual([
+      `stats-history-day-${today}`,
+      `stats-history-day-${yesterday}`,
+    ])
+    expect(wrapper.findAll('.stats-history__row')).toHaveLength(3)
+    expect(
+      wrapper.findAll('[data-test="stats-history-flags"]').map(node => node.text()),
+    ).toEqual(['перенесено', 'изменена длительность'])
+    // Ключ строки — размещение: в одном дне у дела может быть несколько записей
+    expect(wrapper.findAll('[data-test="stats-history-today"]').length).toBe(2)
+  })
 })
 
 describe('statsFormat: строка истории размещений', () => {
-  it('собирает дату, длительность и время в одном ключе', () => {
+  it('собирает длительность и время в одном ключе, день приходит из заголовка группы', () => {
     const entry = {
       instanceId: 'i1',
+      placementId: 'p1',
       date: '2025-09-23',
       startMin: 15,
       dayStartMin: 480,
       durationMin: 30,
+      plannedDurationMin: 30,
       status: 'done' as const,
     }
 
-    expect(historyRowDescriptor(entry, 'ru', '24h')).toStrictEqual({
-      key: 'stats.historyRowN',
-      params: { day: '23', month: 'сент', weekday: 'вт', time: '08:15', n: 30 },
+    expect(historyRowDescriptor(entry, '24h')).toStrictEqual({
+      key: 'stats.historyRowTimeN',
+      params: { time: '08:15', n: 30 },
     })
 
-    expect(historyRowDescriptor({ ...entry, durationMin: 60 }, 'ru', '12h')).toStrictEqual({
-      key: 'stats.historyRowH',
-      params: { day: '23', month: 'сент', weekday: 'вт', time: '8:15 AM', n: 1 },
+    expect(historyRowDescriptor({ ...entry, durationMin: 60 }, '12h')).toStrictEqual({
+      key: 'stats.historyRowTimeH',
+      params: { time: '8:15 AM', n: 1 },
     })
 
     expect(
-      historyRowDescriptor({ ...entry, durationMin: 90, startMin: null }, 'en', '24h'),
+      historyRowDescriptor({ ...entry, durationMin: 90, startMin: null }, '24h'),
     ).toStrictEqual({
-      key: 'stats.historyRowNoTimeHM',
-      params: { day: '23', month: 'Sep', weekday: 'Tu', h: 1, m: 30 },
+      key: 'stats.historyRowTimeNoTimeHM',
+      params: { h: 1, m: 30 },
     })
   })
 
   it('прибавляет начало дня к смещению размещения (FR-S-4)', () => {
     const entry = {
       instanceId: 'i1',
+      placementId: 'p1',
       date: '2025-09-23',
       startMin: 0,
       dayStartMin: 480,
       durationMin: 15,
+      plannedDurationMin: 15,
       status: 'done' as const,
     }
 
     // Первый слот дня, начинающегося в 08:00, — это 08:00, а не 00:00
-    expect(historyRowDescriptor(entry, 'ru', '24h').params.time).toBe('08:00')
+    expect(historyRowDescriptor(entry, '24h').params.time).toBe('08:00')
     // У дня с началом 09:30 смещение 30 минут — это 10:00
     expect(
-      historyRowDescriptor({ ...entry, dayStartMin: 570, startMin: 30 }, 'ru', '24h').params.time,
+      historyRowDescriptor({ ...entry, dayStartMin: 570, startMin: 30 }, '24h').params.time,
     ).toBe('10:00')
   })
 
@@ -690,12 +804,12 @@ describe('statsFormat: строка истории размещений', () => 
     const statsEn = en.stats as Record<string, unknown>
 
     for (const key of [
-      'historyRowN',
-      'historyRowH',
-      'historyRowHM',
-      'historyRowNoTimeN',
-      'historyRowNoTimeH',
-      'historyRowNoTimeHM',
+      'historyRowTimeN',
+      'historyRowTimeH',
+      'historyRowTimeHM',
+      'historyRowTimeNoTimeN',
+      'historyRowTimeNoTimeH',
+      'historyRowTimeNoTimeHM',
     ]) {
       expect(typeof stats[key], key).toBe('string')
       expect(typeof statsEn[key], `en.${key}`).toBe('string')

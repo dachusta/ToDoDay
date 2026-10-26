@@ -159,7 +159,7 @@ describe('i18n: словари ru и en (НФТ ТЗ §7)', () => {
     for (const durationMin of [15, 60, 90]) {
       for (const startMin of [75, null]) {
         built.add(
-          historyRowDescriptor({ ...(entry as object), durationMin, startMin } as never, 'ru', '24h')
+          historyRowDescriptor({ ...(entry as object), durationMin, startMin } as never, '24h')
             .key,
         )
       }
@@ -229,6 +229,7 @@ describe('i18n: в разметке нет пользовательских ли
     'Не удалось удалить дело',
     'Не удалось пересчитать статистику',
     'Не удалось загрузить историю',
+    'Не удалось загрузить статистику дня',
     'Файл не содержит объект',
     'В файле нет блока data',
     'tasks/dayTemplates/dayInstances должны быть массивами',

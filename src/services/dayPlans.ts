@@ -190,6 +190,14 @@ export function normalizePlacement(
   const removed = source.removed === true
   const plannedId =
     typeof source.plannedId === 'string' && source.plannedId !== '' ? source.plannedId : null
+  const rawPlannedDuration = Number(source.plannedDurationMin)
+  const plannedDurationMin =
+    Number.isInteger(rawPlannedDuration) &&
+    rawPlannedDuration >= 15 &&
+    rawPlannedDuration <= 1425 &&
+    rawPlannedDuration % 15 === 0
+      ? rawPlannedDuration
+      : durationMin
 
   return {
     id: typeof source.id === 'string' && source.id !== '' ? source.id : defaultNewId(),
@@ -207,7 +215,12 @@ export function normalizePlacement(
       priority: asPriority(snapshot.priority),
     },
     plannedId,
+    // Убранное размещение всегда внеплановое, а перенос/длительность для него
+    // больше не имеют смысла: в статистике оно учитывается как пропущенное.
     unplanned: removed || source.unplanned === true,
+    shifted: !removed && source.shifted === true,
+    durationChanged: !removed && source.durationChanged === true,
+    plannedDurationMin,
     removed,
   }
 }
@@ -270,6 +283,9 @@ export function materializePlan(
       taskSnapshot: snapshotOf(task),
       plannedId: planned.id,
       unplanned: false,
+      shifted: false,
+      durationChanged: false,
+      plannedDurationMin: planned.durationMin,
       removed: false,
     })
   }
@@ -331,6 +347,9 @@ export function toPlanPlacementViews(
       taskSnapshot: snapshot,
       plannedId: planned.id,
       unplanned: false,
+      shifted: false,
+      durationChanged: false,
+      plannedDurationMin: planned.durationMin,
       removed: false,
       taskArchived: task?.archived === true,
       taskMissing: task === undefined,
@@ -341,10 +360,12 @@ export function toPlanPlacementViews(
 /**
  * Синхронизация открытого факта с планом. Правила:
  * - не изменённые плановые размещения получают новые время/дело/длительность;
- * - внеплановые отклонения и отменённые в «Сегодня» позиции сохраняются;
+ * - отклонения (`unplanned`, `shifted`, `durationChanged`) и убранные в
+ *   «Сегодня» позиции сохраняются: перенос и изменённая длительность — такой же
+ *   факт, как добавление, и правка плана не должна их затирать;
  * - новые позиции плана добавляются;
- * - удалённые из плана обычные pending-позиции исчезают, а уже отмеченные или
- *   изменённые остаются фактом с `plannedId: null`.
+ * - удалённые из плана обычные pending-позиции исчезают, а уже отмеченные,
+ *   изменённые или перенесённые остаются фактом с `plannedId: null`.
  */
 export interface ReconcileResult {
   placements: Placement[]
@@ -394,11 +415,30 @@ export function reconcileInstanceWithPlan(
     if (existing) {
       used.add(existing.id)
       if (existing.removed) {
-        out.push({ ...existing, plannedId: planned.id, unplanned: true, removed: true })
+        out.push({
+          ...existing,
+          plannedId: planned.id,
+          plannedDurationMin: planned.durationMin,
+          unplanned: true,
+          shifted: false,
+          durationChanged: false,
+          removed: true,
+        })
         continue
       }
-      if (existing.unplanned) {
-        out.push({ ...shiftActual(existing), plannedId: planned.id, unplanned: true })
+      if (existing.unplanned || existing.shifted || existing.durationChanged) {
+        // Отклонение — факт дня: время/дело/длительность не переписываем.
+        // Базовая длительность плана нужна для подписи «план: 30 мин» и для
+        // сравнения после правки плана.
+        const next: Placement = {
+          ...shiftActual(existing),
+          plannedId: planned.id,
+          ...(existing.taskId === planned.taskId
+            ? { plannedDurationMin: planned.durationMin }
+            : {}),
+        }
+        refreshPlacementDeviation(next, plan)
+        out.push(next)
         continue
       }
       if (task && !task.archived) {
@@ -414,12 +454,22 @@ export function reconcileInstanceWithPlan(
           durationMin: planned.durationMin,
           taskSnapshot: snapshotOf(task),
           plannedId: planned.id,
+          plannedDurationMin: planned.durationMin,
           unplanned: false,
+          shifted: false,
+          durationChanged: false,
           removed: false,
         })
       } else {
-        // Дело ушло в архив/удалено: фактическое размещение не трогаем.
-        out.push({ ...shiftActual(existing), plannedId: planned.id })
+        // Дело ушло в архив/удалено: фактическое размещение не трогаем, а
+        // классификацию сохраняем — перенос не должен «появиться» от правки плана.
+        const next: Placement = { ...shiftActual(existing), plannedId: planned.id }
+        if (existing.taskId === planned.taskId) {
+          next.plannedDurationMin = planned.durationMin
+        } else {
+          refreshPlacementDeviation(next, plan)
+        }
+        out.push(next)
       }
       continue
     }
@@ -436,6 +486,9 @@ export function reconcileInstanceWithPlan(
       taskSnapshot: snapshotOf(task),
       plannedId: planned.id,
       unplanned: false,
+      shifted: false,
+      durationChanged: false,
+      plannedDurationMin: planned.durationMin,
       removed: false,
     })
   }
@@ -443,17 +496,26 @@ export function reconcileInstanceWithPlan(
   for (const placement of instance.placements) {
     if (used.has(placement.id)) continue
     if (placement.plannedId) {
-      if (placement.removed || placement.unplanned || placement.status !== 'pending') {
-        out.push({
+      if (
+        placement.removed ||
+        placement.unplanned ||
+        placement.shifted ||
+        placement.durationChanged ||
+        placement.status !== 'pending'
+      ) {
+        const next: Placement = {
           ...shiftActual(placement),
           plannedId: null,
-          unplanned: true,
-          ...(placement.removed ? { removed: true } : {}),
-        })
+          removed: placement.removed === true,
+        }
+        refreshPlacementDeviation(next, plan)
+        out.push(next)
       }
       continue
     }
-    out.push(shiftActual(placement))
+    const next = shiftActual(placement)
+    refreshPlacementDeviation(next, plan)
+    out.push(next)
   }
 
   const changed =
@@ -471,21 +533,101 @@ export function reconcileInstanceWithPlan(
   }
 }
 
-/** Отличается ли размещение от плана: добавлено, перемещено, изменено или заменено. */
+/**
+ * Отклонения размещения от плановой основы. Три признака независимы:
+ * - `unplanned` — нет плановой основы: добавлено, заменено, убрано, элемент
+ *   плана исчез;
+ * - `shifted` — то же дело и та же длительность, но другое время;
+ * - `durationChanged` — изменена длительность (у планового — относительно
+ *   плана, у добавленного/заменённого — относительно исходной длительности).
+ *
+ * Перенос и изменение длительности могут встретиться вместе: это два разных
+ * факта, и статистика считает их отдельно.
+ */
+export interface PlacementDeviation {
+  unplanned: boolean
+  shifted: boolean
+  durationChanged: boolean
+}
+
+/** Исходная длительность для сравнения: у легаси-записей её нет — берём фактическую. */
+function baselineDurationMin(placement: Placement): number {
+  return typeof placement.plannedDurationMin === 'number'
+    ? placement.plannedDurationMin
+    : placement.durationMin
+}
+
+/**
+ * Классификация размещения относительно текущего плана. Функция чистая: ничего
+ * не меняет и не зависит от того, как размещение редактировали.
+ *
+ * Без плана сравнивать не с чем, поэтому сохраняются уже записанные признаки:
+ * удаление плана не должно переписывать историю факта.
+ */
+export function placementDeviation(
+  placement: Placement,
+  plan: DayPlan | null,
+): PlacementDeviation {
+  if (placement.removed === true) {
+    return { unplanned: true, shifted: false, durationChanged: false }
+  }
+  if (!plan) {
+    return {
+      unplanned: placement.unplanned === true,
+      shifted: placement.shifted === true,
+      durationChanged: placement.durationChanged === true,
+    }
+  }
+
+  const planned = placement.plannedId
+    ? plan.plannedPlacements.find(item => item.id === placement.plannedId)
+    : undefined
+
+  // Нет плановой основы (добавлено, заменено или элемент плана исчез).
+  // Время здесь не переносится: сравнивать не с чем.
+  if (!planned || planned.taskId !== placement.taskId) {
+    return {
+      unplanned: true,
+      shifted: false,
+      durationChanged: placement.durationMin !== baselineDurationMin(placement),
+    }
+  }
+
+  return {
+    unplanned: false,
+    // Нулевой startMin (дело ушло в «Нераспределённые») — не перенос.
+    shifted: placement.startMin !== null && placement.startMin !== planned.startMin,
+    durationChanged: placement.durationMin !== planned.durationMin,
+  }
+}
+
+/**
+ * Записать признаки в размещение и синхронизировать базовую длительность с
+ * планом, когда дело совпадает с элементом плана. У добавленного или
+ * заменённого дела базовая длительность — его собственная, её не перезаписываем.
+ */
+export function refreshPlacementDeviation(
+  placement: Placement,
+  plan: DayPlan | null,
+): void {
+  const deviation = placementDeviation(placement, plan)
+  placement.unplanned = deviation.unplanned
+  placement.shifted = deviation.shifted
+  placement.durationChanged = deviation.durationChanged
+
+  if (!plan || !placement.plannedId) return
+  const planned = plan.plannedPlacements.find(item => item.id === placement.plannedId)
+  if (planned && planned.taskId === placement.taskId) {
+    placement.plannedDurationMin = planned.durationMin
+  }
+}
+
+/** Размещение вне плана: добавлено, заменено, убрано или элемент плана исчез. */
 export function isPlacementUnplanned(
   placement: Placement,
   plan: DayPlan | null,
 ): boolean {
-  if (placement.removed === true) return true
-  if (!plan) return placement.unplanned === true
-  if (!placement.plannedId) return true
-  const planned = plan.plannedPlacements.find(item => item.id === placement.plannedId)
-  if (!planned) return true
-  return (
-    placement.startMin !== planned.startMin ||
-    placement.durationMin !== planned.durationMin ||
-    placement.taskId !== planned.taskId
-  )
+  return placementDeviation(placement, plan).unplanned
 }
 
 /** Плановое время перемещённого размещения — для подписи «план: HH:mm». */

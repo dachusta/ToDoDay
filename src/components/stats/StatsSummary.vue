@@ -1,8 +1,9 @@
 <template>
   <!--
-    Итоговая сводка экрана статистики (FR-S-2, вайрфреймы §7.1/§7.2): четыре
-    числа OverallStats — размещено, выполнено, пропущено и рейт. Итог считается
-    по всем делам периода, поэтому сводка живёт отдельно от строк таблицы.
+    Итоговая сводка экрана статистики (FR-S-2, вайрфреймы §7.1/§7.2): семь
+    чисел — размещено, выполнено, пропущено, внеплановых, перенесено,
+    изменена длительность и рейт. Итог считается по всем делам периода или по
+    конкретному дню, поэтому сводка живёт отдельно от строк таблицы.
     Разметка одинакова на узком и широком экране (вайрфреймы §7.1).
   -->
   <div class="stats-summary row q-col-gutter-sm">
@@ -36,15 +37,18 @@ import { useI18n } from 'vue-i18n'
 import { rateText } from 'src/components/tasks/taskFormat'
 
 /**
- * Четыре числа сводки. Компонент принимает и итог экрана статистики
- * (`OverallStats`), и строку одного дела (`TaskStats`) — у них общий набор
- * счётчиков, поэтому вторая сводка не дублирует разметку (вайрфреймы §7.1/§7.3).
+ * Итоговые числа сводки. Компонент принимает и итог экрана статистики
+ * (`OverallStats`), и строку одного дела (`TaskStats`), и день (`DayStatsTotals`):
+ * у них общий набор счётчиков, поэтому вторая сводка не дублирует разметку
+ * (вайрфреймы §7.1/§7.3).
  */
 export interface StatsTotals {
   placed: number
   done: number
   skipped: number
   unplanned?: number
+  shifted?: number
+  durationChanged?: number
   rate: number | null
 }
 
@@ -56,14 +60,22 @@ const props = defineProps<{
 const { t } = useI18n()
 
 /**
- * Четыре плитки сводки. Рейт — единственное место, где встречается «—»: это
+ * Семь плиток сводки. Рейт — единственное место, где встречается «—»: это
  * 0/0 (в периоде нет ни одного завершённого размещения), а не 0%.
+ * «Перенесено» и «изменена длительность» — независимые подмножества
+ * «размещено»: они не входят во «внеплановых», но могут встретиться вместе.
  */
 const tiles = computed(() => [
   { id: 'placed', value: String(props.stats?.placed ?? 0), label: t('stats.placed') },
   { id: 'done', value: String(props.stats?.done ?? 0), label: t('stats.done') },
   { id: 'skipped', value: String(props.stats?.skipped ?? 0), label: t('stats.skipped') },
   { id: 'unplanned', value: String(props.stats?.unplanned ?? 0), label: t('stats.unplanned') },
+  { id: 'shifted', value: String(props.stats?.shifted ?? 0), label: t('stats.shifted') },
+  {
+    id: 'durationChanged',
+    value: String(props.stats?.durationChanged ?? 0),
+    label: t('stats.durationChanged'),
+  },
   { id: 'rate', value: rateText(props.stats?.rate ?? null), label: t('stats.rate') },
 ])
 </script>

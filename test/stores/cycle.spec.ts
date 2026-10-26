@@ -180,7 +180,7 @@ describe('useCycleStore: внеплановые изменения и неизм
     expect((await db.dayPlans.get(plan.id))?.plannedPlacements).toHaveLength(0)
   })
 
-  it('перемещение и возврат планового дела переключают внеплановый флаг', async () => {
+  it('перемещение и возврат планового дела переключают признак переноса', async () => {
     await useTasksStore().loadAll()
     const task = await newTask('A')
     await useDayPlansStore().loadAll()
@@ -193,16 +193,22 @@ describe('useCycleStore: внеплановые изменения и неизм
 
     const placement = cycle.currentInstance!.placements[0]!
     expect(cycle.isUnplanned(placement)).toBe(false)
+    expect(placement.shifted).toBe(false)
 
     expect((await cycle.movePlacement(placement.id, 120)).ok).toBe(true)
-    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(true)
-    expect(cycle.plannedTimeFor(cycle.currentInstance!.placements[0]!)).toBe(60)
+    const moved = cycle.currentInstance!.placements[0]!
+    expect(moved).toMatchObject({ shifted: true, unplanned: false, durationChanged: false })
+    expect(cycle.plannedTimeFor(moved)).toBe(60)
 
     expect((await cycle.movePlacement(placement.id, 60)).ok).toBe(true)
-    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(false)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      shifted: false,
+      unplanned: false,
+      durationChanged: false,
+    })
   })
 
-  it('изменение длительности и замена дела помечают размещение внеплановым', async () => {
+  it('изменение длительности и замена дела помечают размещение по-разному', async () => {
     await useTasksStore().loadAll()
     const a = await newTask('A', 30)
     const b = await newTask('B', 60)
@@ -215,11 +221,21 @@ describe('useCycleStore: внеплановые изменения и неизм
     const placement = cycle.currentInstance!.placements[0]!
 
     expect((await cycle.changePlacementDuration(placement.id, 60)).ok).toBe(true)
-    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(true)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      durationChanged: true,
+      unplanned: false,
+      shifted: false,
+      plannedDurationMin: 30,
+    })
 
     expect((await cycle.replacePlacement(placement.id, b.id)).ok).toBe(true)
-    expect(cycle.isUnplanned(cycle.currentInstance!.placements[0]!)).toBe(true)
-    expect(cycle.currentInstance!.placements[0]!.taskId).toBe(b.id)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      taskId: b.id,
+      unplanned: true,
+      shifted: false,
+      durationChanged: false,
+      plannedDurationMin: 60,
+    })
     expect(cycle.dayProgress.pending).toBe(1)
   })
 
@@ -277,10 +293,111 @@ describe('useCycleStore: внеплановые изменения и неизм
     expect(cycle.currentInstance!.placements).toHaveLength(2)
     const first = cycle.currentInstance!.placements.find(p => p.plannedId === 'pp1')
     expect(first?.startMin).toBe(120)
-    expect(first?.unplanned).toBe(true)
+    expect(first?.shifted).toBe(true)
+    expect(first?.unplanned).toBe(false)
     const second = cycle.currentInstance!.placements.find(p => p.plannedId === 'pp2')
     expect(second?.startMin).toBe(240)
     expect(second?.unplanned).toBe(false)
+    expect(second?.shifted).toBe(false)
+  })
+
+  it('перенос добавленного дела остаётся внеплановым, а не переносом', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan()
+    const cycle = useCycleStore()
+    await cycle.initialize()
+
+    const placed = await cycle.placeTask(task.id, 60)
+    expect(placed.ok).toBe(true)
+    if (!placed.ok) return
+    await cycle.movePlacement(placed.data.id, 120)
+
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      plannedId: null,
+      unplanned: true,
+      shifted: false,
+      durationChanged: false,
+    })
+  })
+
+  it('перенос вместе с длительностью даёт оба признака', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A', 30)
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+
+    await cycle.movePlacement(placement.id, 120)
+    await cycle.changePlacementDuration(placement.id, 45)
+
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      shifted: true,
+      durationChanged: true,
+      unplanned: false,
+      plannedDurationMin: 30,
+    })
+  })
+
+  it('изменение длительности, после которого дело ушло из сетки, — не перенос', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A', 30)
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+
+    // 1425 минут не помещаются в день 08:00–22:00 — размещение уходит в null
+    expect((await cycle.changePlacementDuration(placement.id, 1425)).ok).toBe(true)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      startMin: null,
+      durationChanged: true,
+      shifted: false,
+      unplanned: false,
+    })
+  })
+
+  it('удаление планового дела снимает перенос и длительность, возврат — плановый факт', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A', 30)
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.movePlacement(placement.id, 120)
+    await cycle.changePlacementDuration(placement.id, 45)
+
+    expect((await cycle.removePlacement(placement.id)).ok).toBe(true)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      removed: true,
+      unplanned: true,
+      shifted: false,
+      durationChanged: false,
+      status: 'skipped',
+    })
+
+    expect((await cycle.restorePlacement(placement.id)).ok).toBe(true)
+    expect(cycle.currentInstance!.placements[0]).toMatchObject({
+      removed: false,
+      unplanned: false,
+      shifted: false,
+      durationChanged: false,
+      startMin: 60,
+      durationMin: 30,
+      plannedDurationMin: 30,
+      status: 'pending',
+    })
   })
 })
 
@@ -320,6 +437,47 @@ describe('useCycleStore: завершение, сдвиг и статистик�
     const stats = useStatsStore()
     await stats.recompute()
     expect(stats.overallStats?.unplanned).toBe(2)
+  })
+
+  it('завершение сохраняет перенос и длительность и считает их отдельно', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A', 30)
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.movePlacement(placement.id, 120)
+    await cycle.changePlacementDuration(placement.id, 45)
+
+    expect((await cycle.completeDay({ [placement.id]: 'done' })).ok).toBe(true)
+
+    const stats = useStatsStore()
+    await stats.recompute()
+    expect(stats.overallStats).toMatchObject({
+      placed: 1,
+      done: 1,
+      unplanned: 0,
+      shifted: 1,
+      durationChanged: 1,
+    })
+
+    const day = await stats.loadDayStats(todayISO())
+    expect(day.ok).toBe(true)
+    if (!day.ok) return
+    expect(day.data.entries[0]).toMatchObject({
+      status: 'done',
+      shifted: true,
+      durationChanged: true,
+      plannedDurationMin: 30,
+    })
+
+    const history = await stats.loadTaskHistory(task.id)
+    expect(history.ok).toBe(true)
+    if (!history.ok) return
+    expect(history.data[0]).toMatchObject({ shifted: true, durationChanged: true })
   })
 
   it('завершение со сдвигом открывает план следующей даты, иначе виртуальный день', async () => {

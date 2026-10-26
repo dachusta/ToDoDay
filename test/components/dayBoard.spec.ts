@@ -937,7 +937,7 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
     expect(wrapper.find('[data-test="removed-zone"]').exists()).toBe(false)
   })
 
-  it('внеплановые бейджи и плановое время после добавления и переноса (FR-B-8)', async () => {
+  it('перенос и изменение длительности помечаются отдельными бейджами (FR-B-8)', async () => {
     const plannedTask = await seedTask('Плановое')
     const extraTask = await seedTask('Новое')
     await planDay({
@@ -948,8 +948,12 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
     const planned = cycle.currentInstance?.placements[0]
     if (planned === undefined) throw new Error('плановое размещение не материализовалось')
 
-    // Изначально отклонений нет: бейджа и планового времени не видно
+    // Изначально отклонений нет: ни одного бейджа и планового времени
     expect(card(wrapper, planned.id).find('[data-test="placement-unplanned"]').exists()).toBe(false)
+    expect(card(wrapper, planned.id).find('[data-test="placement-shifted"]').exists()).toBe(false)
+    expect(card(wrapper, planned.id).find('[data-test="placement-duration-changed"]').exists()).toBe(
+      false,
+    )
     expect(card(wrapper, planned.id).find('[data-test="placement-planned-time"]').exists()).toBe(
       false,
     )
@@ -967,12 +971,39 @@ describe('DayBoard: действия размещения (FR-B-7)', () => {
     await waitFor(() => cycle.currentInstance?.placements[0]?.startMin === 180)
 
     const moved = cycle.currentInstance?.placements.find(item => item.id === planned.id)
-    expect(moved).toMatchObject({ startMin: 180, unplanned: true })
-    expect(card(wrapper, planned.id).find('[data-test="placement-unplanned"]').exists()).toBe(true)
+    expect(moved).toMatchObject({
+      startMin: 180,
+      shifted: true,
+      unplanned: false,
+      durationChanged: false,
+    })
+    // Перенос — не внеплановое изменение: бейдж «внепланово» не появляется
+    expect(card(wrapper, planned.id).find('[data-test="placement-unplanned"]').exists()).toBe(false)
+    expect(card(wrapper, planned.id).find('[data-test="placement-shifted"]').text()).toBe(
+      'перенесено',
+    )
     expect(card(wrapper, planned.id).find('[data-test="placement-planned-time"]').text()).toBe(
       'план: 09:00',
     )
-    expect(cycle.unplannedCount).toBe(2)
+    expect(cycle.unplannedCount).toBe(1)
+
+    // Изменение длительности: короткий бейдж, прежняя длительность зачёркнута,
+    // рядом — новая; внеплановым и перенесённым размещение не становится
+    expect((await cycle.changePlacementDuration(planned.id, 45)).ok).toBe(true)
+    await waitFor(() => cycle.currentInstance?.placements[0]?.durationMin === 45)
+    expect(card(wrapper, planned.id).find('[data-test="placement-duration-changed"]').text()).toBe(
+      'длительность',
+    )
+    expect(
+      card(wrapper, planned.id).find('[data-test="placement-planned-duration"]').text(),
+    ).toBe('30 мин')
+    expect(card(wrapper, planned.id).find('[data-test="placement-duration"]').text()).toBe('45 мин')
+    expect(card(wrapper, planned.id).find('[data-test="placement-duration-change"]').text()).toContain(
+      '→',
+    )
+    expect(card(wrapper, planned.id).find('[data-test="placement-unplanned"]').exists()).toBe(false)
+    expect(card(wrapper, planned.id).attributes('aria-label')).toContain('изменена длительность')
+    expect(cycle.unplannedCount).toBe(1)
   })
 })
 

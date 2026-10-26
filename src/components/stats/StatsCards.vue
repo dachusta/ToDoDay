@@ -43,6 +43,12 @@
           <template v-if="(row.unplanned ?? 0) > 0">
             · {{ t('stats.countersUnplanned', { n: row.unplanned ?? 0 }) }}
           </template>
+          <template v-if="(row.shifted ?? 0) > 0">
+            · {{ t('stats.countersShifted', { n: row.shifted ?? 0 }) }}
+          </template>
+          <template v-if="(row.durationChanged ?? 0) > 0">
+            · {{ t('stats.countersDuration', { n: row.durationChanged ?? 0 }) }}
+          </template>
         </div>
 
         <StatsProgress

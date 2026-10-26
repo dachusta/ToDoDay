@@ -5,7 +5,9 @@ import {
   materializePlan,
   normalizeDayInstance,
   normalizeDayPlan,
+  placementDeviation,
   reconcileInstanceWithPlan,
+  refreshPlacementDeviation,
 } from 'src/services/dayPlans'
 import type { DayPlan, PlannedPlacement } from 'src/models/day'
 import type { DayInstance, Placement } from 'src/models/dayInstance'
@@ -56,6 +58,9 @@ const placement = (over: Partial<Placement> = {}): Placement => ({
   taskSnapshot: { title: 'Дело t1', color: '#2196F3', priority: 'medium' },
   plannedId: 'pp1',
   unplanned: false,
+  shifted: false,
+  durationChanged: false,
+  plannedDurationMin: 30,
   removed: false,
   ...over,
 })
@@ -151,7 +156,7 @@ describe('dayPlans: материализация и копирование', () 
 })
 
 describe('dayPlans: синхронизация факта с планом', () => {
-  it('обновляет неизменённое плановое размещение и сохраняет внеплановое', () => {
+  it('обновляет неизменённое плановое размещение и сохраняет перенесённое', () => {
     const tasks = [task('t1'), task('t2')]
     const p = plan({
       plannedPlacements: [
@@ -211,12 +216,153 @@ describe('dayPlans: синхронизация факта с планом', () =
     expect(result.placements[0]?.startMin).toBe(0)
   })
 
-  it('считает добавленное/изменённое внеплановым, совпавшее с планом — нет', () => {
-    const p = plan({ plannedPlacements: [planned('pp1', 't1')] })
+  it('сохраняет перенесённое и изменённое по длительности при правке плана', () => {
+    const tasks = [task('t1')]
+    const p = plan({
+      plannedPlacements: [planned('pp1', 't1', { startMin: 180, durationMin: 45 })],
+    })
+    const inst = instance({
+      placements: [
+        placement({
+          id: 'p1',
+          plannedId: 'pp1',
+          startMin: 120,
+          durationMin: 60,
+          plannedDurationMin: 30,
+          shifted: true,
+          durationChanged: true,
+        }),
+      ],
+    })
+    const result = reconcileInstanceWithPlan(inst, p, tasks, 10, () => 'new')
+    const next = result.placements[0]
+    // Факт не переписан планом: перенос и длительность — отклонения
+    expect(next).toMatchObject({ startMin: 120, durationMin: 60, shifted: true })
+    expect(next?.durationChanged).toBe(true)
+    expect(next?.unplanned).toBe(false)
+    // Базовая длительность теперь плановая: подпись «план: 45 мин» показывает план
+    expect(next?.plannedDurationMin).toBe(45)
+  })
+
+  it('снимает перенос, когда правка плана совпала с фактом', () => {
+    const tasks = [task('t1')]
+    const p = plan({ plannedPlacements: [planned('pp1', 't1', { startMin: 120 })] })
+    const inst = instance({
+      placements: [
+        placement({ id: 'p1', plannedId: 'pp1', startMin: 120, shifted: true }),
+      ],
+    })
+    const result = reconcileInstanceWithPlan(inst, p, tasks, 10, () => 'new')
+    expect(result.placements[0]).toMatchObject({
+      startMin: 120,
+      shifted: false,
+      unplanned: false,
+      durationChanged: false,
+    })
+  })
+})
+
+describe('dayPlans: классификация отклонений', () => {
+  const p = plan({ plannedPlacements: [planned('pp1', 't1', { startMin: 60, durationMin: 30 })] })
+
+  it('совпавшее с планом размещение отклонением не является', () => {
+    expect(placementDeviation(placement(), p)).toEqual({
+      unplanned: false,
+      shifted: false,
+      durationChanged: false,
+    })
+    // isPlacementUnplanned — тонкая обёртка над тем же правилом
     expect(isPlacementUnplanned(placement(), p)).toBe(false)
-    expect(isPlacementUnplanned(placement({ startMin: 90 }), p)).toBe(true)
-    expect(isPlacementUnplanned(placement({ plannedId: null }), p)).toBe(true)
-    expect(isPlacementUnplanned(placement({ removed: true }), p)).toBe(true)
-    expect(isPlacementUnplanned(placement(), null)).toBe(false)
+  })
+
+  it('перенос по времени — shifted, но не unplanned', () => {
+    const moved = placement({ startMin: 90 })
+    expect(placementDeviation(moved, p)).toEqual({
+      unplanned: false,
+      shifted: true,
+      durationChanged: false,
+    })
+    expect(isPlacementUnplanned(moved, p)).toBe(false)
+  })
+
+  it('изменение длительности — durationChanged, но не unplanned', () => {
+    expect(placementDeviation(placement({ durationMin: 45 }), p)).toEqual({
+      unplanned: false,
+      shifted: false,
+      durationChanged: true,
+    })
+  })
+
+  it('перенос и изменение длительности могут встретиться вместе', () => {
+    expect(placementDeviation(placement({ startMin: 90, durationMin: 45 }), p)).toEqual({
+      unplanned: false,
+      shifted: true,
+      durationChanged: true,
+    })
+  })
+
+  it('добавленное, заменённое и убранное — внеплановые', () => {
+    expect(placementDeviation(placement({ plannedId: null }), p).unplanned).toBe(true)
+    expect(
+      placementDeviation(placement({ plannedId: 'missing' }), p).unplanned,
+    ).toBe(true)
+    expect(placementDeviation(placement({ taskId: 'other' }), p).unplanned).toBe(true)
+    expect(placementDeviation(placement({ removed: true }), p)).toEqual({
+      unplanned: true,
+      shifted: false,
+      durationChanged: false,
+    })
+  })
+
+  it('у добавленного/заменённого дела длительность считается по своей базе', () => {
+    // Замена: база — длительность нового дела, перенос не считается
+    expect(
+      placementDeviation(
+        placement({ taskId: 'other', startMin: 90, plannedDurationMin: 30 }),
+        p,
+      ),
+    ).toEqual({ unplanned: true, shifted: false, durationChanged: false })
+    // Длительность после замены изменили
+    expect(
+      placementDeviation(
+        placement({ taskId: 'other', durationMin: 45, plannedDurationMin: 30 }),
+        p,
+      ).durationChanged,
+    ).toBe(true)
+  })
+
+  it('уход в «Нераспределённые» не считается переносом', () => {
+    // Плановое время есть, а фактическое пропало после изменения длительности
+    expect(placementDeviation(placement({ startMin: null, durationMin: 1425 }), p)).toEqual({
+      unplanned: false,
+      shifted: false,
+      durationChanged: true,
+    })
+    // План без времени, а дело поставили на сетку — это перенос
+    const noTimePlan = plan({ plannedPlacements: [planned('pp1', 't1', { startMin: null })] })
+    expect(placementDeviation(placement({ startMin: 60 }), noTimePlan).shifted).toBe(true)
+  })
+
+  it('без плана сохраняет записанные признаки', () => {
+    expect(placementDeviation(placement({ startMin: 90 }), null)).toEqual({
+      unplanned: false,
+      shifted: false,
+      durationChanged: false,
+    })
+    expect(placementDeviation(placement({ shifted: true }), null).shifted).toBe(true)
+    expect(placementDeviation(placement({ plannedId: null, unplanned: true }), null).unplanned).toBe(
+      true,
+    )
+  })
+
+  it('refreshPlacementDeviation пишет флаги и синхронизирует базовую длительность', () => {
+    const moved = placement({ startMin: 90, durationMin: 45 })
+    refreshPlacementDeviation(moved, p)
+    expect(moved).toMatchObject({
+      unplanned: false,
+      shifted: true,
+      durationChanged: true,
+      plannedDurationMin: 30,
+    })
   })
 })
