@@ -14,6 +14,7 @@ import {
   normalizeDayInstance,
   normalizeDayPlan,
 } from 'src/services/dayPlans'
+import { normalizeCarryOvers } from 'src/services/carryOver'
 import { useTasksStore } from './tasks'
 import { useDayPlansStore } from './dayPlans'
 import { useStatsStore } from './stats'
@@ -194,11 +195,15 @@ function validateImportFile(parsed: unknown): Result<ImportPayload> {
 /** Отсутствующие поля cycleState достраиваются дефолтами до записи (ТЗ §3.3). */
 function normalizeCycleState(cs: CycleStateDto): CycleStateDto {
   const asId = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+  const carryOvers = normalizeCarryOvers(cs.carryOvers)
   return {
     id: 'current',
     activeInstanceId: asId(cs.activeInstanceId),
     manualShiftDate: asId(cs.manualShiftDate),
     lastAutoShiftDate: asId(cs.lastAutoShiftDate),
+    // Аддитивная очередь переносов: пустую не пишем, чтобы форма документа
+    // совпадала с базами, созданными до ревизии 2.3.0.
+    ...(carryOvers.length > 0 ? { carryOvers } : {}),
   }
 }
 
@@ -354,6 +359,12 @@ export const useSettingsStore = defineStore('settings', () => {
         db.cycleState.get('current'),
       ])
       const cycleState = stored ?? (await ensureCycleState())
+      // Очередь переносов выгружаем нормализованной; остальные поля не трогаем,
+      // чтобы экспорт оставался совместимым с форматом 2.0.
+      const exportCycleState: CycleStateDto =
+        cycleState.carryOvers === undefined
+          ? cycleState
+          : { ...cycleState, carryOvers: normalizeCarryOvers(cycleState.carryOvers) }
       const nowIso = new Date().toISOString() // timestamp, не календарная дата (ТЗ §2.8)
       const payload: ExportFile = {
         version: EXPORT_VERSION,
@@ -362,7 +373,7 @@ export const useSettingsStore = defineStore('settings', () => {
           tasks,
           dayPlans: dayPlans.map(plan => normalizeDayPlan(plan)),
           dayInstances: dayInstances.map(instance => normalizeDayInstance(instance)),
-          cycleState,
+          cycleState: exportCycleState,
           settings: buildSettingsBlock(),
         },
       }

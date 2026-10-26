@@ -3,6 +3,7 @@ import type { Task } from 'src/models/task'
 import type { DayPlan } from 'src/models/day'
 import type { DayInstance, CycleStateDto } from 'src/models/dayInstance'
 import { normalizeRule } from 'src/services/repeat'
+import { normalizeCarryOvers } from 'src/services/carryOver'
 
 /**
  * Dexie-схема версии 2.
@@ -133,6 +134,11 @@ export async function ensureCycleState(): Promise<CycleStateDto> {
     activeInstanceId: existing.activeInstanceId ?? null,
     manualShiftDate: existing.manualShiftDate ?? null,
     lastAutoShiftDate: existing.lastAutoShiftDate ?? null,
+    // Очередь переносов аддитивна: у старых записей поля нет, и добавлять
+    // пустой массив в БД без необходимости не нужно.
+    ...(existing.carryOvers === undefined
+      ? {}
+      : { carryOvers: normalizeCarryOvers(existing.carryOvers) }),
   }
   if (existing.lastAutoShiftDate === undefined) await db.cycleState.put(merged)
   return merged

@@ -6,6 +6,7 @@ import { useTasksStore } from 'src/stores/tasks'
 import { db } from 'src/services/db'
 import { addDaysISO, todayISO } from 'src/services/dates'
 import type { DayPlanInput } from 'src/models/day'
+import type { CarryOverEntry } from 'src/models/dayInstance'
 import { freshPinia, flush, resetDatabase, resetStorage } from './helpers'
 
 const newTask = async (title: string, durationMin = 30) => {
@@ -57,6 +58,20 @@ async function initializeWithPlan(over: Partial<DayPlanInput> = {}) {
   if (!result.ok) throw new Error(result.error.message)
   return { cycle, plan }
 }
+
+/** Запись очереди переносов для тестов «открытие дня с готовой очередью». */
+const carryEntry = (over: Partial<CarryOverEntry> & { id: string }): CarryOverEntry => ({
+  sourceInstanceId: 'completed-instance',
+  sourcePlacementId: `placement-${over.id}`,
+  sourceDate: addDaysISO(todayISO(), -1),
+  targetDate: todayISO(),
+  taskId: 'task-1',
+  taskSnapshot: { title: 'Перенесённое', color: '#2196F3', priority: 'high' },
+  durationMin: 30,
+  startAbsoluteMin: 540,
+  createdAt: 1,
+  ...over,
+})
 
 describe('useCycleStore: план на дату и виртуальный день', () => {
   beforeEach(async () => {
@@ -593,3 +608,256 @@ describe('useCycleStore: гонки инициализации', () => {
     expect(rows[0]?.date).toBe(todayISO())
   })
 })
+
+describe('useCycleStore: перенос невыполненных дел (FR-E-4)', () => {
+  beforeEach(async () => {
+    resetStorage()
+    freshPinia()
+    await resetDatabase()
+  })
+
+  afterEach(() => {
+    useCycleStore().dispose()
+  })
+
+  it('обычное завершение: оригинал skipped, перенос уходит в очередь на завтра', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    const tomorrow = addDaysISO(todayISO(), 1)
+    expect(cycle.carryTargetDate).toBe(tomorrow)
+
+    const result = await cycle.completeDay({ [placement.id]: 'skipped' }, [placement.id])
+
+    expect(result.ok).toBe(true)
+    const completed = await db.dayInstances.get(cycle.lastCompletedInstanceId!)
+    expect(completed?.placements[0]?.status).toBe('skipped')
+
+    const stored = await db.cycleState.get('current')
+    expect(stored?.carryOvers).toEqual([
+      expect.objectContaining({
+        sourcePlacementId: placement.id,
+        targetDate: tomorrow,
+        taskId: task.id,
+        startAbsoluteMin: 540, // 08:00 + 60 минут
+        durationMin: 30,
+      }),
+    ])
+    expect(cycle.cycleState?.carryOvers).toHaveLength(1)
+    // Новый день сразу не создаётся — он откроется только на следующую дату.
+    expect(await db.dayInstances.count()).toBe(1)
+
+    // В статистику входит только завершённый день: оригинал — пропущен,
+    // перенесённое в ещё не открытом дне не считается.
+    const stats = useStatsStore()
+    await stats.recompute()
+    expect(stats.overallStats).toMatchObject({
+      placed: 1,
+      done: 0,
+      skipped: 1,
+      unplanned: 0,
+    })
+  })
+
+  it('ранний сдвиг: перенесённое сразу попадает в новый день как внеплановое', async () => {
+    await useTasksStore().loadAll()
+    const carriedTask = await newTask('Перенос')
+    const plannedTask = await newTask('План')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: carriedTask.id, startMin: 60, durationMin: 30 }],
+    })
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await useDayPlansStore().createPlan({
+      name: 'Завтра',
+      accentColor: '#2196F3',
+      date: tomorrow,
+      repeatRule: { type: 'none' },
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      plannedPlacements: [{ id: 'pp2', taskId: plannedTask.id, startMin: 120, durationMin: 30 }],
+    })
+
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.shiftToNextDay()
+    expect(cycle.carryTargetDate).toBe(tomorrow)
+
+    const result = await cycle.completeDay({}, [placement.id])
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.date).toBe(tomorrow)
+    const carried = cycle.currentInstance?.placements.find(item => item.taskId === carriedTask.id)
+    expect(carried).toMatchObject({
+      status: 'pending',
+      unplanned: true,
+      plannedId: null,
+      startMin: 60, // 09:00 при начале дня 08:00
+      durationMin: 30,
+      plannedDurationMin: 30,
+    })
+    const completed = await db.dayInstances.get(cycle.lastCompletedInstanceId!)
+    expect(completed?.placements[0]?.status).toBe('skipped')
+    expect((await db.cycleState.get('current'))?.carryOvers).toEqual([])
+  })
+
+  it('сдвиг на день без плана материализует его переносами', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.shiftToNextDay()
+
+    const result = await cycle.completeDay({}, [placement.id])
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.planId).toBeNull()
+    expect(cycle.currentInstance?.placements).toHaveLength(1)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      taskId: task.id,
+      unplanned: true,
+      status: 'pending',
+      startMin: 60,
+    })
+    const state = await db.cycleState.get('current')
+    expect(state?.activeInstanceId).toBe(cycle.currentInstance!.id)
+    expect(await db.dayInstances.get(cycle.currentInstance!.id)).toBeTruthy()
+  })
+
+  it('очередь применяется при открытии дня без плана и не теряется', async () => {
+    const task = await newTask('A')
+    await db.cycleState.update('current', {
+      carryOvers: [carryEntry({ id: 'c1', taskId: task.id, targetDate: todayISO() })],
+    })
+    const cycle = useCycleStore()
+
+    const result = await cycle.initialize()
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.planId).toBeNull()
+    expect(cycle.currentInstance?.placements).toHaveLength(1)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      taskId: task.id,
+      status: 'pending',
+      unplanned: true,
+      startMin: 60,
+    })
+    expect(cycle.isVirtualInstance).toBe(false)
+    expect((await db.cycleState.get('current'))?.carryOvers).toEqual([])
+  })
+
+  it('очередь применяется к плановому дню, не меняя план', async () => {
+    const plannedTask = await newTask('План')
+    const carriedTask = await newTask('Перенос')
+    await useDayPlansStore().loadAll()
+    const plan = await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: plannedTask.id, startMin: 120, durationMin: 30 }],
+    })
+    await db.cycleState.update('current', {
+      carryOvers: [
+        carryEntry({
+          id: 'c1',
+          taskId: carriedTask.id,
+          targetDate: todayISO(),
+          startAbsoluteMin: 600,
+        }),
+      ],
+    })
+    const cycle = useCycleStore()
+
+    const result = await cycle.initialize()
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.placements).toHaveLength(2)
+    const carried = cycle.currentInstance?.placements.find(item => item.taskId === carriedTask.id)
+    expect(carried).toMatchObject({ unplanned: true, startMin: 120, plannedId: null })
+    expect(cycle.currentPlan?.plannedPlacements).toEqual(plan.plannedPlacements)
+  })
+
+  it('дубль в плане нового дня разрешён: перенос добавляет второе размещение', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const tomorrow = addDaysISO(todayISO(), 1)
+    await useDayPlansStore().createPlan({
+      name: 'Завтра',
+      accentColor: '#2196F3',
+      date: tomorrow,
+      repeatRule: { type: 'none' },
+      timeStart: '08:00',
+      timeEnd: '22:00',
+      plannedPlacements: [{ id: 'pp2', taskId: task.id, startMin: 120, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.shiftToNextDay()
+
+    const result = await cycle.completeDay({}, [placement.id])
+
+    expect(result.ok).toBe(true)
+    const sameTask = cycle.currentInstance!.placements.filter(item => item.taskId === task.id)
+    expect(sameTask).toHaveLength(2)
+    expect(sameTask.filter(item => item.unplanned === true)).toHaveLength(1)
+    expect(sameTask.filter(item => item.unplanned !== true)).toHaveLength(1)
+  })
+
+  it('архивное дело потребляет запись, но не материализует пустой день', async () => {
+    const task = await newTask('A')
+    expect((await useTasksStore().archiveTask(task.id)).ok).toBe(true)
+    await db.cycleState.update('current', {
+      carryOvers: [carryEntry({ id: 'c1', taskId: task.id, targetDate: todayISO() })],
+    })
+    const cycle = useCycleStore()
+
+    const result = await cycle.initialize()
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.placements).toEqual([])
+    expect(cycle.isVirtualInstance).toBe(true)
+    expect((await db.cycleState.get('current'))?.carryOvers).toEqual([])
+  })
+
+  it('отмена завершения возвращает очередь и удаляет перенесённое из нового дня', async () => {
+    await useTasksStore().loadAll()
+    const task = await newTask('A')
+    await useDayPlansStore().loadAll()
+    await createPlan({
+      plannedPlacements: [{ id: 'pp1', taskId: task.id, startMin: 60, durationMin: 30 }],
+    })
+    const cycle = useCycleStore()
+    await cycle.initialize()
+    const originalId = cycle.currentInstance!.id
+    const placement = cycle.currentInstance!.placements[0]!
+    await cycle.shiftToNextDay()
+    await cycle.completeDay({}, [placement.id])
+    const targetId = cycle.currentInstance!.id
+    expect(targetId).not.toBe(originalId)
+
+    const result = await cycle.cancelCompletion()
+
+    expect(result.ok).toBe(true)
+    expect(cycle.currentInstance?.id).toBe(originalId)
+    expect(cycle.currentInstance?.status).toBe('active')
+    expect(cycle.currentInstance?.placements[0]?.status).toBe('pending')
+    expect(await db.dayInstances.get(targetId)).toBeUndefined()
+    expect((await db.cycleState.get('current'))?.carryOvers).toEqual([])
+    expect(cycle.cycleState?.carryOvers).toEqual([])
+  })
+})
+

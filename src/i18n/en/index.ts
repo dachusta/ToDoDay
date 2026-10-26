@@ -133,6 +133,7 @@ export default {
     // day completion: cancel button, toasts and the FR-E-2 prompt (wireframes §9.3)
     cancelCompletion: 'Undo completion',
     completed: 'Day completed',
+    completedWithCarry: 'Day completed. Carried over: {n}',
     completeError: 'Could not complete the day',
     cancelError: 'Could not undo the completion',
     resolveAfterComplete: 'The day is completed, but today did not open',
@@ -184,6 +185,11 @@ export default {
     shiftHint: 'A new day will start after confirmation',
     nothingToMark: 'No placements in this day',
     removedHint: 'Removed from plan: {n} — will be marked as skipped',
+    // FR-E-4: carry unfinished items over to the next experienced day
+    carryHint: 'Unfinished items can be carried over to {date}. They will still count as skipped in this day.',
+    carryAction: 'Carry over',
+    carryAria: 'Carry "{title}" over to the next day',
+    carryCancelAria: 'Do not carry "{title}" over',
     // dialog accessibility (NFR §7): the checkbox has no text label, so it carries aria-label
     closeAria: 'Close the completion dialog',
     checkAria: 'Mark "{title}" as done',

@@ -228,6 +228,7 @@
       :day-start-min="dayStartMin"
       :time-format="timeFormat"
       :removed-count="cycle.removedCount"
+      :carry-date-label="carryDateLabel"
       @submit="onCompleteDay"
     />
   </section>
@@ -279,6 +280,12 @@ const readOnly = computed(() => cycle.currentInstance?.status !== 'active')
 const dayStartMin = computed(() =>
   cycle.currentInstance ? minutesOfDay(cycle.currentInstance.timeStart) : 0,
 )
+
+/** Подпись даты, в которую уйдут выбранные для переноса невыполненные дела. */
+const carryDateLabel = computed(() => {
+  const date = cycle.carryTargetDate
+  return date ? formatDayLabel(date, settings.language) : ''
+})
 
 const dateLabel = computed(() => {
   const instance = cycle.currentInstance
@@ -408,11 +415,19 @@ async function onShiftNext() {
   ui.notify(message, 'warning', undefined, 5000)
 }
 
-async function onCompleteDay(marks: Record<string, 'done' | 'skipped'>) {
-  const result = await cycle.completeDay(marks)
+async function onCompleteDay(payload: {
+  marks: Record<string, 'done' | 'skipped'>
+  carryIds: string[]
+}) {
+  const { marks, carryIds } = payload
+  const result = await cycle.completeDay(marks, carryIds)
   if (result.ok) {
+    const message =
+      carryIds.length > 0
+        ? t('day.completedWithCarry', { n: carryIds.length })
+        : t('day.completed')
     ui.notify(
-      t('day.completed'),
+      message,
       'success',
       { label: t('common.undo'), handler: () => void onCancelCompletion() },
       5000,
@@ -432,7 +447,7 @@ async function onCompleteDay(marks: Record<string, 'done' | 'skipped'>) {
 
   ui.notify(t('day.completeError'), 'error', {
     label: t('common.retry'),
-    handler: () => void onCompleteDay(marks),
+    handler: () => void onCompleteDay(payload),
   })
 }
 

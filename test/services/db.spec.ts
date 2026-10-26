@@ -100,4 +100,34 @@ describe('services/db: ensureCycleState достраивает поля стар
     expect(await ensureCycleState()).toEqual(full)
     expect(await db.cycleState.get('current')).toEqual(full)
   })
+
+  it('очередь переносов нормализуется на чтении, битые записи отбрасываются', async () => {
+    const legacy = {
+      id: 'current',
+      activeInstanceId: null,
+      manualShiftDate: null,
+      lastAutoShiftDate: '2025-09-23',
+      carryOvers: [
+        {
+          id: 'ok',
+          sourceInstanceId: 'src',
+          sourcePlacementId: 'p1',
+          sourceDate: '2025-09-23',
+          targetDate: '2025-09-24',
+          taskId: 't1',
+          taskSnapshot: { title: 'Дело', color: '#2196F3', priority: 'medium' },
+          durationMin: 30,
+          startAbsoluteMin: 540,
+          createdAt: 1,
+        },
+        { id: 'broken', taskId: '', targetDate: '2025-09-24' },
+      ],
+    } as unknown as CycleStateDto
+    await db.cycleState.put(legacy)
+
+    const state = await ensureCycleState()
+
+    expect(state.carryOvers?.map(item => item.id)).toEqual(['ok'])
+    expect(state.lastAutoShiftDate).toBe('2025-09-23')
+  })
 })

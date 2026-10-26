@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [Архив скаффолда](Скаффолд-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Версия: 2.2.0 (MVP). Источник критериев — [ТЗ §9](ТЗ-ToDoDay.md); формулировки перечитаны под модель 2.0 (журнал, приложение Ы) и ревизию 2.2.0 (перенос, длительность, статистика дня). Критерии сгруппированы по областям: дела, планы, доска, завершение, сдвиги, статистика, отклонения и статистика дня, настройки и данные, НФТ; 72 сгруппированные строки покрывают 77 пунктов §9 (часть пунктов объединена). В каждой строке — проверяемый критерий, существующие пути кода и тестов; все пути проверены на ревизии 2.2.0.
+Версия: 2.3.0 (MVP). Источник критериев — [ТЗ §9](ТЗ-ToDoDay.md); формулировки перечитаны под модель 2.0 (журнал, приложение Ы), ревизию 2.2.0 (перенос, длительность, статистика дня) и ревизию 2.3.0 (перенос невыполненных дел, FR-E-4). Критерии сгруппированы по областям: дела, планы, доска, завершение, сдвиги, статистика, отклонения и статистика дня, настройки и данные, НФТ; 76 сгруппированных строк покрывают 79 пунктов §9 (часть пунктов объединена). В каждой строке — проверяемый критерий, существующие пути кода и тестов; все пути проверены на ревизии 2.3.0.
 
 Модель 2.0 заменила прежнюю пару «сущность дня + отдельный список» единым `DayPlan` с режимами «Один день» / «По дням недели» / «По числам месяца» / «Без даты». Поэтому пункты ТЗ §9 о порядке и повторяемости перечитаны как критерии режимов плана, уникальности даты и приоритета плана на дату; отдельного счётчика повторов в модели нет.
 
@@ -62,6 +62,9 @@
 | 35 | Отмена завершения доступна всю сессию кнопкой в шапке, восстанавливает снимок отметок, удаляет созданный этим завершением день (в том числе пустой) и пересчитывает статистику (FR-E-3) | `src/stores/cycle.ts` (`cancelCompletion`, `lastCompletedInstanceId`), `src/components/days/DayBoard.vue` | `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts`, `test/components/daysFlow.spec.ts` |
 | 36 | Пустой виртуальный день: отмечать нечего, авто-диалог не открывается, подтверждение сохраняет день без размещений в историю (FR-D-6, FR-E-2) | `src/stores/cycle.ts` (`completeDay`), `src/components/completion/CompleteDayDialog.vue` (`nothingToMark`) | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts` |
 | 37 | «Следующий день →» открывает диалог с подсказкой о новом дне; после подтверждения открывается день по плану целевой даты (FR-C-3) | `src/stores/cycle.ts` (`shiftToNextDay`), `src/components/completion/CompleteDayDialog.vue` (`shiftPending`) | `test/components/dayCompletion.spec.ts`, `test/components/daysFlow.spec.ts` |
+| 37а | В диалоге завершения невыполненное дело можно выбрать кнопкой «Перенести»; в завершённом дне оно остаётся `skipped`, в целевом создаётся `pending` + `unplanned` + `plannedId: null`, план не меняется (FR-E-1, FR-E-2, FR-E-4) | `src/components/completion/CompleteDayDialog.vue` (`carry`, `carryIds`), `src/stores/cycle.ts` (`completeDay`), `src/services/carryOver.ts` (`buildCarryOvers`) | `test/components/dayCompletion.spec.ts`, `test/stores/cycle.spec.ts`, `test/services/carryOver.spec.ts` |
+| 37б | Перенос сохраняет время суток и уходит в «Нераспределённые» при невместимости; применяется в первый активный день с `targetDate <= date`, материализует день без плана, не теряется при пропущенном дне и разрешает дубль в плане (FR-E-4) | `src/services/carryOver.ts` (`resolveCarryTargetDate`, `applyCarryOvers`), `src/stores/cycle.ts` (`resolveCurrentDay`, `applyPendingCarryOversToCurrent`, `carryTargetDate`) | `test/services/carryOver.spec.ts`, `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts` |
+| 37в | Перенос работает при обычном завершении, сдвиге и авто-диалоге; при авто-сдвиге без диалога выбора нет; отмена восстанавливает очередь и удаляет созданный день вместе с перенесённым (FR-E-3, FR-E-4, FR-C-3, FR-C-4) | `src/stores/cycle.ts` (`completeDay`, `cancelCompletion`, `carryOversSnapshot`), `src/components/days/DayBoard.vue` (`onCompleteDay`) | `test/stores/cycle.spec.ts`, `test/components/dayCompletion.spec.ts` |
 
 ## Сдвиги
 
@@ -102,6 +105,7 @@
 | 51 | Переключение языка немедленно меняет локаль интерфейса (FR-SET-2) | `src/stores/settings.ts` (`setLanguage`), `src/boot/i18n.ts` | `test/components/settingsPage.spec.ts`, `test/stores/settings.spec.ts` |
 | 52 | Тема Light/Dark/Auto и формат времени 24/12 ч сохраняются и применяются в подписях (FR-SET-1, FR-SET-3) | `src/pages/SettingsPage.vue`, `src/stores/settings.ts` (`setTheme`, `setTimeFormat`), `src/components/settings/dataActions.ts` (`backupLabel`) | `test/components/settingsPage.spec.ts`, `test/stores/settings.spec.ts` |
 | 53 | Экспорт создаёт JSON версии 2.0 со всеми блоками и обновляет `lastBackupAt`; импорт невалидного файла отклоняется без изменения данных (FR-SET-4/5) | `src/stores/settings.ts` (`exportAll`, `importAll`), `src/services/dataTransfer.ts`, `src/components/settings/dataActions.ts` | `test/stores/settings.spec.ts`, `test/components/settingsPage.spec.ts`, `test/services/dataTransfer.spec.ts` |
+| 53а | Очередь переносов `cycleState.carryOvers` выгружается в экспорт, переживает импорт; старый файл без поля даёт пустую очередь, битые записи отбрасываются (FR-SET-4/5, FR-E-4) | `src/stores/settings.ts` (`exportAll`, `normalizeCycleState`), `src/services/db.ts` (`ensureCycleState`), `src/services/carryOver.ts` (`normalizeCarryOvers`) | `test/stores/settings.spec.ts`, `test/services/db.spec.ts` |
 | 54 | Импорт файла 1.0 превращает старые планы в планы без времени; импорт 2.0 сохраняет планы и размещения (FR-SET-5) | `src/stores/settings.ts` (`importAll`), `src/services/dayPlans.ts` (`normalizeDayPlan`) | `test/stores/settings.spec.ts` |
 | 55 | Сбой записи настроек после импорта даёт `STORAGE_ERROR` (не `DB_ERROR`); Dexie остаётся импортированной, повторяется только запись settings (FR-SET-5) | `src/stores/settings.ts` (`importAll`, `retrySettingsWrite`, `pendingSettings`), `src/components/settings/dataActions.ts`, `src/pages/SettingsPage.vue` (баннер) | `test/stores/settings.spec.ts`, `test/components/settingsPage.spec.ts` |
 | 56 | «Очистить все данные» требует подтверждения «Удалить все дела, планы и историю? Действие необратимо», чистит Dexie, `cycleState` и localStorage (FR-SET-10) | `src/stores/settings.ts` (`clearAll`), `src/components/settings/dataActions.ts`, `src/pages/SettingsPage.vue` | `test/stores/settings.spec.ts`, `test/components/settingsPage.spec.ts` |
@@ -125,13 +129,13 @@
 
 **FCP.** Цель ТЗ — менее 1.5 c; проверяемый бюджет теста — 2.0 c. Оценка ≈1.97 c получена арифметикой по размеру критического пути на профиле Lighthouse Slow 3G (400 кбит/с, 400 мс RTT), а не браузерным замером. Достижение цели < 1.5 c не подтверждено: браузерный замер и ручной проход остаются задачей стенда. Тест проверяет только бюджет 2.0 c.
 
-## Итог прогона 2.2.0
+## Итог прогона 2.3.0
 
 | Проверка | Команда | Результат |
 | --- | --- | --- |
 | Типы | `pnpm typecheck` | код 0 |
 | Линтер | `pnpm lint` | код 0, 0 предупреждений |
-| Тесты | `pnpm test` | 470 тестов в 42 файлах, все зелёные |
+| Тесты | `pnpm test` | 504 теста в 43 файлах, все зелёные |
 | Покрытие | `pnpm test:coverage` | пороги покрытия (≥ 70%) соблюдены |
 | Сборка SPA | `pnpm build` | Build succeeded (`dist/spa`) |
 | Сборка PWA | `pnpm build:pwa` | Build succeeded (`dist/pwa`); офлайн-манифест и установка проверены тестами |
@@ -141,4 +145,4 @@
 
 **Ограничение окружения.** Приёмочный прогон в браузере в песочнице недоступен: состояния экранов проверены монтированием в jsdom, офлайн и первый кадр — разбором собранного `dist/pwa`, контраст — расчётом по WCAG. Ручной проход вайрфреймов, браузерный замер FCP и установка PWA на устройстве остаются задачей приёмки на стенде.
 
-Футер: версия документации 2.2.0, приложения журнала А–Ю.
+Футер: версия документации 2.3.0, приложения журнала А–Я.

@@ -49,6 +49,30 @@ export interface DayInstance {
   completedAt?: number
 }
 
+/**
+ * Перенос невыполненного дела из завершённого дня в следующий проживаемый день.
+ *
+ * Хранится в очереди `CycleStateDto.carryOvers`, а не создаётся сразу размещением
+ * в будущем дне: целевой день может быть ещё не открыт, а пропущенные дни
+ * приложение не догоняет. `startAbsoluteMin` — время суток, а не смещение от
+ * начала дня: при открытии целевого дня смещение считается уже от его `timeStart`.
+ */
+export interface CarryOverEntry {
+  id: string
+  sourceInstanceId: string
+  sourcePlacementId: string
+  sourceDate: string
+  /** 'YYYY-MM-DD': первый день, в который перенос можно материализовать. */
+  targetDate: string
+  taskId: string
+  /** Снимок на момент завершения: для нормализации импорта и диагностики. */
+  taskSnapshot: TaskSnapshot
+  durationMin: number
+  /** Время суток начала в минутах от полуночи; null — дело было без времени. */
+  startAbsoluteMin: number | null
+  createdAt: number
+}
+
 export interface CycleStateDto {
   id: 'current'
   /** null — текущего дня в БД нет (виртуальный пустой день, FR-D-6). */
@@ -57,6 +81,11 @@ export interface CycleStateDto {
   manualShiftDate: string | null
   /** Пишет только autoShiftAtMidnight. */
   lastAutoShiftDate: string | null
+  /**
+   * Очередь переносов из завершённых дней. Отсутствует или пуста — переносов нет;
+   * аддитивное необязательное поле, схема Dexie из-за него не меняется.
+   */
+  carryOvers?: CarryOverEntry[]
   /** Легаси-указатель цикла из экспортов 1.0; больше не используется. */
   lastCyclicTemplateId?: string | null
 }

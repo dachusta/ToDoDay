@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DayBoardPage from 'src/pages/DayBoardPage.vue'
 import { i18n } from 'src/boot/i18n'
+import { formatDayLabel } from 'src/components/days/dayFormat'
 import { db } from 'src/services/db'
 import { addDaysISO, todayISO } from 'src/services/dates'
 import { useCycleStore } from 'src/stores/cycle'
@@ -793,3 +794,124 @@ describe('Просроченный день и авто-диалог при см
     expect(wrapper.find('[data-test="cancel-completion"]').exists()).toBe(false)
   })
 })
+
+describe('Перенос невыполненных дел в диалоге завершения (FR-E-4)', () => {
+  beforeEach(prepare)
+  afterEach(teardown)
+
+  it('показывает дату переноса; выбор снимается отметкой «выполнено» и «Отметить всё»', async () => {
+    const first = await newTask('Зарядка')
+    const second = await newTask('Чтение')
+    await createPlan({
+      plannedPlacements: [planned('pp1', first.id, 60), planned('pp2', second.id, 120)],
+    })
+    const cycle = await initializeCycle()
+    const firstPlacement = cycle.currentInstance?.placements.find(p => p.plannedId === 'pp1')
+    if (!firstPlacement) throw new Error('плановое размещение не создано')
+
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-test="complete-day"]').trigger('click')
+    await flush()
+
+    const tomorrowLabel = formatDayLabel(addDaysISO(todayISO(), 1), 'ru')
+    expect(bodyText('[data-test="completion-carry-hint"]')).toBe(
+      i18n.global.t('completion.carryHint', { date: tomorrowLabel }),
+    )
+
+    const carrySelector = `[data-test="completion-carry-${firstPlacement.id}"]`
+    const carryButton = () => bodyEl(carrySelector)
+    expect(carryButton()).not.toBeNull()
+    expect(carryButton()?.getAttribute('aria-pressed')).toBe('false')
+    expect(carryButton()?.hasAttribute('disabled')).toBe(false)
+
+    await clickBody(carrySelector)
+    expect(carryButton()?.getAttribute('aria-pressed')).toBe('true')
+    expect(carryButton()?.getAttribute('aria-label')).toBe(
+      i18n.global.t('completion.carryCancelAria', { title: first.title }),
+    )
+
+    // Отметка «выполнено» снимает перенос и делает кнопку недоступной.
+    await clickBody(`[data-test="completion-check-${firstPlacement.id}"]`)
+    expect(carryButton()?.getAttribute('aria-pressed')).toBe('false')
+    expect(carryButton()?.hasAttribute('disabled')).toBe(true)
+
+    await clickBody(`[data-test="completion-check-${firstPlacement.id}"]`)
+    expect(carryButton()?.hasAttribute('disabled')).toBe(false)
+
+    await clickBody(carrySelector)
+    expect(carryButton()?.getAttribute('aria-pressed')).toBe('true')
+    await clickBody('[data-test="completion-mark-all"]')
+    expect(carryButton()?.getAttribute('aria-pressed')).toBe('false')
+    // «Снять всё» не выбирает перенос само по себе.
+    await clickBody('[data-test="completion-unmark-all"]')
+    expect(carryButton()?.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('подтверждение со сдвигом: новое дело внеплановое, оригинал пропущен, тост с числом', async () => {
+    const task = await newTask('Зарядка')
+    await createPlan({ plannedPlacements: [planned('pp1', task.id, 60)] })
+    const cycle = await initializeCycle()
+    const instanceId = cycle.currentInstance?.id ?? ''
+    const placement = cycle.currentInstance?.placements[0]
+    if (!placement) throw new Error('плановое размещение не создано')
+    const notify = vi.spyOn(useUiStore(), 'notify').mockImplementation(() => {})
+
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-test="shift-next"]').trigger('click')
+    await flush()
+    await clickBody(`[data-test="completion-carry-${placement.id}"]`)
+    await clickBody('[data-test="completion-confirm"]')
+    await waitForState(() => cycle.currentInstance?.date === addDaysISO(todayISO(), 1))
+    await flush()
+
+    const carried = cycle.currentInstance?.placements.find(item => item.taskId === task.id)
+    if (!carried) throw new Error('перенесённое размещение не создано')
+    expect(carried).toMatchObject({
+      status: 'pending',
+      unplanned: true,
+      plannedId: null,
+      startMin: 60,
+    })
+    const card = wrapper.find(`[data-placement="${carried.id}"]`)
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain(i18n.global.t('placement.unplannedBadge'))
+    expect((await db.dayInstances.get(instanceId))?.placements[0]?.status).toBe('skipped')
+
+    const [message, type] = notify.mock.calls[0] ?? []
+    expect(message).toBe(i18n.global.t('day.completedWithCarry', { n: 1 }))
+    expect(type).toBe('success')
+  })
+
+  it('авто-диалог просроченного дня переносит в сегодняшний день и материализует его', async () => {
+    const { instance } = await seedOverdueDay()
+    const cycle = useCycleStore()
+    const placement = instance.placements[0]
+    if (!placement) throw new Error('размещение просроченного дня не создано')
+    await mountPage()
+
+    // Целевая дата — сегодня: после подтверждения откроется сегодняшний день.
+    expect(cycle.carryTargetDate).toBe(todayISO())
+    expect(bodyText('[data-test="completion-carry-hint"]')).toBe(
+      i18n.global.t('completion.carryHint', { date: formatDayLabel(todayISO(), 'ru') }),
+    )
+
+    await clickBody(`[data-test="completion-carry-${placement.id}"]`)
+    await clickBody('[data-test="completion-confirm"]')
+    await waitForState(() => cycle.currentInstance?.date === todayISO())
+    await flush()
+
+    expect((await db.dayInstances.get(instance.id))?.status).toBe('completed')
+    expect(cycle.currentInstance?.planId).toBeNull()
+    expect(cycle.currentInstance?.placements).toHaveLength(1)
+    expect(cycle.currentInstance?.placements[0]).toMatchObject({
+      taskId: placement.taskId,
+      status: 'pending',
+      unplanned: true,
+      startMin: 60,
+    })
+    const state = await db.cycleState.get('current')
+    expect(state?.activeInstanceId).toBe(cycle.currentInstance?.id)
+    expect(state?.carryOvers).toEqual([])
+  })
+})
+

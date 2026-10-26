@@ -60,6 +60,15 @@
         <p class="text-body2 q-mt-sm q-mb-none">
           {{ t('completion.subtitle') }}
         </p>
+        <!-- FR-E-4: невыполненные можно перенести в следующий проживаемый день;
+             в этом дне они всё равно станут пропущенными. -->
+        <p
+          v-if="placements.length > 0 && carryDateLabel"
+          class="text-caption q-mt-xs q-mb-none"
+          data-test="completion-carry-hint"
+        >
+          {{ t('completion.carryHint', { date: carryDateLabel }) }}
+        </p>
       </q-card-section>
       <q-separator />
 
@@ -120,6 +129,28 @@
               </q-item-section>
               <q-item-section side>
                 <span class="completion__duration">{{ durationLabel(placement) }}</span>
+              </q-item-section>
+              <q-item-section side>
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  icon="east"
+                  class="completion__carry"
+                  :label="t('completion.carryAction')"
+                  :color="carry[placement.id] === true ? 'primary' : 'grey-7'"
+                  :unelevated="carry[placement.id] === true"
+                  :disable="checked[placement.id] === true"
+                  :aria-pressed="carry[placement.id] === true"
+                  :aria-label="
+                    carry[placement.id] === true
+                      ? t('completion.carryCancelAria', { title: placement.taskSnapshot.title })
+                      : t('completion.carryAria', { title: placement.taskSnapshot.title })
+                  "
+                  :data-test="`completion-carry-${placement.id}`"
+                  @click="toggleCarry(placement.id)"
+                />
               </q-item-section>
             </q-item>
           </q-list>
@@ -209,6 +240,8 @@ const props = withDefaults(
     /** Минуты от начала суток для instance.timeStart. */
     dayStartMin?: number
     timeFormat?: TimeFormat
+    /** Подпись целевой даты переноса («Вторник · 24 сентября»). */
+    carryDateLabel?: string
   }>(),
   {
     source: null,
@@ -216,12 +249,13 @@ const props = withDefaults(
     dayStartMin: 0,
     timeFormat: '24h',
     removedCount: 0,
+    carryDateLabel: '',
   },
 )
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  submit: [marks: Record<string, 'done' | 'skipped'>]
+  submit: [payload: { marks: Record<string, 'done' | 'skipped'>; carryIds: string[] }]
 }>()
 
 const { t } = useI18n()
@@ -233,6 +267,8 @@ const open = computed({
 
 /** Отметки диалога: id размещения → «отмечено». Живут только здесь (FR-E-1). */
 const checked = ref<Record<string, boolean>>({})
+/** Выбранные для переноса размещения (FR-E-4); независимо от отметок. */
+const carry = ref<Record<string, boolean>>({})
 
 const doneCount = computed(
   () => props.placements.filter(placement => checked.value[placement.id] === true).length,
@@ -241,11 +277,13 @@ const doneCount = computed(
 /**
  * Дефолты FR-E-1: `done` отмечено, `pending` и `skipped` сняты. Пересобираются
  * при каждом открытии: за время между открытиями статусы могли измениться.
+ * Выбор переноса — тоже сессионный и при открытии сбрасывается.
  */
 function resetChecked() {
   const next: Record<string, boolean> = {}
   for (const placement of props.placements) next[placement.id] = placement.status === 'done'
   checked.value = next
+  carry.value = {}
 }
 
 watch(
@@ -258,12 +296,23 @@ watch(
 
 function setChecked(id: string, value: boolean) {
   checked.value[id] = value
+  // Выполненное переносить нельзя: выбор снимается, а не остаётся скрытым.
+  if (value) delete carry.value[id]
+}
+
+function toggleCarry(id: string) {
+  if (checked.value[id] === true) return
+  if (carry.value[id] === true) delete carry.value[id]
+  else carry.value[id] = true
 }
 
 function markAll(value: boolean) {
   const next: Record<string, boolean> = {}
   for (const placement of props.placements) next[placement.id] = value
   checked.value = next
+  // «Отметить всё» делает все дела выполненными — переносить нечего.
+  // «Снять всё» только снимает галочки и не стирает уже выбранные переносы.
+  if (value) carry.value = {}
 }
 
 /** Время размещения; нераспределённое идёт «без времени» (FR-B-5, вайрфреймы §6). */
@@ -286,10 +335,13 @@ function close() {
 /** Файл отметок для completeDay: всё неотмеченное станет skipped (FR-E-2). */
 function confirm() {
   const marks: Record<string, 'done' | 'skipped'> = {}
+  const carryIds: string[] = []
   for (const placement of props.placements) {
-    marks[placement.id] = checked.value[placement.id] === true ? 'done' : 'skipped'
+    const done = checked.value[placement.id] === true
+    marks[placement.id] = done ? 'done' : 'skipped'
+    if (!done && carry.value[placement.id] === true) carryIds.push(placement.id)
   }
-  emit('submit', marks)
+  emit('submit', { marks, carryIds })
 }
 </script>
 

@@ -6,7 +6,7 @@ import { useDayPlansStore } from 'src/stores/dayPlans'
 import { useStatsStore } from 'src/stores/stats'
 import { db } from 'src/services/db'
 import { i18n } from 'src/boot/i18n'
-import type { CycleStateDto } from 'src/models/dayInstance'
+import type { CycleStateDto, CarryOverEntry } from 'src/models/dayInstance'
 import type { Task } from 'src/models/task'
 import { flush, freshPinia, resetDatabase, resetStorage } from './helpers'
 
@@ -26,6 +26,20 @@ const cycleState = (over: Partial<CycleStateDto> = {}): CycleStateDto => ({
   activeInstanceId: null,
   manualShiftDate: null,
   lastAutoShiftDate: null,
+  ...over,
+})
+
+const carryEntry = (over: Partial<CarryOverEntry> = {}): CarryOverEntry => ({
+  id: 'carry-1',
+  sourceInstanceId: 'src',
+  sourcePlacementId: 'p1',
+  sourceDate: '2025-09-23',
+  targetDate: '2099-12-31',
+  taskId: 't1',
+  taskSnapshot: { title: 'Дело', color: '#2196F3', priority: 'medium' },
+  durationMin: 30,
+  startAbsoluteMin: 540,
+  createdAt: 1,
   ...over,
 })
 
@@ -154,6 +168,54 @@ describe('useSettingsStore: FR-SET-4/5/10 (экспорт, импорт, очи�
 
     expect(store.lastBackupAt).toBe(file.exportedAt)
     expect(localStorage.getItem('tododay:lastBackupAt')).toBe(file.exportedAt)
+  })
+
+  it('FR-SET-4: экспорт выгружает очередь переносов в cycleState', async () => {
+    const entry = carryEntry()
+    await db.cycleState.update('current', { carryOvers: [entry] })
+    const store = useSettingsStore()
+
+    const exported = await store.exportAll()
+    expect(exported.ok).toBe(true)
+    if (!exported.ok) return
+
+    const file = JSON.parse(await readBlob(exported.data)) as {
+      data: { cycleState: CycleStateDto }
+    }
+    expect(file.data.cycleState.carryOvers).toEqual([entry])
+  })
+
+  it('FR-SET-5: импорт сохраняет валидную очередь и отбрасывает битые записи', async () => {
+    const valid = carryEntry()
+    const store = useSettingsStore()
+
+    const result = await store.importAll(
+      asFile(
+        payload(data => {
+          data.cycleState = cycleState({
+            carryOvers: [
+              valid,
+              { id: 'no-task', taskId: '', targetDate: '2025-09-30' },
+              { ...valid, id: 'bad-date', targetDate: '2025-02-30' },
+            ] as unknown as CarryOverEntry[],
+          })
+        }),
+      ),
+    )
+
+    expect(result.ok).toBe(true)
+    expect((await db.cycleState.get('current'))?.carryOvers).toEqual([valid])
+    await flush()
+    expect(useCycleStore().cycleState?.carryOvers).toEqual([valid])
+  })
+
+  it('FR-SET-5: старый файл без carryOvers импортируется без очереди', async () => {
+    const store = useSettingsStore()
+
+    const result = await store.importAll(asFile(payload()))
+
+    expect(result.ok).toBe(true)
+    expect((await db.cycleState.get('current'))?.carryOvers).toBeUndefined()
   })
 
   it('FR-SET-5: importAll перезаписывает таблицы и настройки валидного файла', async () => {

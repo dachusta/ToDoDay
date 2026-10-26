@@ -2,7 +2,7 @@
 
 > **Части документации:** [ТЗ](ТЗ-ToDoDay.md) · [Вайрфреймы](Вайрфреймы-ToDoDay.md) · [Контракты](Контракты-ToDoDay.md) · [Приёмка MVP](Приёмка-ToDoDay.md) · [Журнал правок](Журнал-правок-ToDoDay.md) · [Архив скаффолда](Скаффолд-ToDoDay.md) · [README документации](../README-Docs.md) · [README приложения](../README.md)
 
-Версия: 2.2.0 (MVP). Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (`defineStore('name', () => {...})`), типизированы, работают поверх Dexie (IndexedDB). Имена, типы и алгоритмы сверены с `src/stores`, `src/services` и `test`; история решений — в [журнале](Журнал-правок-ToDoDay.md).
+Версия: 2.3.0 (MVP). Документ описывает state, getters, actions каждого стора, их типы, побочные эффекты и правила взаимодействия. Все сторы — setup-стиль (`defineStore('name', () => {...})`), типизированы, работают поверх Dexie (IndexedDB). Имена, типы и алгоритмы сверены с `src/stores`, `src/services` и `test`; история решений — в [журнале](Журнал-правок-ToDoDay.md).
 
 ## 0. Общие принципы
 
@@ -159,11 +159,25 @@ export interface DayInstance {
   completedAt?: number;
 }
 
+export interface CarryOverEntry {
+  id: string;
+  sourceInstanceId: string;
+  sourcePlacementId: string;
+  sourceDate: string;              // 'YYYY-MM-DD'
+  targetDate: string;              // первый день, куда можно материализовать
+  taskId: string;
+  taskSnapshot: TaskSnapshot;
+  durationMin: number;
+  startAbsoluteMin: number | null; // время суток от полуночи; null — без времени
+  createdAt: number;
+}
+
 export interface CycleStateDto {
   id: 'current';
   activeInstanceId: string | null;
   manualShiftDate: string | null;
   lastAutoShiftDate: string | null;
+  carryOvers?: CarryOverEntry[];   // очередь переносов; отсутствует — пусто (FR-E-4)
   lastCyclicTemplateId?: string | null;  // легаси импорта: не читается и не пишется
 }
 
@@ -468,11 +482,12 @@ interface CycleStoreState {
   currentInstance: Ref<DayInstance | null>;
 
   // Состояние цикла (персистится в БД). null — до завершения initialize()
-  cycleState: Ref<CycleStateDto | null>;   // activeInstanceId, manualShiftDate, lastAutoShiftDate
+  cycleState: Ref<CycleStateDto | null>;   // activeInstanceId, manualShiftDate, lastAutoShiftDate, carryOvers
 
   // Отмена завершения (FR-E-3) — только в памяти текущей сессии, не персистится
   lastCompletedInstanceId: Ref<string | null>;
   placementsSnapshot: Ref<Placement[] | null>;
+  carryOversSnapshot: Ref<CarryOverEntry[] | null>;
   manualShiftDateSnapshot: Ref<string | null>;
   nextInstanceId: Ref<string | null>;      // id экземпляра, созданного этим завершением/сдвигом
 
@@ -518,6 +533,7 @@ interface CycleStoreState {
 | unplannedCount | ComputedRef<number> | Размещения с `unplanned === true` и не `removed`; перенос и изменение длительности сюда не входят |
 | canShiftNext | ComputedRef<boolean> | `status === 'active'` и `manualShiftDate !== todayISO()`; авто-сдвиг это поле не пишет, поэтому после полуночного сдвига ручной доступен (FR-C-4) |
 | canComplete | ComputedRef<boolean> | `status === 'active'`; для виртуального пустого дня тоже true |
+| carryTargetDate | ComputedRef<string \| null> | Дата, в которую уйдёт перенос при завершении: дата сдвига, сегодня после просроченного или следующий календарный день (`resolveCarryTargetDate`); null без текущего дня (FR-E-4) |
 | plannedTimeFor | (placement: Placement) => number \| null | Плановый `startMin` по `plannedId` — для подписи «план: HH:mm» |
 | isUnplanned | (placement: Placement) => boolean | Только «нет плановой основы»: `removed`, нет плана/`plannedId`, нет элемента плана или отличается `taskId` (по `placementDeviation`). Перенос и изменение длительности возвращают `false` |
 
@@ -553,7 +569,10 @@ function resetSessionState(): void;                           // сброс се
 
 // Сдвиг и завершение
 async function shiftToNextDay(): Promise<Result<void>>;
-async function completeDay(marks: Record<string, 'done' | 'skipped'>): Promise<Result<void>>;
+async function completeDay(
+  marks: Record<string, 'done' | 'skipped'>,
+  carryIds?: readonly string[],
+): Promise<Result<void>>;
 async function cancelCompletion(): Promise<Result<void>>;
 
 // Синхронизация с планом
@@ -575,7 +594,7 @@ function setHoveredSlot(slotIndex: number | null): void;
 function endDrag(): void;
 ```
 
-На входе `completeDay` допустимы только `'done' | 'skipped'`: по FR-E-2 всё неотмеченное (включая размещение со снятой галочкой и `removed`) становится `skipped`, поэтому `'pending'` в marks смысла не имеет. Режим сдвига параметром не передаётся: он лежит в `shiftMode`, куда его ставит `shiftToNextDay` (`early`/`overdue` по дате экземпляра) или `checkDayChange` (`midnight`). `completeDay` читает `shiftMode` и вызывает `repeat.resolveShiftTargets(instance.date, today, mode)`; дата не вычисляется от `new Date()`. Если `shiftPending` истинен, а `shiftMode` пуст, режим выводится из даты (`instance.date === today` → `early`, иначе `overdue`) и пишется `console.warn`.
+На входе `completeDay` допустимы только `'done' | 'skipped'`: по FR-E-2 всё неотмеченное (включая размещение со снятой галочкой и `removed`) становится `skipped`, поэтому `'pending'` в marks смысла не имеет. `carryIds` — необязательный список id размещений, выбранных для переноса (FR-E-4); неизвестные id, `removed` и отмеченные `done` игнорируются, поэтому стор не полагается на UI. Режим сдвига параметром не передаётся: он лежит в `shiftMode`, куда его ставит `shiftToNextDay` (`early`/`overdue` по дате экземпляра) или `checkDayChange` (`midnight`). `completeDay` читает `shiftMode` и вызывает `repeat.resolveShiftTargets(instance.date, today, mode)`; дата не вычисляется от `new Date()`. Если `shiftPending` истинен, а `shiftMode` пуст, режим выводится из даты (`instance.date === today` → `early`, иначе `overdue`) и пишется `console.warn`.
 
 ### 3.4 Детальная логика
 
@@ -590,6 +609,7 @@ function endDrag(): void;
 - Условие сохранения текущего дня: `inst != null && (inst.date >= today || (inst.status === 'active' && inst.date < today))`. То есть день на сегодня/будущее сохраняется независимо от статуса (ранний сдвиг и перезапуск до полуночи не создают второй экземпляр), активный просроченный день тоже остаётся текущим (его закроет `checkDayChange`/пользователь), а завершённый просроченный — заменяется днём на сегодня через `resolveCurrentDay()`.
 - Если план на дату появился позже (другая вкладка/импорт): для виртуального дня — `resolveCurrentDay({ force: true })`, для материализованного — `reconcileCurrentWithPlan(plan)`; заготовка (`template`) в этом шаге не участвует.
 - Перевести `pending`-размещения архивных дел в `skipped` (`reconcileArchivedPlacements`, FR-T-3).
+- Применить очередь переносов к уже открытому активному дню (`applyPendingCarryOversToCurrent`, FR-E-4): записи с `targetDate <= currentInstance.date` создают внеплановые размещения; виртуальный день материализуется только если размещения реально появились; использованные записи удаляются из `cycleState` в БД и памяти. Завершённый день не трогается — переносы дождутся следующего открытия.
 - Подписать liveQuery на `cycleState` и активный экземпляр, вызвать `checkDayChange()`, поставить `initialized = true`.
 
 #### resolveCurrentDay(opts) — FR-C-1, FR-D-6
@@ -599,20 +619,25 @@ date = todayISO()
 cur = currentInstance
 Выйти с ok(cur), если cur.date >= date и не (opts.force && cur виртуальный).
 1. plan = resolvedPlanForDate(date)             // точная дата → числа → дни недели
-2. Если plan есть и tasksStore не инициализирован — tasksStore.loadAll()
-3. Собрать DayInstance { id: uuid, planId: plan?.id ?? null, templateId: null, // легаси импорта
+2. Если (plan или очередь непуста) и tasksStore не инициализирован — tasksStore.loadAll()
+3. queue = cycleState.carryOvers ?? []
+4. Собрать DayInstance { id: uuid, planId: plan?.id ?? null, templateId: null, // легаси импорта
    date, status: 'active', placements: plan ? materializePlan(plan, tasks) : [],
    timeStart: plan?.timeStart ?? '08:00', timeEnd: plan?.timeEnd ?? '22:00',
    createdAt: now }
-4. plan есть → транзакция add(instance) + cycleState.activeInstanceId = id
-   plan нет  → cycleState.activeInstanceId = null; в Dexie ничего не пишется
-5. currentInstance = instance; синхронизировать cycleState.activeInstanceId
+5. applied = applyCarryOvers(instance, queue, tasks, now); instance = applied.instance
+   remaining = removeAppliedCarryOvers(queue, applied.appliedIds)
+6. materialize = plan !== null || instance.placements.length > 0
+7. materialize → транзакция add(instance) + activeInstanceId = id (+ carryOvers = remaining)
+   иначе      → cycleState.activeInstanceId = null (+ carryOvers = remaining); в Dexie день не пишется
+8. currentInstance = instance; синхронизировать cycleState
 ```
 
 - `force: true` пересчитывает только виртуальный день (например, после создания плана на сегодня). Сохранённый экземпляр с размещениями force не пересоздаёт — защита от потери факта.
 - Условие `cur.date >= date`, а не `===`: экземпляр, датированный будущим (следствие раннего сдвига), остаётся текущим и после перезапуска до полуночи — второй экземпляр на сегодня не создаётся.
 - `materializePlan` (FR-D-7): каждый `PlannedPlacement` становится `Placement` со `startMin` из плана (или null, если не помещается), `status: 'pending'`, `durationMin` и `taskSnapshot` из дела, `plannedId` элемента плана, `unplanned: false`, `removed: false`; архивные и отсутствующие дела пропускаются. Заготовки создаются только при создании экземпляра; повторный `initialize`/`resolve` существующего дня их не добавляет.
-- День без плана — виртуальный пустой: в Dexie не пишется, `activeInstanceId = null`; первое размещение или завершение материализует его под уже выданным id.
+- `applyCarryOvers` (FR-E-4) применяет только записи с `targetDate <= date`: пропущенный целевой день не теряет перенос. Созданное размещение — `pending`, `unplanned: true`, `plannedId: null`, `plannedDurationMin = durationMin`; время пересчитывается в смещение от `timeStart` нового дня, при невместимости — `null`. Архивные/отсутствующие дела размещения не получают, но запись потребляется.
+- День без плана — виртуальный пустой: в Dexie не пишется, `activeInstanceId = null`; первое размещение, завершение или перенос из прошлого дня материализует его под уже выданным id.
 
 #### checkDayChange() — FR-C-4
 
@@ -634,24 +659,26 @@ cur = currentInstance
 - Проверка: `manualShiftDate !== today`, иначе `SHIFT_ALREADY_DONE_TODAY`.
 - `shiftPending = true`, `shiftMode = currentInstance.date === today ? 'early' : 'overdue'`, `completionSource = 'shift'`, `completing = true`; вернуть управление UI. `manualShiftDate` и `lastAutoShiftDate` на этом шаге не пишутся — даты пишет последующий `completeDay`.
 
-#### completeDay(marks) — FR-E-2
+#### completeDay(marks, carryIds) — FR-E-2, FR-E-4
 
-- Для каждого `Placement`: `removed` → `skipped` (независимо от marks), иначе `marks[id] === 'done'` → `done`, всё прочее (нет отметки, `'pending'`) → `skipped`.
+- Для каждого `Placement`: `removed` → `skipped` (независимо от marks), иначе `marks[id] === 'done'` → `done`, всё прочее (нет отметки, `'pending'`) → `skipped`. Выбранные для переноса размещения этому правилу не исключение: в завершаемом дне они получают `skipped`.
 - `status = 'completed'`, `completedAt = now`; `activeInstanceId` пока остаётся на этом экземпляре.
-- Снапшоты сессии до мутации: `lastCompletedInstanceId`, `placementsSnapshot` (с копиями `taskSnapshot`), `manualShiftDateSnapshot`; `nextInstanceId = null`. `lastAutoShiftDate` намеренно не снапшотится: отмена не должна разрешать повторный авто-сдвиг в те же сутки.
-- Если `shiftPending`: режим из `shiftMode` (или выведенный), `shifted = buildShiftedInstance(mode, today)`. `buildShiftedInstance` берёт `targetDate` из `resolveShiftTargets`: `early` → завтра, `midnight`/`overdue` → сегодня; план на целевую дату — `resolvedPlanForDate(targetDate)`; пустой день — без плана.
-- Транзакция: `put(inst)`; если день был виртуальным — `activeInstanceId = inst.id` (FR-D-6). Если `shifted` есть: пустой → `activeInstanceId = null`, иначе `add(shifted)` + `activeInstanceId = shifted.id`; `midnight` пишет `lastAutoShiftDate = today`, `early`/`overdue` — `manualShiftDate = today`.
+- Снапшоты сессии до мутации: `lastCompletedInstanceId`, `placementsSnapshot` (с копиями `taskSnapshot`), `carryOversSnapshot` (копия `cycleState.carryOvers`), `manualShiftDateSnapshot`; `nextInstanceId = null`. `lastAutoShiftDate` намеренно не снапшотится: отмена не должна разрешать повторный авто-сдвиг в те же сутки.
+- Режим сдвига: `mode = shiftMode`, при `shiftPending` без режима — выведенный из даты с `console.warn`.
+- `targetDate = resolveCarryTargetDate({ instanceDate, today, shiftPending, shiftMode: mode })`: при сдвиге — дата нового экземпляра, без сдвига — `max(addDaysISO(instanceDate, 1), today)`. `freshCarry = buildCarryOvers({ source: inst, marks, carryIds, targetDate })`; игнорируются неизвестные id, `removed` и `marks[id] === 'done'`. `queue = [...prevCarry, ...freshCarry]`.
+- Если `shiftPending`: `shifted = buildShiftedInstance(mode, today)`; `applyCarryOvers(shifted, queue, tasks)` добавляет переносы с `targetDate <= shifted.date`, `queue` уменьшается на применённые. `shiftedIsEmpty` = «нет плана и нет размещений» — день без плана с переносами уже не пустой и пишется в Dexie.
+- Транзакция: `put(inst)`; если день был виртуальным — `activeInstanceId = inst.id` (FR-D-6). Если `shifted` есть: пустой → `activeInstanceId = null`, иначе `add(shifted)` + `activeInstanceId = shifted.id`; `midnight` пишет `lastAutoShiftDate = today`, `early`/`overdue` — `manualShiftDate = today`. Если появились новые записи или очередь была непустой — `carryOvers = queue` (в том числе пустой массив после применения).
 - Ошибка БД: вернуть `status = 'active'`, удалить `completedAt`, восстановить `placements` из снапшота, очистить снапшоты и вернуть `DB_ERROR`; `completing` не сбрасывается, диалог остаётся для повтора. Экземпляр, созданный этим завершением, при откате не остаётся.
-- Успех: при `shifted` — `currentInstance = shifted`, `nextInstanceId = shifted.id`. Если сдвига нет и `inst.date < today` — вызвать `resolveCurrentDay()`; его id (включая виртуальный) записать в `nextInstanceId`. Если `resolveCurrentDay` упал, фиксация уже в БД не откатывается: диалог закрывается, наружу — `DB_ERROR` с `details.reason = 'RESOLVE_AFTER_COMPLETE'`; повтор — отдельный `resolveCurrentDay()`, не повтор `completeDay`.
-- Если сдвига нет и дата дня сегодняшняя — текущим остаётся завершённый экземпляр, новый не создаётся.
+- Успех: синхронизировать память (`cycleState.carryOvers = queue`), при `shifted` — `currentInstance = shifted`, `nextInstanceId = shifted.id`. Если сдвига нет и `inst.date < today` — вызвать `resolveCurrentDay()` (он применит очередь к сегодняшнему дню); его id (включая виртуальный) записать в `nextInstanceId`. Если `resolveCurrentDay` упал, фиксация уже в БД не откатывается: диалог закрывается, наружу — `DB_ERROR` с `details.reason = 'RESOLVE_AFTER_COMPLETE'`; повтор — отдельный `resolveCurrentDay()`, не повтор `completeDay`.
+- Если сдвига нет и дата дня сегодняшняя — текущим остаётся завершённый экземпляр, новый не создаётся; очередь ждёт открытия следующего дня.
 - Сбросить `shiftPending`, `shiftMode`, `completionSource`, `completing` только в успешной ветке; перечитать текущий экземпляр из БД; вызвать `useStatsStore().recompute()` без ожидания. Ошибка пересчёта не отменяет завершение — пишется `console.warn`.
 
 #### cancelCompletion() — FR-E-3
 
 - Нужны `lastCompletedInstanceId` и `placementsSnapshot`; иначе `NOT_FOUND` (в том числе если экземпляр уже не найден).
 - Вернуть экземпляр в `status = 'active'`, удалить `completedAt`, восстановить `placements` из снапшота.
-- Транзакция: `put(inst)`, удалить `nextInstanceId` (вместе с делами, которые успели положить в новый день), `activeInstanceId = inst.id`, `manualShiftDate = manualShiftDateSnapshot`.
-- Обновить память, очистить сессионные снапшоты и флаги, перечитать экземпляр, вызвать `statsStore.recompute()`.
+- Транзакция: `put(inst)`, удалить `nextInstanceId` (вместе с делами и перенесёнными размещениями, которые успели положить в новый день), `activeInstanceId = inst.id`, `manualShiftDate = manualShiftDateSnapshot`, `carryOvers = carryOversSnapshot ?? []`.
+- Обновить память, очистить сессионные снапшоты (включая `carryOversSnapshot`) и флаги, перечитать экземпляр, вызвать `statsStore.recompute()`.
 - `lastAutoShiftDate` не восстанавливается: авто-сдвиг в эти сутки уже выполнен (FR-E-3). Легаси-указатель цикла не восстанавливается — его в модели 2.0.0 нет.
 
 #### dismissCompletion(), startCompletion()
@@ -694,18 +721,19 @@ cur = currentInstance
 - `setPlacementStatus`: активный день, существующее размещение; допустимы `pending|done|skipped`; снятие отметки возвращает `pending`, а не удаляет размещение. Оптимистично + persist с откатом. `skipped`/`removed` не участвуют в `detectConflicts` (FR-B-3).
 - `skipPendingPlacementsForTask(taskId)`: побочный эффект `onTaskArchived` — в активном дне переводит `pending`-размещения этого дела в `skipped` и пишет экземпляр; `done` не трогает. Экспортируется для теста; из UI не вызывается.
 - `reconcileArchivedPlacements()` (внутренний, вызывается из `initialize`): то же для всех архивных дел; виртуальный день не пишется.
+- `applyPendingCarryOversToCurrent()` (внутренний, вызывается из `initialize`): применяет `carryOvers` к уже открытому активному дню, материализует виртуальный день только при появлении размещений; ошибка записи не валит инициализацию.
 - `dispose()`: снимает подписки на `onTaskArchived`, `onDayPlanChanged` и liveQuery (unmount/HMR).
-- `resetSessionState()`: обнуляет `currentInstance`, `cycleState`, снапшоты, флаги диалога, `dayChangeInFlight`, `initialized`, очередь синхронизации и drag-состояние; используется `rehydrateAll` после импорта/очистки. БД не трогает; подписки снимает `dispose()`.
+- `resetSessionState()`: обнуляет `currentInstance`, `cycleState`, снапшоты (включая `carryOversSnapshot`), флаги диалога, `dayChangeInFlight`, `initialized`, очередь синхронизации и drag-состояние; используется `rehydrateAll` после импорта/очистки. БД не трогает; подписки снимает `dispose()`.
 
 ### 3.5 Побочные эффекты
 
 | Action | Side effect |
 | --- | --- |
-| initialize | Загружает дела и планы, ставит подписки на emitter'ы и liveQuery, достраивает `cycleState`, переводит архивные pending в skipped, вызывает `checkDayChange`. Повторный вход присоединяется к идущему промису |
-| resolveCurrentDay | План найден → экземпляр пишется в Dexie и `activeInstanceId = id`; плана нет → виртуальный пустой день, `activeInstanceId = null` (FR-D-6). `force` пересчитывает только виртуальный день |
+| initialize | Загружает дела и планы, ставит подписки на emitter'ы и liveQuery, достраивает `cycleState`, переводит архивные pending в skipped, применяет `carryOvers` к активному дню, вызывает `checkDayChange`. Повторный вход присоединяется к идущему промису |
+| resolveCurrentDay | План найден или очередь дала размещения → экземпляр пишется в Dexie и `activeInstanceId = id`; иначе виртуальный пустой день, `activeInstanceId = null` (FR-D-6). Применяет `carryOvers` с `targetDate <= date` и удаляет использованные записи. `force` пересчитывает только виртуальный день |
 | checkDayChange | Виртуальный/завершённый просроченный день — новый день без диалога; активный просроченный — авто-сдвиг, диалог или тишина по настройкам |
-| completeDay | Закрывает диалог, фиксирует `done/skipped` (removed → skipped), при сдвиге подменяет экземпляр и пишет `manualShiftDate`/`lastAutoShiftDate`, при обычном завершении просроченного дня разрешает сегодняшний. Вызывает `statsStore.recompute()` |
-| cancelCompletion | Возвращает экземпляр в active, восстанавливает placements и `manualShiftDate`, удаляет `nextInstanceId` вместе с делами, статистику пересчитывает; `lastAutoShiftDate` не восстанавливает |
+| completeDay | Закрывает диалог, фиксирует `done/skipped` (removed → skipped), пишет `carryOvers` для выбранных дел, при сдвиге подменяет экземпляр (сразу применяя к нему переносы) и пишет `manualShiftDate`/`lastAutoShiftDate`, при обычном завершении просроченного дня разрешает сегодняшний. Вызывает `statsStore.recompute()` |
+| cancelCompletion | Возвращает экземпляр в active, восстанавливает placements, `manualShiftDate` и `carryOvers`, удаляет `nextInstanceId` вместе с делами и перенесёнными размещениями, статистику пересчитывает; `lastAutoShiftDate` не восстанавливает |
 | shiftToNextDay | Ставит `shiftPending`/`shiftMode` и открывает диалог; БД не пишет |
 | startCompletion / dismissCompletion | Открывает/закрывает диалог; авто-закрытие ставит `skippedAutoPromptDate`, настройки не меняет |
 | placeTask | Первое дело в виртуальном дне материализует экземпляр и `activeInstanceId`; валидный не помещающийся слот → `null` |
@@ -964,7 +992,7 @@ async function clearAll(): Promise<Result<void>>;
 }
 ```
 
-`exportAll`: собирает `tasks`, `dayPlans`, `dayInstances`, `cycleState` из Dexie и блок `settings` из localStorage (ключи §5.1), нормализует планы и экземпляры, сериализует в JSON и возвращает `Blob`. После успешного формирования обновляет `lastBackupAt` ISO-строкой. `version` — `2.0`; `exportedAt` — timestamp, а не календарная дата. Новые поля `Placement` (`shifted`, `durationChanged`, `plannedDurationMin`) — аддитивные и необязательные, поэтому версия формата не меняется; импорт старого файла нормализует их дефолтами (`false`, `false`, `durationMin`) без переклассификации прошлых дней.
+`exportAll`: собирает `tasks`, `dayPlans`, `dayInstances`, `cycleState` из Dexie и блок `settings` из localStorage (ключи §5.1), нормализует планы, экземпляры и очередь `carryOvers` (если она есть), сериализует в JSON и возвращает `Blob`. После успешного формирования обновляет `lastBackupAt` ISO-строкой. `version` — `2.0`; `exportedAt` — timestamp, а не календарная дата. Новые поля `Placement` (`shifted`, `durationChanged`, `plannedDurationMin`) и необязательное `CycleStateDto.carryOvers` — аддитивные, поэтому версия формата не меняется; импорт старого файла нормализует поля дефолтами (`false`, `false`, `durationMin`, пустая очередь) без переклассификации прошлых дней.
 
 `importAll`:
 
@@ -972,7 +1000,7 @@ async function clearAll(): Promise<Result<void>>;
 - Валидирует структуру до записи: `version` — `2.0` или `1.0`; `data` содержит `tasks`, `dayInstances`, `cycleState`, `settings`; для `2.0` — массив `dayPlans`, для `1.0` — массив `dayTemplates`; `cycleState.id === 'current'`; `settings` — объект. Иначе `VALIDATION_ERROR` с `details.reason = 'VERSION_UNSUPPORTED' | 'MALFORMED'`.
 - `2.0`: планы нормализуются `normalizeDayPlan`, экземпляры — `normalizeDayInstance`.
 - `1.0`: блок `dayTemplates` (легаси импорта) конвертируется `migrateLegacyPlanRow` в планы без времени: `plannedTaskIds` → `plannedPlacements` с `startMin: null` и длительностью из дела или 30; записи без `plannedTaskIds` получают пустой список. Семантика ссылок, пересечения и время импортом не проверяются (FR-SET-5).
-- Транзакция: очистка `tasks`, `dayPlans`, `dayInstances`, `cycleState`, затем `bulkAdd`/`put`. После неё `ensureCycleState()` достраивает `cycleState` дефолтами.
+- Транзакция: очистка `tasks`, `dayPlans`, `dayInstances`, `cycleState`, затем `bulkAdd`/`put`. `normalizeCycleState` достраивает обязательные поля и нормализует `carryOvers`: битые записи отбрасываются, пустая очередь не пишется. После транзакции `ensureCycleState()` нормализует прочитанное ещё раз.
 - Блок `settings` пишется в localStorage после транзакции Dexie, не внутри неё. Сбой записи → `STORAGE_ERROR` с `details.reason = 'SETTINGS_AFTER_IMPORT'`; Dexie уже содержит файл, `pendingSettings` заполнен. Повтор — `retrySettingsWrite()`: только запись settings, без второй очистки таблиц. Частичный сбой хранилища тоже даёт `STORAGE_ERROR` (`SETTINGS_WRITE`).
 - После успешной записи и Dexie, и settings — `rehydrateAll()`.
 
@@ -1090,7 +1118,7 @@ function setGlobalError(err: AppError | null): void;
 
 ## 8. Полный список действий по FR (трассируемость)
 
-Таблица связывает требования, actions, экраны и тесты. Для ревизии 2.0.0 добавлены FR-B-8 (отклонения в «Сегодня») и FR-S-5 (статистика отклонений); ревизия 2.2.0 разделила перенос и изменение длительности и добавила FR-S-6 (статистика дня); FR-D-2/FR-C-2 в прежнем смысле («order» и циклический указатель) моделью 2.0.0 не поддерживаются — порядок и выбор дня теперь задаются датой и режимом плана.
+Таблица связывает требования, actions, экраны и тесты. Для ревизии 2.0.0 добавлены FR-B-8 (отклонения в «Сегодня») и FR-S-5 (статистика отклонений); ревизия 2.2.0 разделила перенос и изменение длительности и добавила FR-S-6 (статистика дня); ревизия 2.3.0 реализовала FR-E-4 (перенос выбранных невыполненных дел и очередь `carryOvers`); FR-D-2/FR-C-2 в прежнем смысле («order» и циклический указатель) моделью 2.0.0 не поддерживаются — порядок и выбор дня теперь задаются датой и режимом плана.
 
 | FR | Action | UI | Тест |
 | --- | --- | --- | --- |
@@ -1105,7 +1133,7 @@ function setGlobalError(err: AppError | null): void;
 | FR-D-3 | dayPlansStore.updatePlan + cycleStore.syncCurrentDayWithPlan/`reconcileInstanceWithPlan` | DayPlanPage → настройки; DayPlanForm | dayPlans, cycle, dayPlanForm |
 | FR-D-4 | dayPlansStore.deletePlan (проверка активного экземпляра) + заглушка «План дня удалён» | DaysPage, DayBoard | dayPlans, daysPage, dayBoard |
 | FR-D-5 | dayPlansStore.validateNoOverlap / `hasConflicts` + `repeat.validateNoOverlap` | DaysPage/DayPlanForm (баннер и inline) | repeat, dayValidator, dayPlans |
-| FR-D-6 | cycleStore.resolveCurrentDay (ветка «пустой день»), placeTask/completeDay (материализация) | DayBoardPage (пустое состояние) | cycle, dayBoard, dayCompletion |
+| FR-D-6 | cycleStore.resolveCurrentDay (ветка «пустой день»), placeTask/completeDay/применение `carryOvers` (материализация) | DayBoardPage (пустое состояние) | cycle, dayBoard, dayCompletion |
 | FR-D-7 | dayPlansStore.plannedPlacements + `materializePlan`/`validatePlannedTaskRefs`; deleteTask чистит ссылки | DayPlanPage/DayPlanForm | dayPlans (service/store), dayValidator, dayPlanPage, dayPlanForm |
 | FR-B-1 | cycleStore.slots + `SLOT_HEIGHT` | DayGrid | dayBoard, dayBoardPerf |
 | FR-B-2 | cycleStore.placeTask/movePlacement + startDrag/setHoveredSlot/endDrag | DayBoard (DnD и «Переместить в слот…») | dayBoard |
@@ -1123,7 +1151,7 @@ function setGlobalError(err: AppError | null): void;
 | FR-E-1 | cycleStore.startCompletion/shiftToNextDay/checkDayChange → completing; закрытие — dismissCompletion | CompleteDayDialog | dayCompletion |
 | FR-E-2 | cycleStore.completeDay (removed → skipped, остальное done/skipped) | CompleteDayDialog | cycle, dayCompletion |
 | FR-E-3 | cycleStore.cancelCompletion | шапка доски и тост «Отменить» | cycle, dayCompletion, daysFlow |
-| FR-E-4 | — (не реализуется) | — | — |
+| FR-E-4 | cycleStore.completeDay + `carryOver.buildCarryOvers/applyCarryOvers/resolveCarryTargetDate`; resolveCurrentDay и applyPendingCarryOversToCurrent | CompleteDayDialog (переключатель «Перенести»), карточка «внепланово» в новом дне | cycle, dayCompletion, carryOver |
 | FR-S-1 | statsStore.recompute → `aggregateStats` | StatsPage | stats (service/store), statsPage |
 | FR-S-2 | statsStore.visibleTaskStats / отсутствие строк «0 / 0» | StatsPage, TaskStatsPage | stats, statsPage |
 | FR-S-3 | statsStore.setPeriod + `periodStartISO` | StatsPage (период) | stats, statsPage |
@@ -1132,15 +1160,16 @@ function setGlobalError(err: AppError | null): void;
 | FR-S-6 | statsStore.dayStats/visibleDayStats/loadDayStats + `aggregateDayRollups`/`buildDayStats` | StatsPage (блок «По дням»), DayStatsPage | statsPage, dayStatsPage, stats (store/service) |
 | FR-SET-1..9 | settingsStore.* + retrySettingsWrite | SettingsPage, AppBar | settingsPage, settings |
 | FR-SET-10 | settingsStore.clearAll | SettingsPage → «Очистить все данные» | settingsPage, settings |
-| ТЗ §2.8 | dates.* + `repeat.resolveShiftTargets` | — | dates, repeat, lint |
-| ТЗ §2.10 | — | — | cycle, daysFlow, dayCompletion (сценарии 1–14) |
+| ТЗ §2.8 | dates.* + `repeat.resolveShiftTargets` + `carryOver.resolveCarryTargetDate` | — | dates, repeat, carryOver, lint |
+| ТЗ §2.10 | — | — | cycle, daysFlow, dayCompletion (сценарии 1–19) |
 
 ## 9. Тестирование
 
-`test/**/*.spec.ts` — 42 файла (Vitest), включая `test/config/docs.spec.ts` для проверки документации. Ниже — актуальная карта: по одному предложению на файл, без истории этапов. Мок БД — `fake-indexeddb` и тестовый Dexie-instance; компонентные тесты монтируют Quasar-каркас.
+`test/**/*.spec.ts` — 43 файла (Vitest), включая `test/config/docs.spec.ts` для проверки документации. Ниже — актуальная карта: по одному предложению на файл, без истории этапов. Мок БД — `fake-indexeddb` и тестовый Dexie-instance; компонентные тесты монтируют Quasar-каркас.
 
 **Сервисы (`test/services/`)**
 
+- `carryOver.spec.ts` — целевая дата переноса для сдвигов и обычного завершения, нормализация очереди, сборка записей из выбранных дел, материализация с сохранением времени суток/уходом в `null`, потребление записей архивных дел, дубли и служебные операции очереди.
 - `dataTransfer.spec.ts` — имя файла по локальной дате, скачивание Blob через временную ссылку с очисткой Object URL, выбор JSON-файла с отменой и повторным вызовом.
 - `dates.spec.ts` — локальные `todayISO`/`toLocalISO` без UTC-сдвига, календарный `addDaysISO`, `parseClock` только с шагом 15 и подписи 24/12 ч.
 - `dayPlans.spec.ts` — нормализация и миграция `plannedTaskIds`, материализация и копирование плана, сохранение отклонений при `reconcileInstanceWithPlan`, классификация `placementDeviation` (перенос, длительность, добавление, замена, удаление, уход в `null`).
@@ -1154,7 +1183,7 @@ function setGlobalError(err: AppError | null): void;
 
 **Сторы (`test/stores/`)**
 
-- `cycle.spec.ts` — план на дату и виртуальный день, перенос/длительность/внеплановые изменения без правки плана, `removed` и возврат, завершение/сдвиг/отмена, архивные размещения, гонки инициализации, признаки отклонений в статистике.
+- `cycle.spec.ts` — план на дату и виртуальный день, перенос/длительность/внеплановые изменения без правки плана, `removed` и возврат, завершение/сдвиг/отмена, архивные размещения, гонки инициализации, признаки отклонений в статистике, очередь переносов (обычное завершение, ранний сдвиг, день без плана, пропущенный день, дубль, архивное дело, отмена).
 - `dayPlans.spec.ts` — CRUD и уникальность даты, пересечения правил, копирование заготовки, действия сетки, запрет правки/удаления активного плана, сдвиг времени, emitter и `resolvedPlanForDate`.
 - `settings.spec.ts` — экспорт 2.0, импорт 1.0 и 2.0, отклонение битых файлов, `STORAGE_ERROR` с повтором settings, очистка Dexie/localStorage и защита `busy`.
 - `stats.spec.ts` — `initialize`, сортировка колонок с «—» в конце, liveQuery-пересчёт, кэш истории с `placementId` и признаками, `dayStats`/`visibleDayStats`/`loadDayStats`, `setPeriod` и `resetCache`.
@@ -1165,7 +1194,7 @@ function setGlobalError(err: AppError | null): void;
 - `confirmDialog.spec.ts` — `uiStore.openConfirm`: появление диалога, подписи, резолв `true`/`false` и очистка состояния.
 - `dayBoard.spec.ts` — шапка/сетка/пустой день и удалённый план, конфликты и текущее время, drop/перенос, действия FR-B-7, бейджи «внепланово»/«перенесено»/«длительность» и «Убрано из плана», доступность и виртуализация.
 - `dayBoardPerf.spec.ts` — доска на 100+ размещениях: виртуализация подписей, один слой карточек, отсутствие лишних перерисовок при наведении, `aria-live` слота.
-- `dayCompletion.spec.ts` — шапка и сдвиг, диалог с планом/внеплановыми/убранными, отмена, пустой день, просроченный день и авто-диалог.
+- `dayCompletion.spec.ts` — шапка и сдвиг, диалог с планом/внеплановыми/убранными, перенос невыполненных дел (выбор, отметка, сдвиг, авто-диалог), отмена, пустой день, просроченный день и авто-диалог.
 - `dayPlanForm.spec.ts` — дефолты и все режимы создания, inline-ошибки, правка без новой записи, копирование на основе другого плана и закрытие без сохранения.
 - `dayPlanPage.spec.ts` — шапка и подсказки режимов, добавление дел, действия с размещениями плана, конфликты, настройки и удаление плана.
 - `daysFlow.spec.ts` — сквозной сценарий в реальном каркасе: создание плана на `/days`, открытие в «Сегодня» и редакторе, сдвиг, пустой день и отмена завершения.
@@ -1215,4 +1244,4 @@ function setGlobalError(err: AppError | null): void;
 
 ---
 
-Журнал правок — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md). Версия документации — 2.2.0.
+Журнал правок — [Журнал-правок-ToDoDay.md](Журнал-правок-ToDoDay.md). Версия документации — 2.3.0.

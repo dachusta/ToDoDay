@@ -7,7 +7,7 @@ import { db, ensureCycleState, toPlain } from 'src/services/db'
 import { resolveShiftTargets } from 'src/services/repeat'
 import { detectConflicts, fitInDay, isValidStartMin } from 'src/services/scheduler'
 import { buildSlots, todayISO } from 'src/services/dates'
-import type { DayInstance, Placement, CycleStateDto } from 'src/models/dayInstance'
+import type { DayInstance, Placement, CarryOverEntry, CycleStateDto } from 'src/models/dayInstance'
 import type { DayPlan, DayPlanMode } from 'src/models/day'
 import { planMode } from 'src/models/day'
 import type { PlacementStatus, ShiftMode } from 'src/models/enums'
@@ -21,6 +21,14 @@ import {
   reconcileInstanceWithPlan,
   refreshPlacementDeviation,
 } from 'src/services/dayPlans'
+import {
+  applyCarryOvers,
+  buildCarryOvers,
+  cloneCarryOvers,
+  normalizeCarryOvers,
+  removeAppliedCarryOvers,
+  resolveCarryTargetDate,
+} from 'src/services/carryOver'
 import { useTasksStore, onTaskArchived } from './tasks'
 import { onDayPlanChanged, useDayPlansStore } from './dayPlans'
 import { useSettingsStore } from './settings'
@@ -41,6 +49,7 @@ export const useCycleStore = defineStore('cycle', () => {
   // FR-E-3: отмена завершения доступна только в текущей сессии (память, не БД)
   const lastCompletedInstanceId = ref<string | null>(null)
   const placementsSnapshot = ref<Placement[] | null>(null)
+  const carryOversSnapshot = ref<CarryOverEntry[] | null>(null)
   const manualShiftDateSnapshot = ref<string | null>(null)
   const nextInstanceId = ref<string | null>(null)
   const shiftPending = ref(false)
@@ -166,6 +175,23 @@ export const useCycleStore = defineStore('cycle', () => {
 
   const canComplete = computed(() => currentInstance.value?.status === 'active')
 
+  /**
+   * Дата, в которую уйдёт перенос при завершении: новый день сдвига, сегодняшний
+   * день после просроченного или следующий календарный. Используется диалогом
+   * завершения для подписи «перенести на …».
+   */
+  const carryTargetDate = computed<string | null>(() => {
+    const inst = currentInstance.value
+    if (!inst) return null
+    void now.value
+    return resolveCarryTargetDate({
+      instanceDate: inst.date,
+      today: todayISO(),
+      shiftPending: shiftPending.value,
+      shiftMode: shiftMode.value,
+    })
+  })
+
   /** Плановое время перемещённого размещения — для подписи «план: HH:mm». */
   function plannedTimeFor(placement: Placement): number | null {
     return plannedStartMin(placement, currentPlan.value)
@@ -191,6 +217,9 @@ export const useCycleStore = defineStore('cycle', () => {
             activeInstanceId: cs.activeInstanceId ?? null,
             manualShiftDate: cs.manualShiftDate ?? null,
             lastAutoShiftDate: cs.lastAutoShiftDate ?? null,
+            ...(cs.carryOvers === undefined
+              ? {}
+              : { carryOvers: normalizeCarryOvers(cs.carryOvers) }),
           }
         }
         if (!cs?.activeInstanceId) return
@@ -277,6 +306,7 @@ export const useCycleStore = defineStore('cycle', () => {
       }
 
       await reconcileArchivedPlacements()
+      await applyPendingCarryOversToCurrent()
       subscribeLiveQuery()
       checkDayChange()
       initialized.value = true
@@ -320,25 +350,98 @@ export const useCycleStore = defineStore('cycle', () => {
         return err(loaded.error.code, loaded.error.message, loaded.error.details)
       }
     }
+    // Переносам нужны актуальные дела (снимок и признак архива), даже если
+    // плана на сегодня нет.
+    const queue = cycleState.value?.carryOvers ?? []
+    if (queue.length > 0 && !tasksStore.initialized) {
+      const loaded = await tasksStore.loadAll()
+      if (!loaded.ok) {
+        return err(loaded.error.code, loaded.error.message, loaded.error.details)
+      }
+    }
 
-    const inst = buildDayInstance(plan, today)
+    const applied = applyCarryOvers(
+      buildDayInstance(plan, today),
+      queue,
+      tasksStore.tasks,
+      Date.now(),
+    )
+    const inst = applied.instance
+    const remaining = removeAppliedCarryOvers(queue, applied.appliedIds)
+    const queueChanged = applied.appliedIds.length > 0
+    // День без плана, но с переносами — уже не пустой: материализуем, как placeTask.
+    const materialize = plan !== null || inst.placements.length > 0
 
     try {
-      if (plan) {
+      if (materialize) {
         await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
           await db.dayInstances.add(toPlain(inst))
-          await db.cycleState.update('current', { activeInstanceId: inst.id })
+          await db.cycleState.update('current', {
+            activeInstanceId: inst.id,
+            ...(queueChanged ? { carryOvers: toPlain(remaining) } : {}),
+          })
         })
       } else {
-        await db.cycleState.update('current', { activeInstanceId: null })
+        await db.cycleState.update('current', {
+          activeInstanceId: null,
+          ...(queueChanged ? { carryOvers: toPlain(remaining) } : {}),
+        })
       }
     } catch (e) {
       return err('DB_ERROR', 'Не удалось разрешить текущий день', e)
     }
 
     currentInstance.value = inst
-    if (cycleState.value) cycleState.value.activeInstanceId = plan ? inst.id : null
+    if (cycleState.value) {
+      cycleState.value.activeInstanceId = materialize ? inst.id : null
+      if (queueChanged) cycleState.value.carryOvers = remaining
+    }
     return ok(inst)
+  }
+
+  /**
+   * Догнать очередь переносов для уже открытого дня: сюда попадают записи,
+   * импортированные в БД или оставшиеся от прошлого запуска. Завершённый день не
+   * трогаем — его переносы дождутся следующего открытия. Ошибка записи не валит
+   * инициализацию: очередь останется до следующего раза.
+   */
+  async function applyPendingCarryOversToCurrent(): Promise<void> {
+    const inst = currentInstance.value
+    const queue = cycleState.value?.carryOvers ?? []
+    if (!inst || inst.status !== 'active' || queue.length === 0) return
+
+    const tasksStore = useTasksStore()
+    if (!tasksStore.initialized) {
+      const loaded = await tasksStore.loadAll()
+      if (!loaded.ok) return
+    }
+
+    const applied = applyCarryOvers(inst, queue, tasksStore.tasks, Date.now())
+    if (applied.appliedIds.length === 0) return
+
+    const remaining = removeAppliedCarryOvers(queue, applied.appliedIds)
+    const wasVirtual = isVirtualInstance.value
+    // Виртуальный день материализуем только если перенос реально дал размещения:
+    // архивные/удалённые дела не должны создавать пустой день в БД.
+    const materialize = !wasVirtual || applied.instance.placements.length > 0
+
+    try {
+      await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
+        if (materialize) await db.dayInstances.put(toPlain(applied.instance))
+        await db.cycleState.update('current', {
+          carryOvers: toPlain(remaining),
+          ...(wasVirtual && materialize ? { activeInstanceId: applied.instance.id } : {}),
+        })
+      })
+    } catch {
+      return
+    }
+
+    currentInstance.value = applied.instance
+    if (cycleState.value) {
+      cycleState.value.carryOvers = remaining
+      if (wasVirtual && materialize) cycleState.value.activeInstanceId = applied.instance.id
+    }
   }
 
   /** Экземпляр нового дня после сдвига: план целевой даты или пустой день. */
@@ -460,6 +563,7 @@ export const useCycleStore = defineStore('cycle', () => {
   // --- Завершение дня ------------------------------------------------------
   async function completeDay(
     marks: Record<string, 'done' | 'skipped'>,
+    carryIds: readonly string[] = [],
   ): Promise<Result<void>> {
     const inst = currentInstance.value
     if (!inst || inst.status !== 'active') return err('DAY_NOT_ACTIVE', 'Нет активного дня')
@@ -468,20 +572,16 @@ export const useCycleStore = defineStore('cycle', () => {
     const wasVirtual = isVirtualInstance.value
     const today = todayISO()
     const prevManual = cycleState.value?.manualShiftDate ?? null
+    const prevCarry = cloneCarryOvers(cycleState.value?.carryOvers ?? [])
 
     lastCompletedInstanceId.value = inst.id
     placementsSnapshot.value = inst.placements.map(p => ({
       ...p,
       taskSnapshot: { ...p.taskSnapshot },
     }))
+    carryOversSnapshot.value = prevCarry
     manualShiftDateSnapshot.value = prevManual
     nextInstanceId.value = null
-
-    for (const p of inst.placements) {
-      p.status = p.removed === true ? 'skipped' : marks[p.id] === 'done' ? 'done' : 'skipped'
-    }
-    inst.status = 'completed'
-    inst.completedAt = Date.now()
 
     let mode: ShiftMode | null = null
     if (wasShift) {
@@ -491,8 +591,34 @@ export const useCycleStore = defineStore('cycle', () => {
         console.warn('[cycle] shiftPending без shiftMode — режим выведен из даты:', mode)
       }
     }
-    const shifted = mode ? buildShiftedInstance(mode, today) : null
-    const shiftedIsEmpty = shifted !== null && shifted.planId === null
+
+    // Куда переносить: день сдвига, сегодняшний после просроченного или завтра.
+    const targetDate = resolveCarryTargetDate({
+      instanceDate: inst.date,
+      today,
+      shiftPending: wasShift,
+      shiftMode: mode,
+    })
+    const freshCarry = buildCarryOvers({ source: inst, marks, carryIds, targetDate })
+    let queue = [...prevCarry, ...freshCarry]
+
+    for (const p of inst.placements) {
+      p.status = p.removed === true ? 'skipped' : marks[p.id] === 'done' ? 'done' : 'skipped'
+    }
+    inst.status = 'completed'
+    inst.completedAt = Date.now()
+
+    let shifted: DayInstance | null = null
+    if (mode) {
+      const built = buildShiftedInstance(mode, today)
+      const applied = applyCarryOvers(built, queue, useTasksStore().tasks, Date.now())
+      shifted = applied.instance
+      queue = removeAppliedCarryOvers(queue, applied.appliedIds)
+    }
+    // День без плана с переносами — уже не пустой: его тоже пишем в Dexie.
+    const shiftedIsEmpty =
+      shifted !== null && shifted.planId === null && shifted.placements.length === 0
+    const queueChanged = prevCarry.length > 0 || freshCarry.length > 0
 
     try {
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
@@ -509,6 +635,7 @@ export const useCycleStore = defineStore('cycle', () => {
           if (mode === 'midnight') patch.lastAutoShiftDate = today
           else patch.manualShiftDate = today
         }
+        if (queueChanged) patch.carryOvers = toPlain(queue)
         if (Object.keys(patch).length) await db.cycleState.update('current', patch)
       })
     } catch (e) {
@@ -519,6 +646,7 @@ export const useCycleStore = defineStore('cycle', () => {
         inst.placements
       lastCompletedInstanceId.value = null
       placementsSnapshot.value = null
+      carryOversSnapshot.value = null
       manualShiftDateSnapshot.value = null
       nextInstanceId.value = null
       return err('DB_ERROR', 'Не удалось завершить день', e)
@@ -531,6 +659,7 @@ export const useCycleStore = defineStore('cycle', () => {
         else cycleState.value.manualShiftDate = today
         cycleState.value.activeInstanceId = shiftedIsEmpty ? null : shifted.id
       }
+      if (queueChanged) cycleState.value.carryOvers = queue
     }
 
     let resolveFailed = false
@@ -581,12 +710,16 @@ export const useCycleStore = defineStore('cycle', () => {
       inst.placements = snapshot.map(p => ({ ...p, taskSnapshot: { ...p.taskSnapshot } }))
 
       const createdId = nextInstanceId.value
+      const restoredCarry = cloneCarryOvers(carryOversSnapshot.value ?? [])
       await db.transaction('rw', db.dayInstances, db.cycleState, async () => {
         await db.dayInstances.put(toPlain(inst))
         if (createdId) await db.dayInstances.delete(createdId)
         await db.cycleState.update('current', {
           activeInstanceId: inst.id,
           manualShiftDate: manualShiftDateSnapshot.value,
+          // Очередь возвращается к состоянию до завершения: потреблённые записи
+          // снова ждут открытия дня, новые — исчезают.
+          carryOvers: toPlain(restoredCarry),
         })
       })
 
@@ -594,9 +727,11 @@ export const useCycleStore = defineStore('cycle', () => {
       if (cycleState.value) {
         cycleState.value.activeInstanceId = inst.id
         cycleState.value.manualShiftDate = manualShiftDateSnapshot.value
+        cycleState.value.carryOvers = restoredCarry
       }
       lastCompletedInstanceId.value = null
       placementsSnapshot.value = null
+      carryOversSnapshot.value = null
       manualShiftDateSnapshot.value = null
       nextInstanceId.value = null
       shiftPending.value = false
@@ -1059,6 +1194,7 @@ export const useCycleStore = defineStore('cycle', () => {
     initializePromise = null
     lastCompletedInstanceId.value = null
     placementsSnapshot.value = null
+    carryOversSnapshot.value = null
     manualShiftDateSnapshot.value = null
     nextInstanceId.value = null
     shiftPending.value = false
@@ -1088,6 +1224,7 @@ export const useCycleStore = defineStore('cycle', () => {
     slots, placementsBySlot,
     conflicts, hasConflicts, unallocatedPlacements, removedPlacements,
     removedCount, dayProgress, unplannedCount, canShiftNext, canComplete,
+    carryTargetDate,
     plannedTimeFor, isUnplanned,
     initialize, resolveCurrentDay, completeDay, cancelCompletion, checkDayChange,
     startCompletion, dismissCompletion,
