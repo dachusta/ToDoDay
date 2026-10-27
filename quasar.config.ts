@@ -50,6 +50,12 @@ export default configure((/* ctx */) => {
 
     extras: ['roboto-font', 'material-icons'],
 
+    // publicPath остаётся по умолчанию ('/'): сборка рассчитана на корень origin —
+    // dev-сервер, хостинг и локальный просмотр через `pnpm preview:pwa`
+    // (scripts/serve-pwa.mjs). Менять его на './' ради открытия index.html через
+    // file:// бессмысленно: ES-модули с file:// блокируются CORS (origin 'null'),
+    // service worker и установка PWA требуют secure context, IndexedDB на origin
+    // 'null' недоступен. Подробности — README, «Как открыть собранное приложение».
     build: {
       target: { browser: ['es2022', 'firefox115', 'chrome115', 'safari14'] },
       typescript: { strict: true, vueShim: true },

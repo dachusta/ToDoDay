@@ -61,6 +61,40 @@ pnpm build          # SPA → dist/spa
 pnpm build:pwa      # PWA → dist/pwa (офлайн, манифест, service worker)
 ```
 
+### Как открыть собранное приложение
+
+Сборка — статический сайт, но открывать `dist/pwa/index.html` двойным кликом нельзя,
+и настройками это не лечится. `file://` — это origin `null`: браузер блокирует загрузку
+ES-модулей и манифеста по CORS (`Access to script at 'file:///C:/assets/index-*.js' …
+blocked by CORS`) и ищет `/assets/…` в корне диска (`ERR_FILE_NOT_FOUND` для
+`/C:/icons/*`), потому что `build.publicPath` — `'/'`. Сверх того service worker
+и установка PWA требуют secure context (`https` или `localhost`), а IndexedDB на
+origin `null` недоступен.
+
+Локальный просмотр — сервер из [`scripts/serve-pwa.mjs`](scripts/serve-pwa.mjs)
+(без зависимостей, работает офлайн; слушает только `127.0.0.1`):
+
+```bash
+pnpm build:pwa
+pnpm preview:pwa        # http://127.0.0.1:4173/
+```
+
+Порт и каталог переопределяются: `pnpm preview:pwa -- --port 8080`,
+`node scripts/serve-pwa.mjs --dir dist/spa` (SPA-сборка, без service worker).
+Вместо скрипта подойдёт любой статический сервер, например `pnpm dlx serve dist/pwa`
+(ему нужна сеть).
+
+Проверка PWA: DevTools → Application → Manifest и Service Workers (включите
+«Update on reload»), офлайн — Network → Offline и перезагрузка. После пересборки
+очищайте хранилище (Application → Storage → Clear site data): иначе старый service
+worker может отдавать прошлые файлы — поэтому `index.html`, `sw.js` и `manifest.json`
+сервер отдаёт с `Cache-Control: no-store`. Установка PWA доступна только на `https`
+или `localhost`; с телефона по LAN-IP без https она не сработает.
+
+`build.publicPath` не меняем: сборка рассчитана на корень origin. Для деплоя в
+подкаталог (`https://host/app/`) задайте `publicPath` в [`quasar.config.ts`](quasar.config.ts)
+и пересоберите — иначе `start_url` и `scope` манифеста укажут на корень.
+
 ### Версия сборки
 
 Номер версии не правится руками: [`scripts/app-version.mjs`](scripts/app-version.mjs) считает его из

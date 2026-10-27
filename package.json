@@ -13,6 +13,7 @@
     "prebuild": "node scripts/clean-qconf.mjs",
     "build:pwa": "quasar build -m pwa",
     "prebuild:pwa": "node scripts/clean-qconf.mjs",
+    "preview:pwa": "node scripts/serve-pwa.mjs",
     "clean:qconf": "node scripts/clean-qconf.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
