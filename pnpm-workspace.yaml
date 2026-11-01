@@ -21,3 +21,9 @@ allowBuilds:
 # вотчера (chokidar). В обычном окружении строку можно убрать.
 ignoredBuiltDependencies:
   - '@parcel/watcher'
+
+# Пропущенный build-скрипт — предупреждение, а не ошибка установки: pnpm 11 по умолчанию
+# падает с ERR_PNPM_IGNORED_BUILDS, и `pnpm install --frozen-lockfile` в CI (чистый
+# node_modules, Ubuntu) обрывался на '@parcel/watcher' из списка выше. Локально ошибка
+# не видна: при готовом node_modules установка выходит сразу («Already up to date»).
+strictDepBuilds: false
