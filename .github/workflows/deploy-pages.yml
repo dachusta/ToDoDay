@@ -1,0 +1,95 @@
+# Публикация PWA на GitHub Pages (README, «Деплой на GitHub Pages»).
+#
+# Каждый push в main собирает `dist/pwa` и выкладывает его артефактом через
+# `actions/deploy-pages`. Сборка — статический сайт, поэтому публиковать нечего,
+# кроме каталога сборки; ветка `gh-pages` не нужна.
+#
+# База путей задаётся здесь: проектная страница живёт по адресу
+# `https://<user>.github.io/<repo>/`, а у сайта `<user>.github.io` корень —
+# значит, `build.publicPath` должен быть `/<repo>/` либо `/`. От него зависят
+# абсолютные ссылки index.html, `start_url`/`scope` манифеста и URL service
+# worker, поэтому имя репозитория подставляется автоматически. Регистр важен:
+# у репозитория `dachusta/ToDoDay` страница — `https://dachusta.github.io/ToDoDay/`,
+# а `/tododay/` отвечает 404.
+#
+# Что нужно один раз включить руками: Settings → Pages → Build and deployment →
+# Source: "GitHub Actions". Пока источник — ветка, deploy завершается ошибкой 404
+# («Get Pages site failed»), и прогон нужно перезапустить (Re-run all jobs).
+
+name: Deploy PWA to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Ручной запуск: после включения Pages, после смены имени репозитория и т.п.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Одна публикация за раз: новый push отменяет незавершённую сборку, но не сам
+# деплой уже готового артефакта.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # `/ToDoDay/` для проектной страницы (регистр как в имени репозитория),
+      # `/` для сайта `<user>.github.io`.
+      PAGES_BASE: ${{ endsWith(github.event.repository.name, '.github.io') && '/' || format('/{0}/', github.event.repository.name) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Полная история и теги: scripts/app-version.mjs считает версию через
+          # `git describe` (без тегов будет `0.2.4+g<hash>` вместо `0.2.4`).
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          # Версия локального тулчейна проекта (.tools/env.ps1: Node 24 + pnpm 11)
+          # и требований package.json (engines.pnpm >= 11). pnpm 10 на этой ветке
+          # зависимостей падает с ERR_PNPM_UNSUPPORTED_ENGINE.
+          version: 11.28.5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # Как .tools/node-v24 в проекте; удовлетворяет engines.node (>=22.22).
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build PWA
+        env:
+          # Единственный вход для подпути: quasar.config.ts → build.publicPath.
+          PUBLIC_PATH: ${{ env.PAGES_BASE }}
+        run: pnpm build:pwa
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          # Каталог сборки (`pnpm build:pwa`); .gitignore его не хранит.
+          path: dist/pwa
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

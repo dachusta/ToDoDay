@@ -91,9 +91,56 @@ worker может отдавать прошлые файлы — поэтому 
 сервер отдаёт с `Cache-Control: no-store`. Установка PWA доступна только на `https`
 или `localhost`; с телефона по LAN-IP без https она не сработает.
 
-`build.publicPath` не меняем: сборка рассчитана на корень origin. Для деплоя в
-подкаталог (`https://host/app/`) задайте `publicPath` в [`quasar.config.ts`](quasar.config.ts)
-и пересоберите — иначе `start_url` и `scope` манифеста укажут на корень.
+`build.publicPath` приходит из переменной окружения `PUBLIC_PATH` (по умолчанию
+`'/'` — корень origin). Для деплоя в подкаталог (`https://host/app/`) сборка
+запускается с `PUBLIC_PATH=/app/`, иначе `start_url` и `scope` манифеста укажут
+на корень; нормализация значения — [`scripts/public-path.mjs`](scripts/public-path.mjs).
+
+### Деплой на GitHub Pages
+
+Живая версия: <https://dachusta.github.io/ToDoDay/> — та же PWA, что собирает
+`pnpm build:pwa`, но развёрнутая в подкаталог `/<repo>/`. Регистр в адресе важен:
+репозиторий называется `ToDoDay`, поэтому `/ToDoDay/`, а не `/tododay/`.
+
+Публикация автоматическая: push в `main` → workflow
+[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)
+устанавливает зависимости (`pnpm install --frozen-lockfile`), собирает `dist/pwa`
+и выкладывает каталог артефактом через `actions/deploy-pages`. Имя репозитория
+подставляется в `PUBLIC_PATH` из события (`/<repo>/`), поэтому переименование
+репозитория не требует правок в конфиге. Ручной запуск — Actions → «Deploy PWA to
+GitHub Pages» → Run workflow.
+
+Одну настройку делают руками один раз: Settings → Pages → Build and deployment →
+Source: **GitHub Actions**. Без неё `deploy` падает с 404, и прогон нужно
+перезапустить (Re-run all jobs).
+
+Проверить сборку для подпути локально (значение читается из окружения, `.env`-файлы
+не нужны):
+
+```powershell
+$env:PUBLIC_PATH='/ToDoDay/'; pnpm build:pwa
+Copy-Item -Recurse dist/pwa dist/ToDoDay
+node scripts/serve-pwa.mjs --dir dist     # http://127.0.0.1:4173/ToDoDay/
+Remove-Item Env:PUBLIC_PATH               # вернуть корень для pnpm dev/preview:pwa
+```
+
+```bash
+PUBLIC_PATH=/ToDoDay/ pnpm build:pwa      # то же в bash
+```
+
+Копия в `dist/ToDoDay` нужна потому, что `scripts/serve-pwa.mjs` отдаёт каталог
+от корня: без неё сервер искал бы `/ToDoDay/` внутри `dist/pwa` и отвечал 404.
+
+Что следует помнить о хостинге:
+
+- HTTPS даёт GitHub Pages, поэтому установка PWA и офлайн работают и на телефоне.
+  `localhost`-сборка и опубликованная версия — **разные origin**: данные в
+  IndexedDB между ними не переносятся (перенос — экспортом/импортом в настройках).
+- `sw.js` на Pages кэшируется примерно на 10 минут: после деплоя новая версия
+  подхватывается не мгновенно. Упорно старая — DevTools → Application → Storage →
+  Clear site data, затем перезагрузка.
+- Роутер в режиме hash (`vueRouterMode: 'hash'`), поэтому 404-фолбэк на Pages не
+  нужен: глубокие ссылки живут в `#/…` и на сервер не уходят.
 
 ### Версия сборки
 

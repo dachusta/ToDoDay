@@ -7,8 +7,22 @@ import { resolveAppVersion } from './scripts/app-version.mjs'
 // не делает (корень проекта — `...\Документы\...`), поэтому копии копились.
 // Подробности и проверка версии Node — в scripts/clean-qconf.mjs.
 import { removeTemporaryConfigs } from './scripts/clean-qconf.mjs'
+import { resolvePublicPath } from './scripts/public-path.mjs'
 
 const projectDir = fileURLToPath(new URL('.', import.meta.url))
+
+/**
+ * Базовый путь сборки (`build.publicPath`): `'/'` по умолчанию, `/<repo>/` — для
+ * проектной страницы GitHub Pages (`https://<user>.github.io/<repo>/`).
+ *
+ * От него зависят абсолютные ссылки в `index.html`, `start_url`/`scope`
+ * манифеста и URL регистрации service worker, поэтому при публикации в
+ * подкаталог путь задаёт окружение: `PUBLIC_PATH=/<repo>/ pnpm build:pwa`
+ * (в CI — `.github/workflows/deploy-pages.yml`, подставляет имя репозитория).
+ * Нормализация — `scripts/public-path.mjs`, тест — `test/config/publicPath.spec.ts`.
+ * Подробности — README, «Деплой на GitHub Pages».
+ */
+const publicPath = resolvePublicPath()
 
 export default configure((/* ctx */) => {
   const srcDir = fileURLToPath(new URL('./src', import.meta.url))
@@ -50,13 +64,16 @@ export default configure((/* ctx */) => {
 
     extras: ['roboto-font', 'material-icons'],
 
-    // publicPath остаётся по умолчанию ('/'): сборка рассчитана на корень origin —
-    // dev-сервер, хостинг и локальный просмотр через `pnpm preview:pwa`
-    // (scripts/serve-pwa.mjs). Менять его на './' ради открытия index.html через
-    // file:// бессмысленно: ES-модули с file:// блокируются CORS (origin 'null'),
-    // service worker и установка PWA требуют secure context, IndexedDB на origin
-    // 'null' недоступен. Подробности — README, «Как открыть собранное приложение».
+    // publicPath приходит из PUBLIC_PATH (см. `publicPath` выше): '/' — корень
+    // origin (dev-сервер, хостинг в корне, локальный просмотр через
+    // `pnpm preview:pwa` и scripts/serve-pwa.mjs), '/<repo>/' — проектная
+    // страница GitHub Pages. Относительный './' не годится не из-за деплоя, а
+    // из-за открытия через file://: ES-модули там блокируются CORS (origin
+    // 'null'), service worker и установка PWA требуют secure context, IndexedDB
+    // на origin 'null' недоступен. Подробности — README, «Как открыть собранное
+    // приложение» и «Деплой на GitHub Pages».
     build: {
+      publicPath,
       target: { browser: ['es2022', 'firefox115', 'chrome115', 'safari14'] },
       typescript: { strict: true, vueShim: true },
       /**
