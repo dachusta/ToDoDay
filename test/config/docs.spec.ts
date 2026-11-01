@@ -91,11 +91,11 @@ describe('документация: ссылки и актуальность', (
   it('журнал указывает на последнее приложение и текущую ревизию', () => {
     const journal = readFileSync(join(DOCS, 'Журнал-правок-ToDoDay.md'), 'utf8')
     const appendices = [...journal.matchAll(/^## Приложение ([А-ЯЁ]+)\./gm)].map(match => match[1])
-    expect(appendices.at(-1)).toBe('АА')
+    expect(appendices.at(-1)).toBe('АБ')
     expect(journal).toContain(
-      '[АА](#приложение-аа-ревизия-240-просмотр-предыдущих-и-следующих-дней)',
+      '[АБ](#приложение-аб-ревизия-241-деплой-на-github-pages)',
     )
-    expect(journal).toContain('версия документации 2.4.0, текущее приложение — АА')
+    expect(journal).toContain('версия документации 2.4.1, текущее приложение — АБ')
   })
 
   it('в docs/ нет пустых или неожиданных каталогов', () => {
